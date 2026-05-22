@@ -5,7 +5,6 @@ import { dashboardService } from '../services/dashboard';
 import { mockPRMSDashboard, mockActivityData } from '../lib/mockData';
 import StatsCard from '../components/dashboard/StatsCard';
 import ActivityChart from '../components/dashboard/ActivityChart';
-import GlassCard from '../components/common/GlassCard';
 import Badge from '../components/common/Badge';
 import { InteractiveChart } from '../components/chat/InteractiveChart';
 import type { PRMSDashboardData, ActivityDataPoint } from '../lib/types-extended';
@@ -45,7 +44,7 @@ export default function Dashboard() {
       {/* Header with title + refresh button */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-[var(--text)]">Innovation Analytics</h1>
+          <h1 className="text-2xl font-bold text-[var(--text)] font-serif">Innovation Analytics</h1>
           <p className="text-sm text-[var(--text-muted)] mt-1">
             CGIAR research performance — {kpis.total_results.toLocaleString()} results across {kpis.countries_covered} countries
           </p>
@@ -105,7 +104,7 @@ export default function Dashboard() {
 
       {/* Section header for charts */}
       <div>
-        <h2 className="text-lg font-semibold text-[var(--text)]">Research Portfolio Overview</h2>
+        <h2 className="text-lg font-semibold text-[var(--text)] font-serif">Research Portfolio Overview</h2>
         <p className="text-sm text-[var(--text-muted)]">Pre-computed views from the PRMS database</p>
       </div>
 
@@ -122,7 +121,11 @@ export default function Dashboard() {
 
       {/* Quick Actions */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <GlassCard hover onClick={() => navigate('/chat')}>
+        <div
+          className="bg-[var(--surface-solid)] rounded-xl border border-[var(--border)] p-5 cursor-pointer transition-shadow hover:shadow-lg"
+          style={{ borderLeftWidth: '4px', borderLeftColor: '#427730' }}
+          onClick={() => navigate('/chat')}
+        >
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-[#427730]/15 flex items-center justify-center">
               <MessageSquare className="w-5 h-5 text-[#427730]" />
@@ -132,9 +135,13 @@ export default function Dashboard() {
               <p className="text-xs text-[var(--text-muted)]">Start a research query</p>
             </div>
           </div>
-        </GlassCard>
+        </div>
 
-        <GlassCard hover onClick={() => navigate('/chat')}>
+        <div
+          className="bg-[var(--surface-solid)] rounded-xl border border-[var(--border)] p-5 cursor-pointer transition-shadow hover:shadow-lg"
+          style={{ borderLeftWidth: '4px', borderLeftColor: '#0065BD' }}
+          onClick={() => navigate('/chat')}
+        >
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-[#0065BD]/15 flex items-center justify-center">
               <Database className="w-5 h-5 text-[#0065BD]" />
@@ -144,9 +151,13 @@ export default function Dashboard() {
               <p className="text-xs text-[var(--text-muted)]">Search the results database</p>
             </div>
           </div>
-        </GlassCard>
+        </div>
 
-        <GlassCard hover onClick={() => navigate('/agents')}>
+        <div
+          className="bg-[var(--surface-solid)] rounded-xl border border-[var(--border)] p-5 cursor-pointer transition-shadow hover:shadow-lg"
+          style={{ borderLeftWidth: '4px', borderLeftColor: '#7AB800' }}
+          onClick={() => navigate('/agents')}
+        >
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-[#7AB800]/15 flex items-center justify-center">
               <Bot className="w-5 h-5 text-[#7AB800]" />
@@ -156,7 +167,7 @@ export default function Dashboard() {
               <p className="text-xs text-[var(--text-muted)]">View specialist CGIAR agents</p>
             </div>
           </div>
-        </GlassCard>
+        </div>
       </div>
 
       {/* Footer: last updated timestamp */}

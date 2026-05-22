@@ -259,7 +259,7 @@ export function InteractiveChart({ data, className = '' }: InteractiveChartProps
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      className={`bg-[var(--surface)]/50 backdrop-blur-sm rounded-xl border border-white/5 overflow-hidden ${className}`}
+      className={`bg-[var(--surface-solid)] rounded-xl border border-[var(--border)] shadow-sm transition-shadow hover:shadow-md overflow-hidden ${className}`}
     >
       {/* Title bar */}
       <button
@@ -267,7 +267,7 @@ export function InteractiveChart({ data, className = '' }: InteractiveChartProps
         className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-white/[0.02] transition-colors"
       >
         <Icon size={14} className="text-[var(--text-muted)] flex-shrink-0" />
-        <span className="text-sm font-medium text-[var(--text-secondary)] flex-1 truncate">
+        <span className="text-sm font-medium text-[var(--text-muted)] font-serif flex-1 truncate">
           {data.title || `${data.chartType.charAt(0).toUpperCase() + data.chartType.slice(1)} Chart`}
         </span>
         {collapsed ? <ChevronDown size={14} className="text-[var(--text-muted)]" /> : <ChevronUp size={14} className="text-[var(--text-muted)]" />}

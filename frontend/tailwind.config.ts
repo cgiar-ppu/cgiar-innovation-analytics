@@ -33,9 +33,12 @@ export default {
         'purple-soft': 'var(--purple-soft)',
         'sidebar-bg': 'var(--sidebar-bg)',
         'input-bg': 'var(--input-bg)',
+        gold: 'var(--gold)',
+        'gold-soft': 'var(--gold-soft)',
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Helvetica', 'Arial', 'sans-serif'],
+        sans: ['"Source Sans 3"', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Helvetica', 'Arial', 'sans-serif'],
+        serif: ['"Merriweather"', 'serif'],
         mono: ['JetBrains Mono', 'Monaco', 'Consolas', 'Courier New', 'monospace'],
       },
       fontSize: {

@@ -1,6 +1,6 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { LayoutDashboard, MessageSquare, Bot, Settings, Sparkles, Wifi, WifiOff, Monitor, Search, Menu, Code2, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Bot, Settings, Sparkles, Monitor, Search, Menu, Code2, ChevronRight } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useWebSocketContext } from '../../contexts/WebSocketContext';
 import { useUIStore } from '../../stores/ui';
@@ -73,7 +73,7 @@ export default function TopBar({ config }: TopBarProps) {
             <Sparkles className="w-4 h-4 text-white" />
           </div>
           <div className="hidden sm:flex flex-col">
-            <span className="font-semibold text-[var(--text)] text-sm leading-tight tracking-tight">CGIAR</span>
+            <span className="font-bold text-[var(--text)] text-sm leading-tight tracking-tight font-serif">CGIAR</span>
             <span className="text-[10px] text-[var(--text-muted)] leading-tight">Innovation Analytics</span>
           </div>
         </div>
@@ -121,29 +121,15 @@ export default function TopBar({ config }: TopBarProps) {
 
         {/* Right side: status, controls */}
         <div className="flex items-center gap-2 ml-4">
-          {/* Model badge */}
+          {/* Model badge — subtle, large screens only */}
           {config && (
-            <span className="text-[11px] px-2.5 py-1 rounded-full glass text-[var(--text-muted)] hidden md:inline-block font-mono">
+            <span className="text-[10px] px-2 py-0.5 rounded-full text-[var(--text-muted)]/60 hidden xl:inline-block font-mono border border-[var(--border)]">
               {config.model}
             </span>
           )}
 
-          {/* Auth method badge */}
-          {config && (
-            <span className={`text-[11px] px-2.5 py-1 rounded-full font-medium hidden sm:inline-block ${
-              config.auth_method === 'subscription'
-                ? 'bg-[var(--success)]/15 text-[var(--success)]'
-                : config.auth_method === 'api_key'
-                ? 'bg-[var(--accent)]/15 text-[var(--accent)]'
-                : 'bg-[var(--danger)]/15 text-[var(--danger)]'
-            }`}>
-              {config.auth_method === 'subscription' ? 'Pro' : config.auth_method === 'api_key' ? 'API' : 'No Auth'}
-            </span>
-          )}
-
-          {/* Connection status */}
-          <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] px-2 py-1 rounded-full glass">
-            {connectionStatus === 'connected' ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+          {/* Connection status — minimal dot indicator */}
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] px-2 py-1 rounded-full border border-[var(--border)]" title={statusText}>
             <span className={`w-1.5 h-1.5 rounded-full ${statusColor}`} />
             <span className="hidden sm:inline">{statusText}</span>
           </div>
@@ -163,13 +149,13 @@ export default function TopBar({ config }: TopBarProps) {
           {/* Theme toggle */}
           <ThemeToggle />
 
-          {/* Git panel toggle */}
+          {/* Git panel toggle — only prominently shown when open */}
           <button
             onClick={toggleGitPanel}
             className={`p-2 rounded-xl transition-all ${
               gitPanelOpen
                 ? 'bg-[var(--accent)] text-white shadow-sm'
-                : 'hover:bg-[var(--surface-2)] text-[var(--text-muted)]'
+                : 'hover:bg-[var(--surface-2)] text-[var(--text-muted)]/50 hover:text-[var(--text-muted)]'
             }`}
             title={gitPanelOpen ? 'Hide git panel' : 'Show git panel'}
           >
