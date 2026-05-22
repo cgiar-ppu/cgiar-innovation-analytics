@@ -50,3 +50,7 @@ venv/
 # Frontend
 frontend/dist/
 node_modules/
+
+# PRMS database (too large for git, bundled in Docker at build time)
+data/*.sqlite
+data/*.db
