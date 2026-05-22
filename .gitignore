@@ -1,0 +1,52 @@
+.env
+.claude/
+!.claude/skills/
+!.claude/skills/**
+workspace/
+__pycache__/
+*.pyc
+docker-compose.override.yml
+static/
+frontend/node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Logs
+*.log
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Databases
+chat.db
+*.db-journal
+
+# Secrets / TLS
+cert.pem
+key.pem
+
+# Virtual environments
+.venv/
+venv/
+
+# Frontend
+frontend/dist/
+node_modules/

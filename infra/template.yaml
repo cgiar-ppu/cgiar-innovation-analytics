@@ -1,0 +1,744 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Synapsis Analytics Agent - Multi-instance EC2 ASG deployment with bin-packing.
+  Up to 3 agent containers per t3.2xlarge instance, managed by Lambda orchestrator.
+
+# =============================================================================
+# Parameters
+# =============================================================================
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: synapsis-agent
+    Description: Name prefix for all resources
+
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.0.1.0/24
+
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 10.0.2.0/24
+
+  InstanceType:
+    Type: String
+    Default: t3.2xlarge
+    Description: EC2 instance type (8 vCPU, 32 GB for 3 containers)
+    AllowedValues:
+      - t3.2xlarge
+      - t3.xlarge
+      - m5.2xlarge
+      - c5.2xlarge
+
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /synapsis-agent/ami-id
+    Description: Pre-baked AMI with Docker + synapsis-agent image cached
+
+  MaxInstances:
+    Type: Number
+    Default: 7
+    Description: Max EC2 instances (x3 = max users)
+
+  ContainersPerInstance:
+    Type: Number
+    Default: 3
+    Description: Max Synapsis Agent containers per EC2 instance
+
+  IdleTimeoutMinutes:
+    Type: Number
+    Default: 30
+    Description: Minutes of inactivity before container is stopped
+
+  MaxInstanceLifetimeMinutes:
+    Type: Number
+    Default: 480
+    Description: Hard max lifetime for any EC2 instance in minutes (last-resort safety net)
+
+  AnthropicApiKeySsmParam:
+    Type: String
+    Default: /synapsis-agent/anthropic-api-key
+    Description: SSM Parameter Store path for the Anthropic API key
+
+  GithubRepo:
+    Type: String
+    Description: GitHub repository URL for Amplify (e.g., https://github.com/user/repo)
+
+  GithubOAuthToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub OAuth token for Amplify
+    Default: ''
+
+  KeyPairName:
+    Type: String
+    Default: ''
+    Description: EC2 key pair for SSH debug access (optional)
+
+Conditions:
+  HasKeyPair: !Not [!Equals [!Ref KeyPairName, '']]
+  HasGithubToken: !Not [!Equals [!Ref GithubOAuthToken, '']]
+
+# =============================================================================
+# VPC & Networking
+# =============================================================================
+Resources:
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-igw
+
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet1Cidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet2Cidr
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-2
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-rt
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # ===========================================================================
+  # Security Group
+  # ===========================================================================
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Synapsis Agent instances - app + SSH
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        # HTTP (Traefik proxy)
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        # HTTPS (Traefik proxy)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        # Direct app ports (3 containers)
+        - IpProtocol: tcp
+          FromPort: 7701
+          ToPort: 7703
+          CidrIp: 0.0.0.0/0
+        # noVNC ports (3 containers: slot 0→6081, slot 1→6082, slot 2→6083)
+        - IpProtocol: tcp
+          FromPort: 6081
+          ToPort: 6083
+          CidrIp: 0.0.0.0/0
+        # SSH (debug)
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-sg
+
+  # ===========================================================================
+  # ECR Repository is created by the CI/CD workflow (deploy.yml)
+  # to avoid chicken-and-egg: image must be pushed before CFn runs.
+
+  # ===========================================================================
+  # IAM Roles
+  # ===========================================================================
+
+  # EC2 Instance Role
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-ec2-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: ECRPull
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                Resource: '*'
+        - PolicyName: SSMParameterRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AnthropicApiKeySsmParam}
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub ${EnvironmentName}-ec2-profile
+      Roles:
+        - !Ref EC2Role
+
+  # Lambda Execution Role
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: OrchestratorPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # EC2 management
+              - Effect: Allow
+                Action:
+                  - ec2:RunInstances
+                  - ec2:TerminateInstances
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceStatus
+                  - ec2:CreateTags
+                Resource: '*'
+              # Pass role to EC2 instances
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt EC2Role.Arn
+              # SSM for running commands on instances
+              - Effect: Allow
+                Action:
+                  - ssm:SendCommand
+                  - ssm:GetCommandInvocation
+                  - ssm:DescribeInstanceInformation
+                Resource: '*'
+              # Lambda self-invoke for async provisioning
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-provision
+              # DynamoDB for state tracking
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                Resource:
+                  - !GetAtt UsersTable.Arn
+                  - !GetAtt InstancesTable.Arn
+
+  # ===========================================================================
+  # DynamoDB Tables
+  # ===========================================================================
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${EnvironmentName}-users
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-users
+
+  InstancesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${EnvironmentName}-instances
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: instanceId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: instanceId
+          KeyType: HASH
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-instances
+
+  # ===========================================================================
+  # EC2 Launch Template
+  # ===========================================================================
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${EnvironmentName}-lt
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        InstanceInitiatedShutdownBehavior: terminate
+        KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref 'AWS::NoValue']
+        IamInstanceProfile:
+          Arn: !GetAtt EC2InstanceProfile.Arn
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            Groups:
+              - !Ref InstanceSecurityGroup
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub ${EnvironmentName}-host
+              - Key: Environment
+                Value: !Ref EnvironmentName
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euo pipefail
+            exec > /var/log/synapsis-userdata.log 2>&1
+
+            echo "[$(date)] Starting Synapsis Agent host bootstrap..."
+
+            # Wait for background package manager processes (SSM agent, CloudWatch agent) to finish
+            for i in $(seq 1 30); do
+              if ! pgrep -x "yum|dnf|rpm" > /dev/null 2>&1; then break; fi
+              echo "[$(date)] Waiting for package manager processes ($i/30)..."
+              sleep 5
+            done
+
+            # Clean stale RPM lock file
+            rm -f /var/lib/rpm/.rpm.lock
+
+            # Install Docker (retry loop handles TOCTOU race with background package managers)
+            for attempt in $(seq 1 10); do
+              yum install -y docker && break
+              echo "[$(date)] yum install attempt $attempt failed, retrying in 10s..."
+              sleep 10
+            done
+            systemctl enable docker
+            systemctl start docker
+
+            # Fetch instance metadata (IMDSv2 requires a session token)
+            IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+            REGION=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
+            INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+
+            API_KEY=$(aws ssm get-parameter \
+              --region "$REGION" \
+              --name "${AnthropicApiKeySsmParam}" \
+              --with-decryption \
+              --query Parameter.Value --output text)
+
+            # Store API key securely for container use
+            echo "$API_KEY" > /root/.synapsis-api-key
+            chmod 600 /root/.synapsis-api-key
+
+            # Log in to ECR and pre-pull the agent image
+            ECR_URI="${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com"
+            aws ecr get-login-password --region "$REGION" | \
+              docker login --username AWS --password-stdin "$ECR_URI"
+            docker pull "$ECR_URI/${EnvironmentName}:latest"
+
+            echo "[$(date)] Synapsis Agent host ready. Instance: $INSTANCE_ID"
+
+            # --- Defense-in-depth: activity-aware instance self-destruct ---
+            MAX_LIFETIME_MIN=${MaxInstanceLifetimeMinutes}
+
+            # Layer 1: Cron job - shut down if no Docker containers for 15 min
+            cat > /usr/local/bin/synapsis-idle-check.sh << 'IDLE_EOF'
+            #!/bin/bash
+            IDLE_FILE=/tmp/synapsis-idle-count
+            IDLE_THRESHOLD=3  # 3 checks × 5 min = 15 min with 0 containers
+
+            RUNNING=$(docker ps -q 2>/dev/null | wc -l)
+
+            if [ "$RUNNING" -eq 0 ]; then
+                CURRENT=$(cat "$IDLE_FILE" 2>/dev/null || echo 0)
+                CURRENT=$((CURRENT + 1))
+                echo "$CURRENT" > "$IDLE_FILE"
+                if [ "$CURRENT" -ge "$IDLE_THRESHOLD" ]; then
+                    echo "[$(date)] No containers for $((CURRENT * 5)) min, shutting down"
+                    shutdown -h now "Synapsis: no containers running, auto-terminating"
+                fi
+            else
+                echo 0 > "$IDLE_FILE"
+            fi
+            IDLE_EOF
+            chmod +x /usr/local/bin/synapsis-idle-check.sh
+            echo "*/5 * * * * root /usr/local/bin/synapsis-idle-check.sh >> /var/log/synapsis-idle-check.log 2>&1" \
+              > /etc/cron.d/synapsis-idle-check
+
+            # Layer 2: Absolute max lifetime (last resort if Lambda + cron both fail)
+            echo "[$(date)] Scheduling hard shutdown in $MAX_LIFETIME_MIN minutes"
+            shutdown -h +$MAX_LIFETIME_MIN "Synapsis auto-shutdown: max lifetime reached"
+
+  # ===========================================================================
+  # Auto Scaling Group
+  # ===========================================================================
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub ${EnvironmentName}-asg
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: 0
+      MaxSize: !Ref MaxInstances
+      DesiredCapacity: 0
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 120
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-host
+          PropagateAtLaunch: true
+
+  # ===========================================================================
+  # Lambda Functions
+  # ===========================================================================
+  ProvisionFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${EnvironmentName}-provision
+      Runtime: python3.12
+      Handler: provision.handler
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 300
+      MemorySize: 256
+      Code:
+        ZipFile: |
+          # Placeholder - replaced by deploy pipeline with infra/lambda/provision.py
+          def handler(event, context):
+              return {"statusCode": 501, "body": "Not deployed yet"}
+      Environment:
+        Variables:
+          USERS_TABLE: !Ref UsersTable
+          INSTANCES_TABLE: !Ref InstancesTable
+          LAUNCH_TEMPLATE_ID: !Ref LaunchTemplate
+          LAUNCH_TEMPLATE_VERSION: !GetAtt LaunchTemplate.LatestVersionNumber
+          SECURITY_GROUP_ID: !Ref InstanceSecurityGroup
+          SUBNET_IDS: !Join [',', [!Ref PublicSubnet1, !Ref PublicSubnet2]]
+          ECR_IMAGE: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EnvironmentName}:latest
+          CONTAINERS_PER_INSTANCE: !Ref ContainersPerInstance
+          ENVIRONMENT_NAME: !Ref EnvironmentName
+
+  StatusFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${EnvironmentName}-status
+      Runtime: python3.12
+      Handler: status.handler
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 30
+      MemorySize: 128
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"statusCode": 501, "body": "Not deployed yet"}
+      Environment:
+        Variables:
+          USERS_TABLE: !Ref UsersTable
+
+  DeprovisionFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${EnvironmentName}-deprovision
+      Runtime: python3.12
+      Handler: deprovision.handler
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 60
+      MemorySize: 128
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"statusCode": 501, "body": "Not deployed yet"}
+      Environment:
+        Variables:
+          USERS_TABLE: !Ref UsersTable
+          INSTANCES_TABLE: !Ref InstancesTable
+
+  CleanupFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${EnvironmentName}-cleanup
+      Runtime: python3.12
+      Handler: cleanup.handler
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 120
+      MemorySize: 256
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"statusCode": 501, "body": "Not deployed yet"}
+      Environment:
+        Variables:
+          USERS_TABLE: !Ref UsersTable
+          INSTANCES_TABLE: !Ref InstancesTable
+          IDLE_TIMEOUT_MINUTES: !Ref IdleTimeoutMinutes
+          MAX_INSTANCE_LIFETIME_MINUTES: !Ref MaxInstanceLifetimeMinutes
+
+  FrontendFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${EnvironmentName}-frontend
+      Runtime: python3.12
+      Handler: frontend.handler
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 5
+      MemorySize: 128
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"statusCode": 200, "headers": {"Content-Type": "text/html"}, "body": "Deploying..."}
+
+  # ===========================================================================
+  # API Gateway (HTTP API)
+  # ===========================================================================
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub ${EnvironmentName}-api
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowMethods:
+          - GET
+          - POST
+          - DELETE
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+
+  HttpApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: $default
+      AutoDeploy: true
+
+  # POST /provision
+  ProvisionIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ProvisionFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  ProvisionRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /provision
+      Target: !Sub integrations/${ProvisionIntegration}
+
+  ProvisionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ProvisionFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*
+
+  # GET /status/{userId}
+  StatusIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt StatusFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  StatusRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /status/{userId}
+      Target: !Sub integrations/${StatusIntegration}
+
+  StatusPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StatusFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*
+
+  # DELETE /deprovision/{userId}
+  DeprovisionIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt DeprovisionFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  DeprovisionRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: DELETE /deprovision/{userId}
+      Target: !Sub integrations/${DeprovisionIntegration}
+
+  DeprovisionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DeprovisionFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*
+
+  # GET / (frontend launcher page)
+  FrontendIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt FrontendFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  FrontendRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /
+      Target: !Sub integrations/${FrontendIntegration}
+
+  FrontendPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref FrontendFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*
+
+  # ===========================================================================
+  # EventBridge - Idle Cleanup Schedule
+  # ===========================================================================
+  CleanupScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub ${EnvironmentName}-idle-cleanup
+      Description: Cleanup idle Synapsis Agent containers every 5 minutes
+      ScheduleExpression: rate(5 minutes)
+      State: ENABLED
+      Targets:
+        - Id: cleanup-lambda
+          Arn: !GetAtt CleanupFunction.Arn
+
+  CleanupSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CleanupFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CleanupScheduleRule.Arn
+
+# =============================================================================
+# Outputs
+# =============================================================================
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !GetAtt HttpApi.ApiEndpoint
+
+  ECRRepositoryUri:
+    Description: ECR repository URI for Docker push
+    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EnvironmentName}
+
+  VpcId:
+    Description: VPC ID
+    Value: !Ref VPC
+
+  UsersTableName:
+    Description: DynamoDB users table
+    Value: !Ref UsersTable
+
+  InstancesTableName:
+    Description: DynamoDB instances table
+    Value: !Ref InstancesTable
+
+  SecurityGroupId:
+    Description: Instance security group ID
+    Value: !Ref InstanceSecurityGroup

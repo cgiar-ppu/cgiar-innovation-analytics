@@ -1,0 +1,169 @@
+name: Deploy Synapsis Agent
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-central-1
+  STACK_NAME: synapsis-agent-prod
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # =========================================================================
+  # Build Docker image and push to ECR
+  # =========================================================================
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ github.sha }}
+      ecr-repo: ${{ steps.login-ecr.outputs.registry }}/synapsis-agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories --repository-names synapsis-agent 2>/dev/null || \
+          aws ecr create-repository --repository-name synapsis-agent --image-scanning-configuration scanOnPush=true
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t synapsis-agent .
+          docker tag synapsis-agent:latest $ECR_REGISTRY/synapsis-agent:latest
+          docker tag synapsis-agent:latest $ECR_REGISTRY/synapsis-agent:$IMAGE_TAG
+          docker push $ECR_REGISTRY/synapsis-agent:latest
+          docker push $ECR_REGISTRY/synapsis-agent:$IMAGE_TAG
+
+  # =========================================================================
+  # Deploy CloudFormation infrastructure
+  # =========================================================================
+  deploy-infra:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Store API key in SSM Parameter Store
+        run: |
+          aws ssm put-parameter \
+            --name "/synapsis-agent/anthropic-api-key" \
+            --type SecureString \
+            --value "${{ secrets.ANTHROPIC_API_KEY }}" \
+            --overwrite
+
+      - name: Bootstrap AMI parameter if missing
+        run: |
+          if ! aws ssm get-parameter --name "/synapsis-agent/ami-id" 2>/dev/null; then
+            echo "No custom AMI yet — seeding with latest Amazon Linux 2023"
+            AMI_ID=$(aws ec2 describe-images \
+              --owners amazon \
+              --filters "Name=name,Values=al2023-ami-2023.*-x86_64" "Name=state,Values=available" \
+              --query 'sort_by(Images, &CreationDate)[-1].ImageId' \
+              --output text)
+            aws ssm put-parameter \
+              --name "/synapsis-agent/ami-id" \
+              --type String \
+              --value "$AMI_ID"
+            echo "Seeded /synapsis-agent/ami-id with $AMI_ID"
+          else
+            echo "AMI parameter already exists, skipping bootstrap"
+          fi
+
+      - name: Deploy CloudFormation stack
+        run: |
+          aws cloudformation deploy \
+            --template-file infra/template.yaml \
+            --stack-name ${{ env.STACK_NAME }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              GithubRepo=${{ github.server_url }}/${{ github.repository }} \
+            --no-fail-on-empty-changeset
+
+      - name: Output stack info
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'Stacks[0].Outputs' \
+            --output table
+
+  # =========================================================================
+  # Update Lambda function code
+  # =========================================================================
+  deploy-lambdas:
+    needs: deploy-infra
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Package and deploy Lambda functions
+        run: |
+          ENV_NAME="synapsis-agent"
+
+          for func in provision status deprovision cleanup frontend; do
+            echo "Deploying ${func} Lambda..."
+            cd infra/lambda
+            zip -j "/tmp/${func}.zip" "${func}.py" lambda_utils.py
+            cd ../..
+
+            aws lambda update-function-code \
+              --function-name "${ENV_NAME}-${func}" \
+              --zip-file "fileb:///tmp/${func}.zip"
+          done
+
+  # =========================================================================
+  # Rebuild AMI (only when Dockerfile changes)
+  # =========================================================================
+  rebuild-ami:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    # Only rebuild AMI when Dockerfile or entrypoint changes
+    if: |
+      contains(github.event.head_commit.modified, 'Dockerfile') ||
+      contains(github.event.head_commit.modified, 'entrypoint.sh') ||
+      contains(github.event.head_commit.modified, 'requirements.txt')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Rebuild AMI with updated image
+        run: |
+          chmod +x infra/ami/build-ami.sh
+          ./infra/ami/build-ami.sh --region ${{ env.AWS_REGION }}

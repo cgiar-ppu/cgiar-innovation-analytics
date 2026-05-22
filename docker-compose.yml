@@ -1,0 +1,72 @@
+# ===========================================================================
+# CGIAR Innovation Analytics Platform – Docker Compose
+# ===========================================================================
+# Usage:
+#   1. claude login
+#   2. docker compose up --build -d
+#   3. Open http://localhost:7780
+# ===========================================================================
+
+services:
+  cgiar-innovation-analytics:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${SYNAPSIS_PORT:-7780}:7780"   # Web UI
+      - "${SYNAPSIS_VNC_PORT:-6080}:6080"  # VNC
+    shm_size: 1g
+    environment:
+      - SYNAPSIS_MODEL=${SYNAPSIS_MODEL:-claude-opus-4-6}
+      - SYNAPSIS_MAX_TURNS=${SYNAPSIS_MAX_TURNS:-100}
+      - SYNAPSIS_PORT=7780                   # Preferred internal port
+      - SYNAPSIS_HOST=0.0.0.0
+      - SYNAPSIS_LOG_LEVEL=${SYNAPSIS_LOG_LEVEL:-INFO}
+      - SYNAPSIS_FALLBACK_MODEL=${SYNAPSIS_FALLBACK_MODEL:-claude-sonnet-4-20250514}
+      - SYNAPSIS_WS_PING_INTERVAL=20        # WebSocket keepalive ping interval (seconds)
+      - SYNAPSIS_WS_PING_TIMEOUT=20         # WebSocket ping timeout (seconds)
+      - SYNAPSIS_HEARTBEAT_INTERVAL=15      # App-level heartbeat interval (seconds)
+      - SYNAPSIS_BACKUP_INTERVAL=300        # DB backup interval (seconds, default: 5 min)
+      - SYNAPSIS_MAX_BACKUPS=10             # Max backup files to keep
+      - SCREEN_WIDTH=${SCREEN_WIDTH:-1920}
+      - SCREEN_HEIGHT=${SCREEN_HEIGHT:-1080}
+      # Only needed if NOT using ~/.claude mount (fallback)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # OAuth credentials — populated automatically by start.sh on macOS
+      # (macOS stores these in the Keychain, not in ~/.claude files)
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - CLAUDE_CODE_OAUTH_REFRESH_TOKEN=${CLAUDE_CODE_OAUTH_REFRESH_TOKEN:-}
+    volumes:
+      # ---- Auth: mount host Claude Code config (subscription) ----
+      # On Windows: start.ps1 generates docker-compose.override.yml with
+      #             the correct USERPROFILE path (e.g. C:/Users/you/.claude)
+      # On Linux/macOS: ${HOME} works directly
+      - ${HOME:-.}/.claude:/tmp/.claude-mount:ro
+      # Persist workspace files between container restarts
+      - innovation-workspace:/workspace
+      # Optional: shared folder for host ↔ container file exchange.
+      # Set SYNAPSIS_SHARED_DIR=auto in .env to enable (see .env.example).
+      # The start scripts auto-detect the path and add it to the override file.
+    # Security: sandbox the container
+    security_opt:
+      - no-new-privileges:true
+    # Resource limits (adjust as needed)
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
+        reservations:
+          cpus: "2"
+          memory: 4G
+    # Network: allow internet access (needed for web search, pip install, etc.)
+    # but isolate from host's other containers
+    networks:
+      - innovation-net
+
+volumes:
+  innovation-workspace:
+    name: cgiar-innovation-workspace
+
+networks:
+  innovation-net:
+    driver: bridge

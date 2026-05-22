@@ -1,0 +1,8 @@
+# Synapsis Analytics Agent – Python dependencies
+claude-agent-sdk>=0.1.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+websockets>=14.0
+python-multipart>=0.0.18
+aiofiles>=24.1.0
+aiosqlite>=0.20.0

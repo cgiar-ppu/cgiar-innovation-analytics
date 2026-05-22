@@ -1,0 +1,81 @@
+name: Deploy HTTPS Proxy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/proxy/**'
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-central-1
+  STACK_NAME: synapsis-proxy
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-proxy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Clean up failed stack if needed
+        run: |
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          # Match any terminal failure state: ROLLBACK_COMPLETE, UPDATE_ROLLBACK_COMPLETE,
+          # CREATE_FAILED, UPDATE_FAILED, DELETE_FAILED, etc.
+          if [[ "$STATUS" == *FAILED* ]] || [[ "$STATUS" == *ROLLBACK_COMPLETE ]]; then
+            echo "Stack in $STATUS state — deleting before redeploy..."
+            aws cloudformation delete-stack --stack-name ${{ env.STACK_NAME }}
+            aws cloudformation wait stack-delete-complete --stack-name ${{ env.STACK_NAME }}
+            echo "Old stack deleted."
+          else
+            echo "Stack status: $STATUS — proceeding with deploy."
+          fi
+
+      - name: Deploy CloudFormation stack
+        run: |
+          echo "Deploying ${{ env.STACK_NAME }} stack..."
+          aws cloudformation deploy \
+            --template-file infra/proxy/template.yaml \
+            --stack-name ${{ env.STACK_NAME }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset
+          echo "Stack deployment complete."
+
+      - name: Show stack outputs
+        run: |
+          echo "=== Stack Outputs ==="
+          aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'Stacks[0].Outputs' \
+            --output table
+
+          echo ""
+          echo "=== Quick Reference ==="
+          PROXY_IP=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'Stacks[0].Outputs[?OutputKey==`ProxyPublicIP`].OutputValue' \
+            --output text)
+          echo "Proxy IP: $PROXY_IP (Elastic IP — static, survives redeployments)"
+          echo "URL: https://synaptic.synapsis-analytics.com"
+          echo ""
+          echo "Tunnel auto-recovery:"
+          echo "  The tunnel-wrapper.sh resolves the proxy IP from CloudFormation"
+          echo "  dynamically. When autossh reconnects after this deployment, it"
+          echo "  will automatically pick up the new EIP. No manual steps needed."
+          echo ""
+          echo "First-time setup only (if tunnel not yet configured):"
+          echo "  ./infra/proxy/setup-tunnel.sh"
