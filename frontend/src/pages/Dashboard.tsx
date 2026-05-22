@@ -1,4 +1,4 @@
-import { MessageSquare, Brain, Bot, Activity, Wifi, BarChart3, AlertTriangle } from 'lucide-react';
+import { Sprout, Globe2, Database, TrendingUp, MessageSquare, Bot, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
 import { dashboardService } from '../services/dashboard';
@@ -30,7 +30,7 @@ export default function Dashboard() {
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-amber-500">Dashboard showing cached data</p>
             <p className="text-xs text-amber-500/70 mt-0.5">
-              Unable to reach the backend. The statistics below are from the last successful fetch or mock defaults.
+              Unable to reach the backend. The statistics below are from the last successful fetch or defaults.
             </p>
           </div>
           <Badge variant="warning">Offline</Badge>
@@ -40,20 +40,20 @@ export default function Dashboard() {
       {/* Title */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-[var(--text)]">Dashboard</h1>
-          <p className="text-sm text-[var(--text-muted)] mt-1">CGIAR Innovation Analytics overview</p>
+          <h1 className="text-2xl font-bold text-[var(--text)]">Innovation Analytics</h1>
+          <p className="text-sm text-[var(--text-muted)] mt-1">CGIAR research performance and innovation insights</p>
         </div>
         <Badge variant={statsLive ? 'success' : 'warning'}>{statsLive ? 'Live' : 'Offline'}</Badge>
       </div>
 
-      {/* Stats Grid */}
+      {/* Stats Grid — mapped to CGIAR context */}
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        <StatsCard label="Sessions" value={stats.total_sessions} icon={<MessageSquare className="w-5 h-5" />} color="var(--accent)" />
-        <StatsCard label="Messages" value={stats.total_messages} icon={<BarChart3 className="w-5 h-5" />} color="var(--purple)" />
-        <StatsCard label="Memories" value={stats.active_memories} icon={<Brain className="w-5 h-5" />} color="var(--success)" />
-        <StatsCard label="Recent (7d)" value={stats.recent_activity} icon={<Activity className="w-5 h-5" />} color="var(--warning)" />
-        <StatsCard label="Connections" value={stats.active_connections} icon={<Wifi className="w-5 h-5" />} color="#3b82f6" />
-        <StatsCard label="Agents" value={stats.total_agents} icon={<Bot className="w-5 h-5" />} color="var(--danger)" />
+        <StatsCard label="Innovations" value={stats.total_sessions} icon={<Sprout className="w-5 h-5" />} color="#427730" />
+        <StatsCard label="Results" value={stats.total_messages} icon={<TrendingUp className="w-5 h-5" />} color="#0065BD" />
+        <StatsCard label="Regions" value={stats.active_memories} icon={<Globe2 className="w-5 h-5" />} color="#7AB800" />
+        <StatsCard label="Queries (7d)" value={stats.recent_activity} icon={<Database className="w-5 h-5" />} color="#E37222" />
+        <StatsCard label="Sessions" value={stats.active_connections} icon={<MessageSquare className="w-5 h-5" />} color="#0039A6" />
+        <StatsCard label="Agents" value={stats.total_agents} icon={<Bot className="w-5 h-5" />} color="#739600" />
       </div>
 
       {/* Activity Chart */}
@@ -63,36 +63,36 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <GlassCard hover onClick={() => navigate('/chat')}>
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-[var(--accent)]/15 flex items-center justify-center">
-              <MessageSquare className="w-5 h-5 text-[var(--accent)]" />
+            <div className="w-10 h-10 rounded-lg bg-[#427730]/15 flex items-center justify-center">
+              <MessageSquare className="w-5 h-5 text-[#427730]" />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-[var(--text)]">New Chat</h3>
-              <p className="text-xs text-[var(--text-muted)]">Start a conversation</p>
+              <h3 className="text-sm font-semibold text-[var(--text)]">New Analysis</h3>
+              <p className="text-xs text-[var(--text-muted)]">Start a research query</p>
             </div>
           </div>
         </GlassCard>
 
-        <GlassCard hover onClick={() => navigate('/workflows')}>
+        <GlassCard hover onClick={() => navigate('/chat')}>
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-[var(--purple)]/15 flex items-center justify-center">
-              <Activity className="w-5 h-5 text-[var(--purple)]" />
+            <div className="w-10 h-10 rounded-lg bg-[#0065BD]/15 flex items-center justify-center">
+              <Database className="w-5 h-5 text-[#0065BD]" />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-[var(--text)]">Workflows</h3>
-              <p className="text-xs text-[var(--text-muted)]">Run agent pipelines</p>
+              <h3 className="text-sm font-semibold text-[var(--text)]">Query PRMS</h3>
+              <p className="text-xs text-[var(--text-muted)]">Search the results database</p>
             </div>
           </div>
         </GlassCard>
 
         <GlassCard hover onClick={() => navigate('/agents')}>
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-[var(--success)]/15 flex items-center justify-center">
-              <Bot className="w-5 h-5 text-[var(--success)]" />
+            <div className="w-10 h-10 rounded-lg bg-[#7AB800]/15 flex items-center justify-center">
+              <Bot className="w-5 h-5 text-[#7AB800]" />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-[var(--text)]">Agents</h3>
-              <p className="text-xs text-[var(--text-muted)]">View specialist agents</p>
+              <h3 className="text-sm font-semibold text-[var(--text)]">Research Agents</h3>
+              <p className="text-xs text-[var(--text-muted)]">View specialist CGIAR agents</p>
             </div>
           </div>
         </GlassCard>

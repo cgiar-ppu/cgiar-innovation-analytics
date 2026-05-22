@@ -1,4 +1,4 @@
-import { BarChart3, LineChart, FlaskConical, Code2, Sparkles } from 'lucide-react'
+import { Search, Database, Globe2, TrendingUp, Sprout } from 'lucide-react'
 
 interface Props {
   onPromptClick: (text: string) => void
@@ -6,54 +6,54 @@ interface Props {
 
 const examples = [
   {
-    icon: BarChart3,
-    title: 'Data Analysis',
-    description: 'EDA, hypothesis testing, regression, time series, data wrangling',
-    prompt: "I have a CSV with 50,000 rows of customer transactions. Help me explore the data, identify patterns, and run a cohort retention analysis.",
-    gradient: 'from-blue-500/10 to-cyan-500/10',
-    iconColor: 'text-blue-500',
-    borderColor: 'hover:border-blue-500/30',
+    icon: Search,
+    title: 'Innovation Search',
+    description: 'Find and explore CGIAR innovations across research centers and regions',
+    prompt: 'Show me the most recent CGIAR innovations in climate-smart agriculture in sub-Saharan Africa.',
+    gradient: 'from-[#427730]/15 to-[#7AB800]/10',
+    iconColor: 'text-[#427730]',
+    borderColor: 'hover:border-[#427730]/30',
   },
   {
-    icon: LineChart,
-    title: 'Visualization',
-    description: 'Charts, dashboards, reports, publication-quality figures',
-    prompt: 'Create a set of visualizations showing monthly revenue trends, customer segments, and a correlation heatmap from my sales dataset.',
-    gradient: 'from-emerald-500/10 to-teal-500/10',
-    iconColor: 'text-emerald-500',
-    borderColor: 'hover:border-emerald-500/30',
+    icon: Database,
+    title: 'PRMS Query',
+    description: 'Query the Performance & Results Management System database directly',
+    prompt: 'Query the PRMS database to show me all results reported under the Resilient Agrifood Systems initiative in 2024.',
+    gradient: 'from-[#0065BD]/10 to-[#4da3e8]/10',
+    iconColor: 'text-[#0065BD]',
+    borderColor: 'hover:border-[#0065BD]/30',
   },
   {
-    icon: FlaskConical,
-    title: 'Research Design',
-    description: 'Study design, sampling, power analysis, experimental methods',
-    prompt: 'I need to design an A/B test for a new checkout flow. Help me determine sample size, test duration, and the right statistical approach.',
-    gradient: 'from-violet-500/10 to-purple-500/10',
-    iconColor: 'text-violet-500',
-    borderColor: 'hover:border-violet-500/30',
+    icon: Globe2,
+    title: 'Regional Analysis',
+    description: 'Analyze research impact and innovation adoption by region or country',
+    prompt: 'Analyze CGIAR research results and innovations in South Asia, broken down by country and thematic area.',
+    gradient: 'from-[#7AB800]/10 to-[#739600]/10',
+    iconColor: 'text-[#7AB800]',
+    borderColor: 'hover:border-[#7AB800]/30',
   },
   {
-    icon: Code2,
-    title: 'Automation',
-    description: 'Data pipelines, ETL, web scraping, API integration, scripting',
-    prompt: 'Build a Python script that pulls data from a REST API, transforms it into a clean DataFrame, and exports weekly summary reports as Excel files.',
-    gradient: 'from-orange-500/10 to-amber-500/10',
-    iconColor: 'text-orange-500',
-    borderColor: 'hover:border-orange-500/30',
+    icon: TrendingUp,
+    title: 'Impact Assessment',
+    description: 'Explore science outcomes, policy influence, and capacity building metrics',
+    prompt: 'What are the key impact pathways for CGIAR research in the last 3 years? Show me policy influence and capacity strengthening results.',
+    gradient: 'from-[#E37222]/10 to-[#FDC82F]/10',
+    iconColor: 'text-[#E37222]',
+    borderColor: 'hover:border-[#E37222]/30',
   },
 ]
 
 export function WelcomeScreen({ onPromptClick }: Props) {
   return (
     <div className="flex flex-col items-center justify-center py-20 animate-fade-in-up">
-      <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-hover)] flex items-center justify-center mb-5 shadow-lg">
-        <Sparkles size={28} className="text-white" />
+      <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#427730] to-[#7AB800] flex items-center justify-center mb-5 shadow-lg">
+        <Sprout size={28} className="text-white" />
       </div>
       <h2 className="text-2xl font-bold text-text-primary text-center mb-2 tracking-tight">
-        What can I help you with?
+        CGIAR Innovation Analytics
       </h2>
       <p className="text-sm text-text-muted text-center max-w-md mb-12 leading-relaxed">
-        Analyze data, build visualizations, design studies, and automate workflows.
+        Explore CGIAR innovations, query the PRMS database, analyze research results, and discover science impact across regions and programmes.
       </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-2xl">

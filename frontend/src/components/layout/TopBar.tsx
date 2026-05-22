@@ -1,6 +1,6 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { LayoutDashboard, MessageSquare, Bot, Network, Settings, Sparkles, Wifi, WifiOff, Monitor, Search, Menu, Code2, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Bot, Settings, Sparkles, Wifi, WifiOff, Monitor, Search, Menu, Code2, ChevronRight } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useWebSocketContext } from '../../contexts/WebSocketContext';
 import { useUIStore } from '../../stores/ui';
@@ -12,9 +12,6 @@ const NAV_ITEMS = [
   { to: '/chat', label: 'Chat', icon: MessageSquare },
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/agents', label: 'Agents', icon: Bot },
-  // { to: '/workflows', label: 'Workflows', icon: GitBranch },  // temporarily hidden
-  { to: '/fleet', label: 'Fleet', icon: Network },
-  // { to: '/files', label: 'Files', icon: FolderOpen },          // temporarily hidden
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 
@@ -71,11 +68,14 @@ export default function TopBar({ config }: TopBarProps) {
         </button>
 
         {/* Logo */}
-        <div className="flex items-center gap-2 mr-6">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[var(--accent)] to-[var(--purple)] flex items-center justify-center">
+        <div className="flex items-center gap-2.5 mr-6">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#427730] to-[#7AB800] flex items-center justify-center shadow-sm">
             <Sparkles className="w-4 h-4 text-white" />
           </div>
-          <span className="font-semibold text-[var(--text)] text-lg hidden sm:block">Innovation Analytics</span>
+          <div className="hidden sm:flex flex-col">
+            <span className="font-semibold text-[var(--text)] text-sm leading-tight tracking-tight">CGIAR</span>
+            <span className="text-[10px] text-[var(--text-muted)] leading-tight">Innovation Analytics</span>
+          </div>
         </div>
 
         {/* Navigation Pills with scroll indicator */}

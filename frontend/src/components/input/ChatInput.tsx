@@ -176,7 +176,7 @@ export const ChatInput = memo(function ChatInput({ onSend, onCancel, onFileUploa
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask me anything... (type / for commands)"
+          placeholder="Ask about CGIAR innovations, research results, or query the PRMS database..."
           rows={1}
           className="flex-1 resize-none bg-transparent text-text-primary placeholder:text-text-muted
             text-sm leading-relaxed outline-none py-1 max-h-[200px]"
