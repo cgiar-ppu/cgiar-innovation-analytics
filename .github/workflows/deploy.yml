@@ -101,15 +101,40 @@ jobs:
             --image-scanning-configuration scanOnPush=true
 
       # -----------------------------------------------------------------
-      # Download PRMS database from S3
+      # Download PRMS database (S3 cache → GitHub release fallback)
       # -----------------------------------------------------------------
       - name: Download PRMS database
+        env:
+          GH_TOKEN: ${{ github.token }}
+          S3_BUCKET: cgiar-ia-artifacts-${{ env.EXPECTED_ACCOUNT }}
         run: |
           mkdir -p data
-          aws s3 cp s3://cgiar-ia-artifacts-${{ env.EXPECTED_ACCOUNT }}/prdb.sqlite data/prdb.sqlite || {
-            echo "::warning::PRMS database not found in S3. Build will fail if data/prdb.sqlite is missing."
-            echo "Upload the database: aws s3 cp prdb.sqlite s3://cgiar-ia-artifacts-${{ env.EXPECTED_ACCOUNT }}/prdb.sqlite --profile ai-dev"
-          }
+
+          # Try S3 first (fast, cached from previous runs)
+          if aws s3 cp "s3://$S3_BUCKET/prdb.sqlite" data/prdb.sqlite 2>/dev/null; then
+            echo "Downloaded PRMS database from S3 cache"
+          else
+            echo "S3 cache miss — downloading from GitHub release..."
+            gh release download prms-db-v1 \
+              --repo "${{ github.repository }}" \
+              --pattern "prdb.sqlite" \
+              --dir data
+
+            # Create S3 bucket and cache for future runs
+            echo "Caching PRMS database to S3..."
+            aws s3 mb "s3://$S3_BUCKET" --region ${{ env.AWS_REGION }} 2>/dev/null || true
+            aws s3 cp data/prdb.sqlite "s3://$S3_BUCKET/prdb.sqlite" || {
+              echo "::warning::Failed to cache PRMS database to S3 (non-fatal)"
+            }
+          fi
+
+          # Verify file exists and has reasonable size
+          FILE_SIZE=$(stat -c%s data/prdb.sqlite 2>/dev/null || stat -f%z data/prdb.sqlite 2>/dev/null || echo "0")
+          echo "PRMS database size: $FILE_SIZE bytes"
+          if [ "$FILE_SIZE" -lt 100000000 ]; then
+            echo "::error::PRMS database too small ($FILE_SIZE bytes). Expected ~400MB."
+            exit 1
+          fi
 
       # -----------------------------------------------------------------
       # Docker: Build and push image
