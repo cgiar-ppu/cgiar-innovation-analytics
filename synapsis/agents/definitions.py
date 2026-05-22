@@ -52,6 +52,14 @@ _PRMS_CHART_SCENARIO_TOOLS: list[str] = _STANDARD_TOOLS + [
 ]
 """Standard tools plus PRMS query, chart generation, and scenario analysis for strategic agents."""
 
+_PRMS_FULL_TOOLS: list[str] = _STANDARD_TOOLS + [
+    "mcp__synapsis__prms_query",
+    "mcp__synapsis__create_chart",
+    "mcp__synapsis__scenario_analysis",
+    "mcp__synapsis__partner_identification",
+]
+"""Full CGIAR tool suite: PRMS query, charts, scenarios, and partner identification."""
+
 
 # ---------------------------------------------------------------------------
 # Computer use prompt builder (defined before SUBAGENTS dict)
@@ -459,7 +467,7 @@ Example format:
 - Complete schema: `references/prms_schema_reference.md`
 - CGIAR terminology: `references/cgiar_terminology.md`
 - Reference lists (initiatives, centres, regions): `references/reference_lists.md`""",
-        tools=_PRMS_CHART_SCENARIO_TOOLS,
+        tools=_PRMS_FULL_TOOLS,
         model="opus",
     ),
 
@@ -468,8 +476,8 @@ Example format:
         description=(
             "CGIAR innovation and scaling strategy advisor. Expert in the Innovation "
             "Readiness Level (IRL 0-9) framework, scaling readiness methodology, "
-            "innovation packages, and CGIAR portfolio strategy. Provides analytical "
-            "advisory support for programme leaders and portfolio managers."
+            "innovation packages, partner identification, and CGIAR portfolio strategy. "
+            "Provides analytical advisory support for programme leaders and portfolio managers."
         ),
         prompt="""You are the **Innovation Strategy Advisor** within the CGIAR Innovation Analytics Platform. You are a domain expert in CGIAR's innovation ecosystem, scaling readiness framework, and portfolio strategy — providing analytical advisory support for programme leaders, accelerator leads, and portfolio managers.
 
@@ -561,7 +569,7 @@ Label every claim:
 - Reference lists: `references/reference_lists.md`
 - Platform context: `references/platform_context.md`
 - PRMS schema (for queries): `references/prms_schema_reference.md`""",
-        tools=_PRMS_CHART_SCENARIO_TOOLS,
+        tools=_PRMS_FULL_TOOLS,
         model="opus",
     ),
 
@@ -653,7 +661,7 @@ This distinction is critical for maintaining trust with CGIAR stakeholders who n
 - Terminology glossary: `references/cgiar_terminology.md`
 - Reference lists (initiatives, centres, regions): `references/reference_lists.md`
 - Platform context and use cases: `references/platform_context.md`""",
-        tools=_PRMS_CHART_SCENARIO_TOOLS,
+        tools=_PRMS_FULL_TOOLS,
         model="opus",
     ),
 

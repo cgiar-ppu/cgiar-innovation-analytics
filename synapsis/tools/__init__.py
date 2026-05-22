@@ -14,6 +14,7 @@ from synapsis.tools.history import history_search, history_retrieve, history_ind
 from synapsis.tools.prms_query import prms_query
 from synapsis.tools.create_chart import create_chart
 from synapsis.tools.scenario_analysis import scenario_analysis
+from synapsis.tools.partner_identification import partner_identification
 
 # ---------------------------------------------------------------------------
 # Memory + agent management + Slack MCP server
@@ -47,6 +48,7 @@ synapsis_mcp = create_sdk_mcp_server(
         prms_query,
         create_chart,
         scenario_analysis,
+        partner_identification,
     ],
 )
 
