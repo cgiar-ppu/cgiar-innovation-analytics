@@ -36,7 +36,6 @@ COPY synapsis/ ./synapsis/
 COPY app.py ./
 COPY references/ ./references/
 COPY seed_knowledge.py ./
-COPY .claude/skills/ ./.claude/skills/
 
 # Frontend static assets from the build stage
 COPY --from=frontend /static ./static
