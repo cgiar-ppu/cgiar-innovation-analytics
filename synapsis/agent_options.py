@@ -12,7 +12,7 @@ from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
 from synapsis.config import (
     MODEL, FALLBACK_MODEL, MAX_TURNS, WORKSPACE, PROJECT_DIR,
-    SAFETY_HOOKS_ENABLED, logger,
+    SAFETY_HOOKS_ENABLED, IS_MACOS, logger,
 )
 from synapsis.constants import MAX_BUFFER_SIZE
 from synapsis.tools import synapsis_mcp, computer_use_mcp
@@ -76,18 +76,6 @@ ALLOWED_TOOLS: list[str] = [
     "mcp__synapsis__memory_recall",
     "mcp__synapsis__memory_list",
     "mcp__synapsis__memory_forget",
-    # MCP computer use tools (separate computer-use server)
-    "mcp__computer-use__screenshot",
-    "mcp__computer-use__left_click",
-    "mcp__computer-use__right_click",
-    "mcp__computer-use__double_click",
-    "mcp__computer-use__triple_click",
-    "mcp__computer-use__mouse_move",
-    "mcp__computer-use__type",
-    "mcp__computer-use__key",
-    "mcp__computer-use__scroll",
-    "mcp__computer-use__wait",
-    "mcp__computer-use__left_click_drag",
     # MCP agent management tools
     "mcp__synapsis__agent_create",
     "mcp__synapsis__agent_list",
@@ -105,6 +93,22 @@ ALLOWED_TOOLS: list[str] = [
     "mcp__synapsis__fleet_inspect",
     "mcp__synapsis__fleet_initialize",
 ]
+
+# MCP computer use tools — macOS only (Quartz/CGEvent not available on Linux)
+if IS_MACOS:
+    ALLOWED_TOOLS.extend([
+        "mcp__computer-use__screenshot",
+        "mcp__computer-use__left_click",
+        "mcp__computer-use__right_click",
+        "mcp__computer-use__double_click",
+        "mcp__computer-use__triple_click",
+        "mcp__computer-use__mouse_move",
+        "mcp__computer-use__type",
+        "mcp__computer-use__key",
+        "mcp__computer-use__scroll",
+        "mcp__computer-use__wait",
+        "mcp__computer-use__left_click_drag",
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +158,10 @@ async def build_agent_options(
     # Load all agents (builtin + custom from DB)
     all_agents = await load_all_agents()
 
+    mcp_servers = {"synapsis": synapsis_mcp}
+    if computer_use_mcp is not None:
+        mcp_servers["computer-use"] = computer_use_mcp
+
     opts = ClaudeAgentOptions(
         allowed_tools=ALLOWED_TOOLS,
         permission_mode="bypassPermissions",
@@ -164,7 +172,7 @@ async def build_agent_options(
         max_turns=MAX_TURNS,
         agents=all_agents,
         include_partial_messages=True,
-        mcp_servers={"synapsis": synapsis_mcp, "computer-use": computer_use_mcp},
+        mcp_servers=mcp_servers,
         hooks=_build_hooks(),
         setting_sources=["project"],
         max_buffer_size=MAX_BUFFER_SIZE,
@@ -234,6 +242,10 @@ async def build_generic_agent_options(
     """
     all_agents = await load_all_agents()
 
+    mcp_servers = {"synapsis": synapsis_mcp}
+    if computer_use_mcp is not None:
+        mcp_servers["computer-use"] = computer_use_mcp
+
     opts = ClaudeAgentOptions(
         allowed_tools=ALLOWED_TOOLS,
         permission_mode="bypassPermissions",
@@ -244,7 +256,7 @@ async def build_generic_agent_options(
         max_turns=MAX_TURNS,
         agents=all_agents,
         include_partial_messages=True,
-        mcp_servers={"synapsis": synapsis_mcp, "computer-use": computer_use_mcp},
+        mcp_servers=mcp_servers,
         hooks=_build_hooks(),
         setting_sources=["project"],
         max_buffer_size=MAX_BUFFER_SIZE,

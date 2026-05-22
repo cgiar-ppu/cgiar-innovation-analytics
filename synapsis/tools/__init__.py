@@ -54,12 +54,18 @@ synapsis_mcp = create_sdk_mcp_server(
 
 # ---------------------------------------------------------------------------
 # Computer use MCP server (separate — API backend detects mcp__computer-use__* names)
+# macOS only — Quartz/CGEvent are not available on Linux.
 # ---------------------------------------------------------------------------
 
-from synapsis.tools.computer_use_server import computer_use_tools
+from synapsis.config import IS_MACOS
 
-computer_use_mcp = create_sdk_mcp_server(
-    name="computer-use",
-    version="1.0.0",
-    tools=computer_use_tools,
-)
+if IS_MACOS:
+    from synapsis.tools.computer_use_server import computer_use_tools
+
+    computer_use_mcp = create_sdk_mcp_server(
+        name="computer-use",
+        version="1.0.0",
+        tools=computer_use_tools,
+    )
+else:
+    computer_use_mcp = None
