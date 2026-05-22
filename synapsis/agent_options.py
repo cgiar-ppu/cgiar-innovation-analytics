@@ -94,6 +94,8 @@ ALLOWED_TOOLS: list[str] = [
     "mcp__synapsis__agent_update",
     # MCP Slack notification tool
     "mcp__synapsis__slack_notify",
+    # MCP PRMS database query tool
+    "mcp__synapsis__prms_query",
     # MCP fleet management tools
     "mcp__synapsis__fleet_create",
     "mcp__synapsis__fleet_spawn",

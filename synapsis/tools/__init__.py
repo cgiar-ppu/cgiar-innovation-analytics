@@ -11,6 +11,7 @@ from synapsis.tools.slack import slack_notify
 from synapsis.tools.fleet import fleet_create, fleet_spawn, fleet_resume, fleet_mediate, fleet_status, fleet_inspect, fleet_initialize
 from synapsis.tools.tts import tts_set_voice, tts_get_voices
 from synapsis.tools.history import history_search, history_retrieve, history_index, history_list
+from synapsis.tools.prms_query import prms_query
 
 # ---------------------------------------------------------------------------
 # Memory + agent management + Slack MCP server
@@ -41,6 +42,7 @@ synapsis_mcp = create_sdk_mcp_server(
         history_retrieve,
         history_index,
         history_list,
+        prms_query,
     ],
 )
 

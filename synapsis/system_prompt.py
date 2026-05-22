@@ -7,7 +7,33 @@ Separated from the agents package so the subagent definitions and orchestrator p
 can be maintained independently.
 """
 
-from synapsis.config import IS_MACOS
+import logging
+from pathlib import Path
+
+from synapsis.config import IS_MACOS, PROJECT_DIR
+
+logger = logging.getLogger("synapsis_agent")
+
+
+def _load_prms_schema_reference() -> str:
+    """Load the PRMS schema reference document for injection into the system prompt.
+
+    Returns a trimmed version suitable for prompt context, or an empty string
+    if the reference file is not found.
+    """
+    ref_path = PROJECT_DIR / "references" / "prms_schema_reference.md"
+    if not ref_path.is_file():
+        logger.warning("PRMS schema reference not found at %s", ref_path)
+        return ""
+    try:
+        content = ref_path.read_text(encoding="utf-8")
+        # Limit to a reasonable size for system prompt injection
+        if len(content) > 15000:
+            content = content[:15000] + "\n\n[Schema reference truncated -- see references/prms_schema_reference.md for full version]"
+        return content
+    except Exception as exc:
+        logger.warning("Failed to load PRMS schema reference: %s", exc)
+        return ""
 
 
 def build_system_prompt(agents_dict: dict = None) -> str:
@@ -41,6 +67,9 @@ def build_system_prompt(agents_dict: dict = None) -> str:
    - **code_automation**: Pipelines, scraping, API integration, file conversion, scripting
    - **computer_use**: GUI interaction — browsing the web ({browser}), editing documents/spreadsheets ({office}), viewing PDFs ({pdf_viewer}), logging into web apps, clicking buttons, filling forms, exporting from dashboards, taking screenshots of visual output
 """
+
+    # Load PRMS schema reference for injection into the system prompt
+    prms_schema = _load_prms_schema_reference()
 
     return f"""You are the **Synapsis Analytics Agent** — a general-purpose AI assistant for data analysis, visualization, research methodology, and automation.
 
@@ -156,6 +185,21 @@ You can search and retrieve past conversations from the Synapsis chat database u
 3. Retrieve: call `history_retrieve(session_id="...")` to load the clean conversation
 4. The retrieved text is clean (no tool_use/tool_result/thinking blocks) — typically 5-20x smaller than raw history
 
+## PRMS Database Access
+You have read-only access to the CGIAR PRMS (Performance and Results Management System) database via the **mcp__synapsis__prms_query** tool. This database contains 197 tables with 32,000+ results covering CGIAR research outputs: innovations, knowledge products, capacity development, policy changes, partners, and geographies.
+
+**How to use:** Construct a SQL SELECT query based on the schema reference below, then call the tool with the `sql` parameter. Always include `WHERE is_active = 1` on the `result` table and junction tables. The tool enforces read-only access and a 100-row default limit.
+
+**Tool parameters:**
+- `sql` (required): A SQL SELECT query
+- `question` (optional): The natural language question being answered
+
+**IMPORTANT:** The database has known typos in table/column names: `results_by_inititiative` (extra 'i'), `inititiative_id`, `has_unkown_using`. Innovation detail tables use `results_id` (with 's') not `result_id`. `clarisa_center.institutionId` is camelCase.
+
+<prms_schema_reference>
+{prms_schema}
+</prms_schema_reference>
+
 ## Tools Available
 - **Read / Write / Edit** — filesystem access
 - **Bash** — shell commands, script execution
@@ -165,6 +209,7 @@ You can search and retrieve past conversations from the Synapsis chat database u
 - **Task** — delegate to specialist subagents
 - **Skill** — invoke prompt-based skills (see below)
 - **ToolSearch** — discover and load deferred tools
+- **mcp__synapsis__prms_query** — query the PRMS database (see above)
 
 ## Slash Commands & Skills
 
