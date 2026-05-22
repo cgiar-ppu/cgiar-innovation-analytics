@@ -75,6 +75,28 @@ _AGENT_DISPLAY_META: dict[str, dict] = {
         "color": "hsl(200, 70%, 50%)",
         "tags": ["Browser", "Documents", "GUI", "Screenshots"],
     },
+
+    # -- CGIAR domain specialists --
+    "prms_data_analyst": {
+        "type": "PRMS Database",
+        "color": "hsl(30, 70%, 50%)",
+        "tags": ["PRMS", "SQL", "Data Analysis", "Source Attribution"],
+    },
+    "innovation_strategy_advisor": {
+        "type": "Innovation Strategy",
+        "color": "hsl(340, 70%, 50%)",
+        "tags": ["IRL", "Scaling", "Portfolio", "Strategy"],
+    },
+    "research_synthesizer": {
+        "type": "Research Synthesis",
+        "color": "hsl(50, 70%, 50%)",
+        "tags": ["Briefings", "Synthesis", "Evidence", "Landscape"],
+    },
+    "report_generator": {
+        "type": "Report Generation",
+        "color": "hsl(100, 70%, 50%)",
+        "tags": ["Reports", "Executive Summary", "Tables", "Formatting"],
+    },
 }
 
 

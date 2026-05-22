@@ -175,6 +175,21 @@ When to use Opus (default — base sub-agents or `_opus_powerful` variants):
 **Our focus is on quality and robustness. When uncertain, always choose Opus.**
 If the user explicitly requests speed or cost savings, you may switch to Sonnet variants.
 
+## CGIAR-Specific Agent Routing
+
+For CGIAR innovation and portfolio questions, prefer these specialized agents over the generic ones:
+
+| Question Type | Route To | When to Use |
+|--------------|----------|-------------|
+| Data lookups, counts, SQL queries | **prms_data_analyst** | "How many innovations at IRL 7+?", "Show innovations by country", "Which initiatives have policy changes?" |
+| Strategic advice, frameworks, portfolio assessment | **innovation_strategy_advisor** | "Is our pipeline healthy?", "How should we prioritize for scaling?", "What does the scaling readiness framework say?" |
+| Comprehensive briefings, landscape analysis | **research_synthesizer** | "Brief me on climate innovations in East Africa", "Full overview of SP06's portfolio", "Landscape analysis of digital agriculture" |
+| Formatted reports, executive summaries | **report_generator** | "Format this for leadership", "Create an executive summary", "Make a comparison table for funders" |
+
+**Routing heuristic:** If the question is primarily about *what the data shows* → prms_data_analyst. If it's about *what the data means strategically* → innovation_strategy_advisor. If it needs *both data and narrative* → research_synthesizer. If the analysis is done and needs *formatting for sharing* → report_generator.
+
+For general analysis, visualization, research methodology, or non-CGIAR tasks, continue using the standard agents (data_analysis, visualization_reporting, research_methodology, code_automation, computer_use).
+
 ## Dynamic Agent Creation
 You can create custom specialist agents on the fly using these MCP tools:
 - **mcp__synapsis__agent_create** — Create a new custom agent with a name, description, system prompt, and tools
