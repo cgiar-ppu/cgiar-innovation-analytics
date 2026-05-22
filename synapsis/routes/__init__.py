@@ -35,6 +35,7 @@ from synapsis.routes.git import router as git_router
 from synapsis.routes.agent_query import router as agent_query_router
 from synapsis.routes.skills import router as skills_router
 from synapsis.routes.fleet import router as fleet_router
+from synapsis.routes.prms_dashboard import router as prms_dashboard_router
 
 __all__ = [
     "health_router",
@@ -54,4 +55,5 @@ __all__ = [
     "agent_query_router",
     "skills_router",
     "fleet_router",
+    "prms_dashboard_router",
 ]

@@ -1,4 +1,4 @@
-import type { DashboardStats, ActivityDataPoint, AgentInfo, Workflow } from './types-extended';
+import type { DashboardStats, ActivityDataPoint, AgentInfo, Workflow, PRMSDashboardData } from './types-extended';
 import type { Session, Memory } from './types';
 
 export const mockDashboardStats: DashboardStats = {
@@ -136,3 +136,90 @@ export const mockFiles = [
   { name: 'report.html', size: 18200, modified: Date.now() / 1000 - 3600, is_dir: false },
   { name: 'uploads', size: 0, modified: Date.now() / 1000 - 86400, is_dir: true },
 ];
+
+export const mockPRMSDashboard: PRMSDashboardData = {
+  kpis: {
+    total_results: 27803,
+    total_innovations: 4664,
+    innovation_uses: 559,
+    active_initiatives: 55,
+    countries_covered: 186,
+    knowledge_products: 12850,
+  },
+  charts: {
+    results_by_type: {
+      chartType: 'pie',
+      title: 'Results by Type',
+      description: 'Distribution of results across reporting categories',
+      data: [
+        { type: 'Knowledge Product', count: 12850 },
+        { type: 'Innovation Development', count: 4416 },
+        { type: 'Capacity Development', count: 4033 },
+        { type: 'Other Output', count: 3670 },
+        { type: 'Innovation Use', count: 976 },
+        { type: 'Policy Change', count: 537 },
+        { type: 'Other', count: 1321 },
+      ],
+      series: [{ key: 'count', label: 'Results' }],
+      xAxisKey: 'type',
+    },
+    top_countries: {
+      chartType: 'bar',
+      title: 'Top 10 Countries by Results',
+      description: 'Countries with the highest number of reported results',
+      data: [
+        { country: 'Kenya', count: 2730 },
+        { country: 'Ethiopia', count: 2292 },
+        { country: 'India', count: 1784 },
+        { country: 'Nigeria', count: 1551 },
+        { country: 'Bangladesh', count: 1470 },
+        { country: 'Viet Nam', count: 1278 },
+        { country: 'Colombia', count: 1142 },
+        { country: 'Uganda', count: 1074 },
+        { country: 'Tanzania', count: 1039 },
+        { country: 'Ghana', count: 842 },
+      ],
+      series: [{ key: 'count', label: 'Results', color: '#0065BD' }],
+      xAxisKey: 'country',
+    },
+    irl_distribution: {
+      chartType: 'bar',
+      title: 'Innovation Readiness Levels',
+      description: 'Distribution of innovations across IRL 0-9 scale',
+      data: [
+        { level: 'Idea', count: 83 },
+        { level: 'Basic Research', count: 191 },
+        { level: 'Formulation', count: 367 },
+        { level: 'Proof of Concept', count: 443 },
+        { level: 'Controlled Testing', count: 558 },
+        { level: 'Model/Prototype', count: 453 },
+        { level: 'Semi-Controlled', count: 617 },
+        { level: 'Prototype', count: 634 },
+        { level: 'Uncontrolled Testing', count: 531 },
+        { level: 'Proven Innovation', count: 752 },
+      ],
+      series: [{ key: 'count', label: 'Innovations', color: '#7AB800' }],
+      xAxisKey: 'level',
+    },
+    top_initiatives: {
+      chartType: 'bar',
+      title: 'Top 10 Initiatives by Output',
+      description: 'CGIAR initiatives with the most reported results',
+      data: [
+        { initiative: 'Accelerated Breeding', count: 1903 },
+        { initiative: 'Climate Action', count: 1593 },
+        { initiative: 'Scaling for Impact', count: 1534 },
+        { initiative: 'Livestock & Climate', count: 1391 },
+        { initiative: 'Sustainable Animal', count: 1211 },
+        { initiative: 'Sustainable Farming', count: 1211 },
+        { initiative: 'Breeding Tomorrow', count: 1190 },
+        { initiative: 'Asian Mega-Deltas', count: 1110 },
+        { initiative: 'Excellence Agronomy', count: 1083 },
+        { initiative: 'Climate Resilience', count: 1053 },
+      ],
+      series: [{ key: 'count', label: 'Results', color: '#E37222' }],
+      xAxisKey: 'initiative',
+    },
+  },
+  last_updated: new Date().toISOString(),
+};

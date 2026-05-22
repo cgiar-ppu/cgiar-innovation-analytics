@@ -1,30 +1,35 @@
-import { Sprout, Globe2, Database, TrendingUp, MessageSquare, Bot, AlertTriangle } from 'lucide-react';
+import { Sprout, Globe2, TrendingUp, Lightbulb, Building2, BookOpen, MessageSquare, Database, Bot, AlertTriangle, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
 import { dashboardService } from '../services/dashboard';
-import { mockDashboardStats, mockActivityData } from '../lib/mockData';
+import { mockPRMSDashboard, mockActivityData } from '../lib/mockData';
 import StatsCard from '../components/dashboard/StatsCard';
 import ActivityChart from '../components/dashboard/ActivityChart';
 import GlassCard from '../components/common/GlassCard';
 import Badge from '../components/common/Badge';
-import type { DashboardStats, ActivityDataPoint } from '../lib/types-extended';
+import { InteractiveChart } from '../components/chat/InteractiveChart';
+import type { PRMSDashboardData, ActivityDataPoint } from '../lib/types-extended';
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { data: stats, isLive: statsLive } = useApi<DashboardStats>(
-    () => dashboardService.getStats(),
-    mockDashboardStats,
-    { interval: 30000 }
+
+  const { data: prmsData, isLive, refetch, loading } = useApi<PRMSDashboardData>(
+    () => dashboardService.getPRMSStats(),
+    mockPRMSDashboard,
+    { interval: 60000 }
   );
+
   const { data: activity } = useApi<ActivityDataPoint[]>(
     () => dashboardService.getActivity(),
     mockActivityData
   );
 
+  const kpis = prmsData.kpis;
+
   return (
-    <div className="max-w-screen-xl mx-auto p-6 space-y-6">
+    <div className="max-w-screen-xl mx-auto p-6 space-y-8">
       {/* Offline banner */}
-      {!statsLive && (
+      {!isLive && (
         <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-amber-500/30 bg-amber-500/10">
           <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
           <div className="flex-1 min-w-0">
@@ -37,26 +42,82 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Title */}
+      {/* Header with title + refresh button */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-[var(--text)]">Innovation Analytics</h1>
-          <p className="text-sm text-[var(--text-muted)] mt-1">CGIAR research performance and innovation insights</p>
+          <p className="text-sm text-[var(--text-muted)] mt-1">
+            CGIAR research performance — {kpis.total_results.toLocaleString()} results across {kpis.countries_covered} countries
+          </p>
         </div>
-        <Badge variant={statsLive ? 'success' : 'warning'}>{statsLive ? 'Live' : 'Offline'}</Badge>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={refetch}
+            disabled={loading}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg border border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+          <Badge variant={isLive ? 'success' : 'warning'}>{isLive ? 'Live' : 'Cached'}</Badge>
+        </div>
       </div>
 
-      {/* Stats Grid — mapped to CGIAR context */}
+      {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        <StatsCard label="Innovations" value={stats.total_sessions} icon={<Sprout className="w-5 h-5" />} color="#427730" />
-        <StatsCard label="Results" value={stats.total_messages} icon={<TrendingUp className="w-5 h-5" />} color="#0065BD" />
-        <StatsCard label="Regions" value={stats.active_memories} icon={<Globe2 className="w-5 h-5" />} color="#7AB800" />
-        <StatsCard label="Queries (7d)" value={stats.recent_activity} icon={<Database className="w-5 h-5" />} color="#E37222" />
-        <StatsCard label="Sessions" value={stats.active_connections} icon={<MessageSquare className="w-5 h-5" />} color="#0039A6" />
-        <StatsCard label="Agents" value={stats.total_agents} icon={<Bot className="w-5 h-5" />} color="#739600" />
+        <StatsCard
+          label="Total Results"
+          value={kpis.total_results}
+          icon={<TrendingUp className="w-5 h-5" />}
+          color="#0065BD"
+        />
+        <StatsCard
+          label="Innovations"
+          value={kpis.total_innovations}
+          icon={<Sprout className="w-5 h-5" />}
+          color="#427730"
+        />
+        <StatsCard
+          label="Innovation Uses"
+          value={kpis.innovation_uses}
+          icon={<Lightbulb className="w-5 h-5" />}
+          color="#E37222"
+        />
+        <StatsCard
+          label="Active Initiatives"
+          value={kpis.active_initiatives}
+          icon={<Building2 className="w-5 h-5" />}
+          color="#7AB800"
+        />
+        <StatsCard
+          label="Countries Covered"
+          value={kpis.countries_covered}
+          icon={<Globe2 className="w-5 h-5" />}
+          color="#0065BD"
+        />
+        <StatsCard
+          label="Knowledge Products"
+          value={kpis.knowledge_products}
+          icon={<BookOpen className="w-5 h-5" />}
+          color="#8B1A4A"
+        />
       </div>
 
-      {/* Activity Chart */}
+      {/* Section header for charts */}
+      <div>
+        <h2 className="text-lg font-semibold text-[var(--text)]">Research Portfolio Overview</h2>
+        <p className="text-sm text-[var(--text-muted)]">Pre-computed views from the PRMS database</p>
+      </div>
+
+      {/* Charts 2x2 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <InteractiveChart data={prmsData.charts.results_by_type} />
+        <InteractiveChart data={prmsData.charts.top_countries} />
+        <InteractiveChart data={prmsData.charts.irl_distribution} />
+        <InteractiveChart data={prmsData.charts.top_initiatives} />
+      </div>
+
+      {/* Platform Activity */}
       <ActivityChart data={activity} />
 
       {/* Quick Actions */}
@@ -97,6 +158,11 @@ export default function Dashboard() {
           </div>
         </GlassCard>
       </div>
+
+      {/* Footer: last updated timestamp */}
+      <p className="text-xs text-center text-[var(--text-muted)]">
+        PRMS data as of {new Date(prmsData.last_updated).toLocaleDateString()} | Refreshes every 60 seconds
+      </p>
     </div>
   );
 }

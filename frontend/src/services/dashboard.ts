@@ -1,5 +1,5 @@
 import { api } from '../lib/api';
-import type { DashboardStats, ActivityDataPoint } from '../lib/types-extended';
+import type { DashboardStats, ActivityDataPoint, PRMSDashboardData } from '../lib/types-extended';
 
 export const dashboardService = {
   async getStats(): Promise<DashboardStats> {
@@ -31,5 +31,9 @@ export const dashboardService = {
     );
     // The API returns { activity: [...] } — unwrap the array
     return (data as { activity?: ActivityDataPoint[] }).activity ?? (data as ActivityDataPoint[]);
+  },
+
+  async getPRMSStats(): Promise<PRMSDashboardData> {
+    return api.get<PRMSDashboardData>('/api/dashboard/prms-stats');
   },
 };
