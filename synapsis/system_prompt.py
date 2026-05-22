@@ -36,6 +36,64 @@ def _load_prms_schema_reference() -> str:
         return ""
 
 
+# ---------------------------------------------------------------------------
+# CGIAR Knowledge Base loader
+# ---------------------------------------------------------------------------
+
+# Files to load, in order of priority.  Each tuple is (filename, max_chars,
+# XML tag name used in the system prompt).  The tag names let the LLM
+# distinguish the sections clearly.
+_KNOWLEDGE_BASE_FILES: list[tuple[str, int, str]] = [
+    ("platform_context.md", 10000, "platform_context"),
+    ("cgiar_overview.md", 10000, "cgiar_overview"),
+    ("innovation_framework.md", 12000, "innovation_framework"),
+    ("cgiar_terminology.md", 14000, "cgiar_terminology"),
+    ("reference_lists.md", 24000, "reference_lists"),
+]
+
+
+def _load_knowledge_base() -> str:
+    """Load CGIAR domain knowledge files from references/ for system prompt injection.
+
+    Each file is wrapped in an XML tag for clear delineation.  Files that
+    exceed *max_chars* are truncated with an advisory note.  Missing or
+    unreadable files are silently skipped (with a warning log).
+
+    Returns the concatenated knowledge base text, or an empty string if no
+    files were loaded.
+    """
+    ref_dir = PROJECT_DIR / "references"
+    if not ref_dir.is_dir():
+        logger.warning("References directory not found at %s", ref_dir)
+        return ""
+
+    sections: list[str] = []
+    loaded = 0
+
+    for filename, max_chars, tag in _KNOWLEDGE_BASE_FILES:
+        filepath = ref_dir / filename
+        if not filepath.is_file():
+            logger.warning("Knowledge base file not found: %s", filepath)
+            continue
+        try:
+            content = filepath.read_text(encoding="utf-8")
+            if len(content) > max_chars:
+                content = (
+                    content[:max_chars]
+                    + f"\n\n[Truncated -- see references/{filename} for full version]"
+                )
+            sections.append(f"<{tag}>\n{content}\n</{tag}>")
+            loaded += 1
+        except Exception as exc:
+            logger.warning("Failed to load knowledge base file %s: %s", filename, exc)
+
+    if not sections:
+        return ""
+
+    logger.info("Loaded %d CGIAR knowledge base files into system prompt", loaded)
+    return "\n\n".join(sections)
+
+
 def build_system_prompt(agents_dict: dict = None) -> str:
     """Build the main agent's system prompt with platform-specific paths and apps.
 
@@ -70,6 +128,9 @@ def build_system_prompt(agents_dict: dict = None) -> str:
 
     # Load PRMS schema reference for injection into the system prompt
     prms_schema = _load_prms_schema_reference()
+
+    # Load CGIAR domain knowledge base for injection into the system prompt
+    knowledge_base = _load_knowledge_base()
 
     return f"""You are the **Synapsis Analytics Agent** — a general-purpose AI assistant for data analysis, visualization, research methodology, and automation.
 
@@ -199,6 +260,13 @@ You have read-only access to the CGIAR PRMS (Performance and Results Management 
 <prms_schema_reference>
 {prms_schema}
 </prms_schema_reference>
+
+## CGIAR Domain Knowledge Base
+The following sections contain essential CGIAR domain knowledge -- organizational context, innovation frameworks, terminology, and reference lists. Use this to ground your responses in accurate CGIAR language and concepts.
+
+<cgiar_knowledge_base>
+{knowledge_base}
+</cgiar_knowledge_base>
 
 ## Tools Available
 - **Read / Write / Edit** — filesystem access
