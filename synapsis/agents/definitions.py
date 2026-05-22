@@ -45,6 +45,13 @@ _PRMS_CHART_TOOLS: list[str] = _STANDARD_TOOLS + [
 ]
 """Standard tools plus PRMS query and chart generation for visualization-capable agents."""
 
+_PRMS_CHART_SCENARIO_TOOLS: list[str] = _STANDARD_TOOLS + [
+    "mcp__synapsis__prms_query",
+    "mcp__synapsis__create_chart",
+    "mcp__synapsis__scenario_analysis",
+]
+"""Standard tools plus PRMS query, chart generation, and scenario analysis for strategic agents."""
+
 
 # ---------------------------------------------------------------------------
 # Computer use prompt builder (defined before SUBAGENTS dict)
@@ -452,7 +459,7 @@ Example format:
 - Complete schema: `references/prms_schema_reference.md`
 - CGIAR terminology: `references/cgiar_terminology.md`
 - Reference lists (initiatives, centres, regions): `references/reference_lists.md`""",
-        tools=_PRMS_CHART_TOOLS,
+        tools=_PRMS_CHART_SCENARIO_TOOLS,
         model="opus",
     ),
 
@@ -554,7 +561,7 @@ Label every claim:
 - Reference lists: `references/reference_lists.md`
 - Platform context: `references/platform_context.md`
 - PRMS schema (for queries): `references/prms_schema_reference.md`""",
-        tools=_PRMS_CHART_TOOLS,
+        tools=_PRMS_CHART_SCENARIO_TOOLS,
         model="opus",
     ),
 
@@ -646,7 +653,7 @@ This distinction is critical for maintaining trust with CGIAR stakeholders who n
 - Terminology glossary: `references/cgiar_terminology.md`
 - Reference lists (initiatives, centres, regions): `references/reference_lists.md`
 - Platform context and use cases: `references/platform_context.md`""",
-        tools=_PRMS_CHART_TOOLS,
+        tools=_PRMS_CHART_SCENARIO_TOOLS,
         model="opus",
     ),
 
