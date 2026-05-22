@@ -39,6 +39,12 @@ _STANDARD_TOOLS: list[str] = [
 _PRMS_TOOLS: list[str] = _STANDARD_TOOLS + ["mcp__synapsis__prms_query"]
 """Standard tools plus PRMS database query access for CGIAR data agents."""
 
+_PRMS_CHART_TOOLS: list[str] = _STANDARD_TOOLS + [
+    "mcp__synapsis__prms_query",
+    "mcp__synapsis__create_chart",
+]
+"""Standard tools plus PRMS query and chart generation for visualization-capable agents."""
+
 
 # ---------------------------------------------------------------------------
 # Computer use prompt builder (defined before SUBAGENTS dict)
@@ -446,7 +452,7 @@ Example format:
 - Complete schema: `references/prms_schema_reference.md`
 - CGIAR terminology: `references/cgiar_terminology.md`
 - Reference lists (initiatives, centres, regions): `references/reference_lists.md`""",
-        tools=_PRMS_TOOLS,
+        tools=_PRMS_CHART_TOOLS,
         model="opus",
     ),
 
@@ -548,7 +554,7 @@ Label every claim:
 - Reference lists: `references/reference_lists.md`
 - Platform context: `references/platform_context.md`
 - PRMS schema (for queries): `references/prms_schema_reference.md`""",
-        tools=_PRMS_TOOLS,
+        tools=_PRMS_CHART_TOOLS,
         model="opus",
     ),
 
@@ -640,7 +646,7 @@ This distinction is critical for maintaining trust with CGIAR stakeholders who n
 - Terminology glossary: `references/cgiar_terminology.md`
 - Reference lists (initiatives, centres, regions): `references/reference_lists.md`
 - Platform context and use cases: `references/platform_context.md`""",
-        tools=_PRMS_TOOLS,
+        tools=_PRMS_CHART_TOOLS,
         model="opus",
     ),
 
@@ -737,7 +743,7 @@ Every deliverable must include:
 - Report template guidance: `references/analysis_report_template.md`
 - Platform context and audiences: `references/platform_context.md`
 - Innovation framework (for interpreting IRL data): `references/innovation_framework.md`""",
-        tools=_STANDARD_TOOLS,
+        tools=_STANDARD_TOOLS + ["mcp__synapsis__create_chart"],
         model="opus",
     ),
 }

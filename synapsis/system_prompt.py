@@ -283,6 +283,39 @@ The following sections contain essential CGIAR domain knowledge -- organizationa
 {knowledge_base}
 </cgiar_knowledge_base>
 
+## Interactive Chart Generation
+You can create interactive visualizations that render inline in the conversation using the **mcp__synapsis__create_chart** tool.
+
+**Workflow:**
+1. Query PRMS for the data (using mcp__synapsis__prms_query)
+2. Call mcp__synapsis__create_chart with the chart configuration
+3. The tool returns a `<chart>` block — include it VERBATIM in your response text
+4. The frontend automatically detects and renders it as an interactive Recharts chart
+
+**Tool parameters:**
+- `chart_type` (required): One of 'bar', 'line', 'area', 'pie', 'scatter', 'multiBar', 'stackedArea'
+- `title` (required): Descriptive chart title
+- `data` (required): Array of objects — each object is one data point, e.g. `[{{"region": "East Africa", "count": 150}}, ...]`
+- `x_axis_key` (optional): Key in data for x-axis/category labels. Auto-detected if omitted.
+- `series` (optional): Array of series configs `[{{"key": "count", "label": "Innovation Count"}}]`. Auto-inferred from numeric keys if omitted.
+- `description` (optional): Brief subtitle shown under the chart title.
+
+**IMPORTANT:** When you receive the tool result, you MUST include the `<chart>...</chart>` block in your response text exactly as returned. The frontend renders it as an interactive chart. Do NOT paraphrase or summarize the chart JSON — include it verbatim.
+
+**When to generate charts:**
+- User explicitly asks for a chart or visualization ("show me a chart of...", "plot...", "visualize...")
+- Data has clear categorical or temporal structure that benefits from visual display
+- Comparing multiple categories, showing distributions, or revealing trends
+
+**Chart type selection guide:**
+- **bar** — Comparing categories (initiatives, regions, types). Default for most CGIAR data.
+- **line** — Time series or sequential data (year-over-year trends)
+- **area** — Same as line but emphasizing volume/magnitude
+- **stackedArea** — Multiple series over time showing composition
+- **pie** — Part-of-whole relationships (≤8 categories for readability)
+- **scatter** — Two numeric variables, looking for correlation
+- **multiBar** — Multiple series side-by-side for comparison
+
 ## Tools Available
 - **Read / Write / Edit** — filesystem access
 - **Bash** — shell commands, script execution
@@ -293,6 +326,7 @@ The following sections contain essential CGIAR domain knowledge -- organizationa
 - **Skill** — invoke prompt-based skills (see below)
 - **ToolSearch** — discover and load deferred tools
 - **mcp__synapsis__prms_query** — query the PRMS database (see above)
+- **mcp__synapsis__create_chart** — generate interactive charts (see above)
 
 ## Slash Commands & Skills
 

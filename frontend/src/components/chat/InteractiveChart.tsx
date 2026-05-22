@@ -12,10 +12,18 @@ import { BarChart3, LineChart as LineChartIcon, PieChart as PieChartIcon, Chevro
 import { motion, AnimatePresence } from 'framer-motion'
 import type { ChartData } from './chartDetector'
 
-/** Colorblind-friendly palette from the data-visualization skill. */
+/** CGIAR brand palette -- optimized for chart readability and accessibility. */
 const CHART_COLORS = [
-  '#4C72B0', '#DD8452', '#55A868', '#C44E52',
-  '#8172B3', '#937860', '#DA8BC3', '#8C8C8C',
+  '#427730',   // CGIAR Forest Green (primary)
+  '#0065BD',   // CGIAR Blue
+  '#E37222',   // CGIAR Orange
+  '#7AB800',   // CGIAR Lime Green
+  '#8B1A4A',   // CGIAR Burgundy
+  '#00A5DB',   // CGIAR Sky Blue
+  '#F4B223',   // CGIAR Gold
+  '#5C3D8F',   // CGIAR Purple
+  '#009E73',   // CGIAR Teal
+  '#D32F2F',   // CGIAR Red
 ]
 
 const TOOLTIP_STYLE = {
