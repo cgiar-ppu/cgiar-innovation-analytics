@@ -1,0 +1,35 @@
+name: "One-off: Add custom domain DNS"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  dns:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_MGMT }}
+          aws-region: eu-central-1
+          audience: sts.amazonaws.com
+
+      - name: Create custom domain CNAME
+        run: |
+          aws route53 change-resource-record-sets \
+            --hosted-zone-id Z079841559W4HJ5A3Q2Y \
+            --change-batch '{
+              "Changes": [{
+                "Action": "UPSERT",
+                "ResourceRecordSet": {
+                  "Name": "innovation-analytics.synapsis-analytics.com",
+                  "Type": "CNAME",
+                  "TTL": 300,
+                  "ResourceRecords": [{"Value": "d2ht2hxkhweo7x.cloudfront.net"}]
+                }
+              }]
+            }'
+          echo "CNAME created: innovation-analytics.synapsis-analytics.com → d2ht2hxkhweo7x.cloudfront.net"
