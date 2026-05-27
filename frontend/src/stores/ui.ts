@@ -111,15 +111,17 @@ interface UIState {
 }
 
 /**
- * Reads the persisted theme from localStorage, falling back to the OS
- * `prefers-color-scheme` media query if no preference has been saved.
+ * Reads the persisted theme from localStorage, falling back to light mode
+ * when no preference has been saved. Light is the platform default so
+ * first-time visitors see the polished light design; users can toggle to
+ * dark mode and the choice is remembered.
  *
  * @returns The theme to use on initial render.
  */
 function getInitialTheme(): Theme {
   const stored = localStorage.getItem('synapsis-theme')
   if (stored === 'light' || stored === 'dark') return stored
-  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+  return 'light'
 }
 
 /**
