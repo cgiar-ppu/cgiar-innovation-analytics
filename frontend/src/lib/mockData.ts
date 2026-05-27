@@ -139,28 +139,24 @@ export const mockFiles = [
 
 export const mockPRMSDashboard: PRMSDashboardData = {
   kpis: {
-    total_results: 27803,
-    total_innovations: 4664,
-    innovation_uses: 559,
-    active_initiatives: 55,
-    countries_covered: 186,
-    knowledge_products: 12850,
+    total_results: 2755,
+    total_innovations: 1966,
+    innovation_uses: 488,
+    active_initiatives: 54,
+    countries_covered: 124,
+    innovation_packages: 95,
   },
   charts: {
     results_by_type: {
       chartType: 'pie',
-      title: 'Results by Type',
-      description: 'Distribution of results across reporting categories',
+      title: 'Innovations by Type',
+      description: 'Distribution of innovation results across types',
       data: [
-        { type: 'Knowledge Product', count: 12850 },
-        { type: 'Innovation Development', count: 4416 },
-        { type: 'Capacity Development', count: 4033 },
-        { type: 'Other Output', count: 3670 },
-        { type: 'Innovation Use', count: 976 },
-        { type: 'Policy Change', count: 537 },
-        { type: 'Other', count: 1321 },
+        { type: 'Innovation development', count: 1966 },
+        { type: 'Innovation use', count: 488 },
+        { type: 'Innovation Package', count: 95 },
       ],
-      series: [{ key: 'count', label: 'Results' }],
+      series: [{ key: 'count', label: 'Innovations' }],
       xAxisKey: 'type',
     },
     top_countries: {

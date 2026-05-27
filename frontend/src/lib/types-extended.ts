@@ -171,7 +171,7 @@ export interface PRMSKPIs {
   innovation_uses: number;
   active_initiatives: number;
   countries_covered: number;
-  knowledge_products: number;
+  innovation_packages: number;
 }
 
 export interface PRMSDashboardData {

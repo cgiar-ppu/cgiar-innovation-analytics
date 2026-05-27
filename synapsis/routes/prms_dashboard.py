@@ -1,9 +1,15 @@
 """
-PRMS Dashboard API — live analytics from the PRMS SQLite database.
+PRMS Dashboard API — live innovation analytics from the PRMS SQLite database.
 
 - GET /api/dashboard/prms-stats  — Returns KPIs and chart data for the
   CGIAR Innovation Analytics dashboard, sourced from the read-only PRMS
-  database (~27,800 active results across 197 tables).
+  database.
+
+All result counts use COUNT(DISTINCT result_code) to avoid duplicates.
+Queries filter to innovation-related result types only:
+  - Innovation use (result_type_id = 2)
+  - Innovation development (result_type_id = 7)
+  - Innovation Package (result_type_id = 10)
 
 Data is cached in-memory for 5 minutes since the PRMS snapshot is static.
 """
@@ -41,64 +47,81 @@ _PRMS_DB_PATH = os.getenv(
 # SQL Queries
 # ---------------------------------------------------------------------------
 
-_SQL_TOTAL_RESULTS = "SELECT COUNT(*) FROM result WHERE is_active = 1;"
+_SQL_TOTAL_RESULTS = """
+SELECT COUNT(DISTINCT result_code) FROM result
+WHERE is_active = 1 AND result_type_id IN (2, 7, 10);
+"""
 
-_SQL_TOTAL_INNOVATIONS = "SELECT COUNT(*) FROM results_innovations_dev WHERE is_active = 1;"
+_SQL_TOTAL_INNOVATIONS = """
+SELECT COUNT(DISTINCT r.result_code)
+FROM results_innovations_dev rid
+JOIN result r ON r.id = rid.results_id
+WHERE rid.is_active = 1 AND r.is_active = 1;
+"""
 
-_SQL_INNOVATION_USES = "SELECT COUNT(*) FROM results_innovations_use WHERE is_active = 1;"
+_SQL_INNOVATION_USES = """
+SELECT COUNT(DISTINCT r.result_code)
+FROM results_innovations_use riu
+JOIN result r ON r.id = riu.results_id
+WHERE riu.is_active = 1 AND r.is_active = 1;
+"""
 
 _SQL_ACTIVE_INITIATIVES = """
 SELECT COUNT(DISTINCT i.id)
 FROM clarisa_initiatives i
 JOIN results_by_inititiative rbi ON rbi.inititiative_id = i.id
 JOIN result r ON r.id = rbi.result_id
-WHERE r.is_active = 1;
+WHERE r.is_active = 1 AND r.result_type_id IN (2, 7, 10);
 """
 
 _SQL_COUNTRIES_COVERED = """
 SELECT COUNT(DISTINCT rc.country_id)
 FROM result_country rc
 JOIN result r ON r.id = rc.result_id
-WHERE r.is_active = 1 AND rc.is_active = 1;
+WHERE r.is_active = 1 AND rc.is_active = 1 AND r.result_type_id IN (2, 7, 10);
 """
 
-_SQL_KNOWLEDGE_PRODUCTS = "SELECT COUNT(*) FROM result WHERE is_active = 1 AND result_type_id = 6;"
+_SQL_INNOVATION_PACKAGES = """
+SELECT COUNT(DISTINCT result_code) FROM result
+WHERE is_active = 1 AND result_type_id = 10;
+"""
 
 _SQL_RESULTS_BY_TYPE = """
-SELECT rt.name AS type, COUNT(*) AS count
+SELECT rt.name AS type, COUNT(DISTINCT r.result_code) AS count
 FROM result r
 JOIN result_type rt ON r.result_type_id = rt.id
-WHERE r.is_active = 1
+WHERE r.is_active = 1 AND r.result_type_id IN (2, 7, 10)
 GROUP BY rt.name
 ORDER BY count DESC;
 """
 
 _SQL_TOP_COUNTRIES = """
-SELECT c.name AS country, COUNT(*) AS count
+SELECT c.name AS country, COUNT(DISTINCT r.result_code) AS count
 FROM result_country rc
 JOIN clarisa_countries c ON rc.country_id = c.id
 JOIN result r ON r.id = rc.result_id
-WHERE r.is_active = 1 AND rc.is_active = 1
+WHERE r.is_active = 1 AND rc.is_active = 1 AND r.result_type_id IN (2, 7, 10)
 GROUP BY c.name
 ORDER BY count DESC
 LIMIT 10;
 """
 
 _SQL_IRL_DISTRIBUTION = """
-SELECT cirl.name AS level, COUNT(*) AS count
+SELECT cirl.name AS level, COUNT(DISTINCT r.result_code) AS count
 FROM results_innovations_dev rid
+JOIN result r ON r.id = rid.results_id
 JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
-WHERE rid.is_active = 1
+WHERE rid.is_active = 1 AND r.is_active = 1
 GROUP BY cirl.name, cirl.id
 ORDER BY cirl.id;
 """
 
 _SQL_TOP_INITIATIVES = """
-SELECT i.short_name AS initiative, COUNT(*) AS count
+SELECT i.short_name AS initiative, COUNT(DISTINCT r.result_code) AS count
 FROM results_by_inititiative rbi
 JOIN clarisa_initiatives i ON rbi.inititiative_id = i.id
 JOIN result r ON r.id = rbi.result_id
-WHERE r.is_active = 1 AND rbi.initiative_role_id = 1
+WHERE r.is_active = 1 AND rbi.initiative_role_id = 1 AND r.result_type_id IN (2, 7, 10)
 GROUP BY i.short_name
 ORDER BY count DESC
 LIMIT 10;
@@ -149,7 +172,7 @@ def _fetch_prms_data() -> dict[str, Any]:
             "innovation_uses": _SQL_INNOVATION_USES,
             "active_initiatives": _SQL_ACTIVE_INITIATIVES,
             "countries_covered": _SQL_COUNTRIES_COVERED,
-            "knowledge_products": _SQL_KNOWLEDGE_PRODUCTS,
+            "innovation_packages": _SQL_INNOVATION_PACKAGES,
         }
         for key, sql in kpi_queries.items():
             try:
@@ -161,17 +184,17 @@ def _fetch_prms_data() -> dict[str, Any]:
         # -- Charts --
         charts: dict[str, Any] = {}
 
-        # Results by type (pie chart)
+        # Innovations by type (pie chart)
         try:
             results_by_type_data = _rows(cur, _SQL_RESULTS_BY_TYPE)
             total_results_count = sum(r["count"] for r in results_by_type_data)
             charts["results_by_type"] = {
                 "chartType": "pie",
-                "title": "Results by Type",
-                "description": f"Distribution of {total_results_count:,} results across reporting categories",
+                "title": "Innovations by Type",
+                "description": f"Distribution of {total_results_count:,} innovation results across types",
                 "xAxisKey": "type",
                 "data": results_by_type_data,
-                "series": [{"key": "count", "label": "Results", "color": "#427730"}],
+                "series": [{"key": "count", "label": "Innovations", "color": "#427730"}],
             }
         except sqlite3.Error as exc:
             logger.error("Chart query 'results_by_type' failed: %s", exc)
@@ -181,11 +204,11 @@ def _fetch_prms_data() -> dict[str, Any]:
             top_countries_data = _rows(cur, _SQL_TOP_COUNTRIES)
             charts["top_countries"] = {
                 "chartType": "bar",
-                "title": "Top 10 Countries by Results",
-                "description": "Countries with the highest number of reported results",
+                "title": "Top 10 Countries by Innovations",
+                "description": "Countries with the most reported innovation results",
                 "xAxisKey": "country",
                 "data": top_countries_data,
-                "series": [{"key": "count", "label": "Results", "color": "#0065BD"}],
+                "series": [{"key": "count", "label": "Innovations", "color": "#0065BD"}],
             }
         except sqlite3.Error as exc:
             logger.error("Chart query 'top_countries' failed: %s", exc)
@@ -209,11 +232,11 @@ def _fetch_prms_data() -> dict[str, Any]:
             top_initiatives_data = _rows(cur, _SQL_TOP_INITIATIVES)
             charts["top_initiatives"] = {
                 "chartType": "bar",
-                "title": "Top 10 Initiatives by Output",
-                "description": "CGIAR initiatives with the most reported results",
+                "title": "Top 10 Initiatives by Innovations",
+                "description": "CGIAR initiatives contributing the most innovations",
                 "xAxisKey": "initiative",
                 "data": top_initiatives_data,
-                "series": [{"key": "count", "label": "Results", "color": "#E37222"}],
+                "series": [{"key": "count", "label": "Innovations", "color": "#E37222"}],
             }
         except sqlite3.Error as exc:
             logger.error("Chart query 'top_initiatives' failed: %s", exc)

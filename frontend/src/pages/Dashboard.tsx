@@ -46,7 +46,7 @@ export default function Dashboard() {
         <div>
           <h1 className="text-2xl font-bold text-[var(--text)] font-serif">Innovation Analytics</h1>
           <p className="text-sm text-[var(--text-muted)] mt-1">
-            CGIAR research performance — {kpis.total_results.toLocaleString()} results across {kpis.countries_covered} countries
+            CGIAR innovation portfolio — {kpis.total_results.toLocaleString()} innovations across {kpis.countries_covered} countries
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -95,8 +95,8 @@ export default function Dashboard() {
           color="#0065BD"
         />
         <StatsCard
-          label="Knowledge Products"
-          value={kpis.knowledge_products}
+          label="Innovation Packages"
+          value={kpis.innovation_packages}
           icon={<BookOpen className="w-5 h-5" />}
           color="#8B1A4A"
         />
@@ -104,8 +104,8 @@ export default function Dashboard() {
 
       {/* Section header for charts */}
       <div>
-        <h2 className="text-lg font-semibold text-[var(--text)] font-serif">Research Portfolio Overview</h2>
-        <p className="text-sm text-[var(--text-muted)]">Pre-computed views from the PRMS database</p>
+        <h2 className="text-lg font-semibold text-[var(--text)] font-serif">Innovation Portfolio Overview</h2>
+        <p className="text-sm text-[var(--text-muted)]">Innovation analytics from the PRMS database</p>
       </div>
 
       {/* Charts 2x2 */}
