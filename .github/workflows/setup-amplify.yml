@@ -1,0 +1,274 @@
+name: "Setup Amplify Frontend + Backend DNS"
+
+# One-off workflow to:
+# 1. Create Route53 CNAME for the backend (api-innovation.synapsis-analytics.com → ALB)
+# 2. Build the React frontend with backend URL baked in
+# 3. Create an Amplify app (manual deploy — no GitHub webhook)
+# 4. Deploy the frontend ZIP to Amplify
+# 5. Report the live Amplify URL
+#
+# After this runs, the app can optionally be linked to GitHub via the
+# Amplify Console for auto-deploy on push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_dns:
+        description: 'Skip Route53 CNAME creation (if already exists)'
+        type: boolean
+        default: false
+      custom_domain_prefix:
+        description: 'Custom domain prefix (e.g. innovation-analytics → innovation-analytics.synapsis-analytics.com). Leave blank to skip.'
+        type: string
+        default: 'innovation-analytics'
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-central-1
+  BACKEND_URL: https://api-innovation.synapsis-analytics.com
+  ALB_DNS: cgiar-ia-dev-1903003658.eu-central-1.elb.amazonaws.com
+  HOSTED_ZONE_ID: Z079841559W4HJ5A3Q2Y
+  APP_NAME: cgiar-innovation-analytics
+
+jobs:
+  setup:
+    name: Setup Amplify + DNS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- AWS Authentication (OIDC → MGMT/sandbox account) ---
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_MGMT }}
+          aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+
+      - name: Verify sandbox account
+        run: |
+          ACTUAL=$(aws sts get-caller-identity --query Account --output text)
+          echo "Account: $ACTUAL"
+          if [[ "$ACTUAL" != "919959486181" ]]; then
+            echo "::error::Expected sandbox account 919959486181, got $ACTUAL"
+            exit 1
+          fi
+
+      # --- Step 1: Route53 CNAME for backend API ---
+      - name: Create backend DNS record
+        if: ${{ !inputs.skip_dns }}
+        run: |
+          echo "Creating CNAME: api-innovation.synapsis-analytics.com → ${{ env.ALB_DNS }}"
+          aws route53 change-resource-record-sets \
+            --hosted-zone-id ${{ env.HOSTED_ZONE_ID }} \
+            --change-batch '{
+              "Changes": [{
+                "Action": "UPSERT",
+                "ResourceRecordSet": {
+                  "Name": "api-innovation.synapsis-analytics.com",
+                  "Type": "CNAME",
+                  "TTL": 300,
+                  "ResourceRecords": [{"Value": "${{ env.ALB_DNS }}"}]
+                }
+              }]
+            }'
+          echo "DNS record created. May take up to 60s to propagate."
+
+      # --- Step 2: Build frontend ---
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        env:
+          VITE_BACKEND_URL: ${{ env.BACKEND_URL }}
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+          echo "Frontend built. Output in static/"
+          ls -la ../static/
+
+      - name: Create deployment ZIP
+        run: |
+          cd static
+          zip -r ../frontend-deploy.zip .
+          echo "ZIP size: $(du -h ../frontend-deploy.zip | cut -f1)"
+
+      # --- Step 3: Create Amplify app (idempotent) ---
+      - name: Check for existing Amplify app
+        id: check-app
+        run: |
+          EXISTING=$(aws amplify list-apps \
+            --query "apps[?name=='${{ env.APP_NAME }}'].appId" \
+            --output text)
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "None" ]; then
+            echo "app_id=$EXISTING" >> "$GITHUB_OUTPUT"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Amplify app already exists: $EXISTING"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No existing app found. Will create."
+          fi
+
+      - name: Create Amplify app
+        id: create-app
+        if: steps.check-app.outputs.exists != 'true'
+        run: |
+          APP_ID=$(aws amplify create-app \
+            --name "${{ env.APP_NAME }}" \
+            --platform WEB \
+            --environment-variables "VITE_BACKEND_URL=${{ env.BACKEND_URL }}" \
+            --custom-rules '[
+              {"source":"/api/<*>","target":"https://api-innovation.synapsis-analytics.com/api/<*>","status":"200"},
+              {"source":"/<*>","target":"/index.html","status":"404-200"}
+            ]' \
+            --build-spec "$(cat amplify.yml)" \
+            --query 'app.appId' --output text)
+          echo "app_id=$APP_ID" >> "$GITHUB_OUTPUT"
+          echo "Created Amplify app: $APP_ID"
+
+      - name: Resolve app ID
+        id: app
+        run: |
+          APP_ID="${{ steps.check-app.outputs.app_id || steps.create-app.outputs.app_id }}"
+          echo "app_id=$APP_ID" >> "$GITHUB_OUTPUT"
+          echo "Using Amplify app: $APP_ID"
+
+      # --- Step 4: Create branch + deploy ---
+      - name: Create or update branch
+        run: |
+          APP_ID="${{ steps.app.outputs.app_id }}"
+          BRANCH="main"
+
+          # Check if branch exists
+          EXISTS=$(aws amplify get-branch \
+            --app-id "$APP_ID" \
+            --branch-name "$BRANCH" \
+            --query 'branch.branchName' --output text 2>/dev/null || echo "")
+
+          if [ -z "$EXISTS" ]; then
+            aws amplify create-branch \
+              --app-id "$APP_ID" \
+              --branch-name "$BRANCH" \
+              --environment-variables "VITE_BACKEND_URL=${{ env.BACKEND_URL }}"
+            echo "Branch '$BRANCH' created"
+          else
+            aws amplify update-branch \
+              --app-id "$APP_ID" \
+              --branch-name "$BRANCH" \
+              --environment-variables "VITE_BACKEND_URL=${{ env.BACKEND_URL }}"
+            echo "Branch '$BRANCH' updated"
+          fi
+
+      - name: Deploy frontend to Amplify
+        run: |
+          APP_ID="${{ steps.app.outputs.app_id }}"
+          BRANCH="main"
+
+          # Create deployment (get presigned upload URL)
+          DEPLOY_RESULT=$(aws amplify create-deployment \
+            --app-id "$APP_ID" \
+            --branch-name "$BRANCH")
+
+          JOB_ID=$(echo "$DEPLOY_RESULT" | jq -r '.jobId')
+          UPLOAD_URL=$(echo "$DEPLOY_RESULT" | jq -r '.zipUploadUrl')
+
+          echo "Job ID: $JOB_ID"
+          echo "Uploading frontend ZIP..."
+          curl -T frontend-deploy.zip "$UPLOAD_URL" --fail --silent --show-error
+
+          echo "Starting deployment..."
+          aws amplify start-deployment \
+            --app-id "$APP_ID" \
+            --branch-name "$BRANCH" \
+            --job-id "$JOB_ID"
+
+          echo "Deployment started! Waiting for completion..."
+
+          # Poll for completion (max 5 minutes)
+          for i in $(seq 1 30); do
+            STATUS=$(aws amplify get-job \
+              --app-id "$APP_ID" \
+              --branch-name "$BRANCH" \
+              --job-id "$JOB_ID" \
+              --query 'job.summary.status' --output text 2>/dev/null || echo "PENDING")
+            echo "  Poll $i/30: $STATUS"
+            if [ "$STATUS" = "SUCCEED" ]; then
+              echo "Deployment succeeded!"
+              break
+            fi
+            if [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "CANCELLED" ]; then
+              echo "::error::Deployment $STATUS"
+              exit 1
+            fi
+            sleep 10
+          done
+
+      # --- Step 5: Custom domain (optional) ---
+      - name: Add custom domain
+        if: ${{ inputs.custom_domain_prefix != '' }}
+        run: |
+          APP_ID="${{ steps.app.outputs.app_id }}"
+          PREFIX="${{ inputs.custom_domain_prefix }}"
+
+          echo "Adding custom domain: ${PREFIX}.synapsis-analytics.com"
+
+          # Check if domain association already exists
+          EXISTING=$(aws amplify list-domain-associations \
+            --app-id "$APP_ID" \
+            --query "domainAssociations[?domainName=='synapsis-analytics.com'].domainStatus" \
+            --output text 2>/dev/null || echo "")
+
+          if [ -z "$EXISTING" ]; then
+            aws amplify create-domain-association \
+              --app-id "$APP_ID" \
+              --domain-name synapsis-analytics.com \
+              --sub-domain-settings "prefix=${PREFIX},branchName=main"
+            echo "Domain association created. DNS verification may take a few minutes."
+          else
+            echo "Domain association already exists (status: $EXISTING). Updating..."
+            aws amplify update-domain-association \
+              --app-id "$APP_ID" \
+              --domain-name synapsis-analytics.com \
+              --sub-domain-settings "prefix=${PREFIX},branchName=main"
+          fi
+
+          echo ""
+          echo "Custom domain will be: https://${PREFIX}.synapsis-analytics.com"
+          echo "Note: The Amplify-managed certificate verification may require"
+          echo "a CNAME record in Route53. Check the Amplify Console for details."
+
+      # --- Summary ---
+      - name: Print deployment summary
+        run: |
+          APP_ID="${{ steps.app.outputs.app_id }}"
+          PREFIX="${{ inputs.custom_domain_prefix }}"
+
+          echo "============================================"
+          echo "  CGIAR Innovation Analytics — Amplify Setup"
+          echo "============================================"
+          echo ""
+          echo "Amplify App ID:  $APP_ID"
+          echo "Amplify URL:     https://main.${APP_ID}.amplifyapp.com"
+          echo "Backend API:     ${{ env.BACKEND_URL }}"
+          echo "Backend DNS:     api-innovation.synapsis-analytics.com → ${{ env.ALB_DNS }}"
+          if [ -n "$PREFIX" ]; then
+            echo "Custom Domain:   https://${PREFIX}.synapsis-analytics.com (pending verification)"
+          fi
+          echo ""
+          echo "Architecture:"
+          echo "  Browser → Amplify CDN (React frontend)"
+          echo "    ├── /api/* → proxy rewrite → ${{ env.BACKEND_URL }}"
+          echo "    └── WebSocket → direct wss://${{ env.BACKEND_URL }}/ws/chat"
+          echo ""
+          echo "To connect GitHub auto-deploy:"
+          echo "  1. Go to AWS Amplify Console → $APP_ID → General settings"
+          echo "  2. Connect repository: cgiar-ppu/cgiar-innovation-analytics"
+          echo "  3. Select branch: feature/innovation-platform-foundation"

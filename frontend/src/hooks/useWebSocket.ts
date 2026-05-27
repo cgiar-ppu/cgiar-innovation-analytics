@@ -82,8 +82,18 @@ export function useWebSocket(): UseWebSocketReturn {
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
 
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const url = `${proto}//${window.location.host}/ws/chat`
+    // When deployed on Amplify (static CDN), the WebSocket must connect
+    // directly to the backend host rather than window.location.host.
+    const backendUrl = import.meta.env.VITE_BACKEND_URL as string | undefined
+    let url: string
+    if (backendUrl) {
+      const parsed = new URL(backendUrl)
+      const wsProto = parsed.protocol === 'https:' ? 'wss:' : 'ws:'
+      url = `${wsProto}//${parsed.host}/ws/chat`
+    } else {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      url = `${proto}//${window.location.host}/ws/chat`
+    }
 
     setConnectionStatus('connecting')
     const ws = new WebSocket(url)
