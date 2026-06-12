@@ -288,14 +288,10 @@ Always filter BOTH `is_active = 1` AND the NULL-safe is_discontinued check. Usin
 - `result.id` — unique per annual submission row. The SAME innovation gets a NEW `id` every reporting year (2022, 2023, 2024). Do NOT count by `id` when answering "how many innovations".
 - `result.result_code` — persistent identifier. The same innovation keeps the same `result_code` across all years.
 - **Rule:** When asked "how many innovations", count `COUNT(DISTINCT result_code)`, never `COUNT(*)` or `COUNT(DISTINCT id)`.
-- Example: 5,615 active innovation rows exist, but only 2,755 distinct result_codes (unique innovations). Counting by id would overstate by 135%.
+- Example: 5,615 active innovation rows exist across multiple years; counting by id would overstate the number of unique innovations by ~135%.
 
-**Canonical active innovation counts (calibrated against PRMS Results Dashboard, March 2026):**
-- Type 2 (Innovation Use): **668** unique innovations
-- Type 7 (Innovation Development): **1,992** unique innovations
-- Type 10 (Innovation Package): **95** unique innovations
-- **Total: 2,755 unique active innovations**
-These counts use: is_active=1, is_discontinued=0/NULL, latest reported_year_id per result_code.
+**CRITICAL: Cross-type total counts — always use a single query across all three types:**
+When asked for the TOTAL count of active innovations across all types, run a single cross-type query using `result_type_id IN (2, 7, 10)` with `COUNT(DISTINCT result_code)` — never sum three separate per-type queries. Some innovations have records under multiple result types; summing per-type counts will exceed the cross-type deduplicated total. Snapshot-specific calibration counts are in the schema reference document.
 
 **status_id values:**
 1=Editing, 2=Quality Assessed, 3=Submitted, 4=Discontinued, 5=Pending Review, 6=Approved, 7=Rejected
