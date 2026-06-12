@@ -19,6 +19,21 @@ PRMS (Performance and Results Management System) tracks CGIAR research outputs a
 
 **Soft-delete pattern:** Most tables have `is_active` (tinyint, 0/1). Always filter `WHERE is_active = 1` unless analyzing deleted records.
 
+**CRITICAL — discontinuation filter (innovations only):** The `result` table also has `is_discontinued` (tinyint, three-value: NULL=legacy/not discontinued, 0=explicitly not discontinued, 1=discontinued). For innovation queries (result_type_id IN (2, 7, 10)), ALWAYS add `AND (is_discontinued IS NULL OR is_discontinued = 0)` in addition to `is_active = 1`. Using only `is_active = 1` will surface 532 discontinued innovations (status_id=4) that should be excluded. 58.5% of legacy rows have NULL (not 0) for is_discontinued, so the NULL-safe form is required.
+
+**CRITICAL — result.id vs result.result_code (the multi-year identity problem):**
+- `result.id` — unique per annual submission row. The SAME innovation gets a NEW `id` every reporting year (2022, 2023, 2024). Do NOT count by `id` when answering "how many innovations".
+- `result.result_code` — persistent identifier. The same innovation keeps the same `result_code` across all years.
+- Rule: When asked "how many innovations", count `COUNT(DISTINCT result_code)`, never `COUNT(*)` or `COUNT(DISTINCT id)`.
+- Example: 5,615 active innovation rows exist, but only 2,755 distinct result_codes (unique innovations). Counting by id would overstate by 135%.
+
+**Canonical active innovation counts (calibrated against PRMS Results Dashboard, March 2026):**
+- Type 2 (Innovation Use): 668 unique innovations
+- Type 7 (Innovation Development): 1,992 unique innovations
+- Type 10 (Innovation Package): 95 unique innovations
+- Total: 2,755 unique active innovations
+These counts use: is_active=1, is_discontinued=0/NULL, COUNT(DISTINCT result_code).
+
 **Reporting years:** Results have `reported_year_id` (values: 2022, 2023, 2024, 2025 -- note 610 rows have NULL year).
 
 ---
@@ -136,15 +151,18 @@ CGIAR Initiatives (programmes/projects).
 | `initiative_role_id` | bigint | 1=lead, other=contributing |
 | `is_active` | tinyint | Active flag |
 
-**Common join:**
+**Common join (innovations per initiative — uses result_code to avoid multi-year overcounting):**
 ```sql
-SELECT ci.short_name, COUNT(DISTINCT rbi.result_id) as result_count
+SELECT ci.short_name, COUNT(DISTINCT r.result_code) as innovation_count
 FROM results_by_inititiative rbi
 JOIN clarisa_initiatives ci ON rbi.inititiative_id = ci.id
 JOIN result r ON rbi.result_id = r.id
-WHERE rbi.is_active = 1 AND r.is_active = 1
+WHERE rbi.is_active = 1
+  AND r.is_active = 1
+  AND (r.is_discontinued IS NULL OR r.is_discontinued = 0)
+  AND r.result_type_id IN (2, 7, 10)
 GROUP BY ci.short_name
-ORDER BY result_count DESC;
+ORDER BY innovation_count DESC;
 ```
 
 ---
@@ -170,13 +188,15 @@ ORDER BY result_count DESC;
 | `is_active` | tinyint | Active flag |
 | `geo_scope_role_id` | INT | 1=primary, 2=additional |
 
-**Common join (top countries):**
+**Common join (top countries for innovations):**
 ```sql
 SELECT cc.name, COUNT(DISTINCT rc.result_id) as result_count
 FROM result_country rc
 JOIN clarisa_countries cc ON rc.country_id = cc.id
 JOIN result r ON rc.result_id = r.id
-WHERE rc.is_active = 1 AND r.is_active = 1
+WHERE rc.is_active = 1
+  AND r.is_active = 1
+  AND (r.is_discontinued IS NULL OR r.is_discontinued = 0)
 GROUP BY cc.name
 ORDER BY result_count DESC LIMIT 10;
 ```
@@ -283,14 +303,16 @@ Links results to CGIAR centers specifically.
 | `is_active` | tinyint | Active flag |
 | `is_leading_result` | tinyint | Whether center leads this result |
 
-**Common join (results by center):**
+**Common join (innovations by center):**
 ```sql
 SELECT cc.code, ci.acronym, COUNT(DISTINCT rc2.result_id) as result_count
 FROM results_center rc2
 JOIN clarisa_center cc ON rc2.center_id = cc.code
 JOIN clarisa_institutions ci ON cc.institutionId = ci.id
 JOIN result r ON rc2.result_id = r.id
-WHERE rc2.is_active = 1 AND r.is_active = 1
+WHERE rc2.is_active = 1
+  AND r.is_active = 1
+  AND (r.is_discontinued IS NULL OR r.is_discontinued = 0)
 GROUP BY cc.code, ci.acronym
 ORDER BY result_count DESC;
 ```
@@ -332,13 +354,15 @@ Details for result_type_id=7 (Innovation development).
 | 19 | Uncontrolled Testing | 8 |
 | 20 | Proven Innovation | 9 |
 
-**Common join (innovations by readiness level):**
+**Common join (innovations by readiness level — counts distinct innovations, not submission rows):**
 ```sql
-SELECT cirl.level, cirl.name, COUNT(*) as cnt
+SELECT cirl.level, cirl.name, COUNT(DISTINCT r.result_code) as cnt
 FROM results_innovations_dev rid
 JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
 JOIN result r ON rid.results_id = r.id
-WHERE rid.is_active = 1 AND r.is_active = 1
+WHERE rid.is_active = 1
+  AND r.is_active = 1
+  AND (r.is_discontinued IS NULL OR r.is_discontinued = 0)
 GROUP BY cirl.level, cirl.name
 ORDER BY cirl.level;
 ```
@@ -602,7 +626,9 @@ SELECT cc.name as country, cc.iso_alpha_2, COUNT(DISTINCT rc.result_id) as resul
 FROM result_country rc
 JOIN clarisa_countries cc ON rc.country_id = cc.id
 JOIN result r ON rc.result_id = r.id
-WHERE rc.is_active = 1 AND r.is_active = 1
+WHERE rc.is_active = 1
+  AND r.is_active = 1
+  AND (r.is_discontinued IS NULL OR r.is_discontinued = 0)
 GROUP BY cc.name ORDER BY result_count DESC LIMIT 20;
 ```
 
@@ -612,27 +638,34 @@ SELECT ci.short_name as initiative, COUNT(DISTINCT rbi.result_id) as result_coun
 FROM results_by_inititiative rbi
 JOIN clarisa_initiatives ci ON rbi.inititiative_id = ci.id
 JOIN result r ON rbi.result_id = r.id
-WHERE rbi.is_active = 1 AND r.is_active = 1
+WHERE rbi.is_active = 1
+  AND r.is_active = 1
+  AND (r.is_discontinued IS NULL OR r.is_discontinued = 0)
 GROUP BY ci.short_name ORDER BY result_count DESC;
 ```
 
 ### Innovations by readiness level
 ```sql
-SELECT cirl.level, cirl.name as readiness_level, COUNT(*) as count
+SELECT cirl.level, cirl.name as readiness_level, COUNT(DISTINCT r.result_code) as count
 FROM results_innovations_dev rid
 JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
 JOIN result r ON rid.results_id = r.id
-WHERE rid.is_active = 1 AND r.is_active = 1
+WHERE rid.is_active = 1
+  AND r.is_active = 1
+  AND (r.is_discontinued IS NULL OR r.is_discontinued = 0)
 GROUP BY cirl.level, cirl.name ORDER BY cirl.level;
 ```
 
 ### Innovations at readiness level >= 7 (advanced)
 ```sql
-SELECT COUNT(*) as count
+SELECT COUNT(DISTINCT r.result_code) as count
 FROM results_innovations_dev rid
 JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
 JOIN result r ON rid.results_id = r.id
-WHERE rid.is_active = 1 AND r.is_active = 1 AND cirl.level >= 7;
+WHERE rid.is_active = 1
+  AND r.is_active = 1
+  AND (r.is_discontinued IS NULL OR r.is_discontinued = 0)
+  AND cirl.level >= 7;
 ```
 
 ### Results in a specific region (e.g. Eastern Africa)
@@ -642,8 +675,10 @@ FROM result r
 JOIN result_region rr ON r.id = rr.result_id
 JOIN clarisa_regions cr ON rr.region_id = cr.um49Code
 JOIN result_type rt ON r.result_type_id = rt.id
-WHERE rr.is_active = 1 AND r.is_active = 1
-AND cr.name = 'Eastern Africa'
+WHERE rr.is_active = 1
+  AND r.is_active = 1
+  AND (r.is_discontinued IS NULL OR r.is_discontinued = 0)
+  AND cr.name = 'Eastern Africa'
 LIMIT 20;
 ```
 

@@ -247,7 +247,7 @@ def _format_results_text(
     "32K+ results covering innovations, knowledge products, capacity development, "
     "policy changes, partners, and geographies). "
     "Use the PRMS schema reference in your system prompt to construct valid SQL. "
-    "Always filter with is_active=1 on result and junction tables. "
+    "For innovations (result_type_id IN (2,7,10)): always filter is_active=1 AND (is_discontinued IS NULL OR is_discontinued=0). Count by result_code not id. "
     "Returns structured results with row data, total count, and tables used.",
     {
         "sql": str,

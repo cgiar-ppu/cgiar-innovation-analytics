@@ -274,7 +274,49 @@ You can search and retrieve past conversations from the Synapsis chat database u
 ## PRMS Database Access
 You have read-only access to the CGIAR PRMS (Performance and Results Management System) database via the **mcp__synapsis__prms_query** tool. This database contains 197 tables with 32,000+ results covering CGIAR research outputs: innovations, knowledge products, capacity development, policy changes, partners, and geographies.
 
-**How to use:** Construct a SQL SELECT query based on the schema reference below, then call the tool with the `sql` parameter. Always include `WHERE is_active = 1` on the `result` table and junction tables. The tool enforces read-only access and a 100-row default limit.
+**How to use:** Construct a SQL SELECT query based on the schema reference below, then call the tool with the `sql` parameter. The tool enforces read-only access and a 100-row default limit.
+
+**CRITICAL: Default filter for ALL innovation queries (result_type_id IN (2, 7, 10)):**
+```sql
+WHERE r.is_active = 1
+  AND (r.is_discontinued IS NULL OR r.is_discontinued = 0)
+  AND r.result_type_id IN (2, 7, 10)
+```
+Always filter BOTH `is_active = 1` AND the NULL-safe is_discontinued check. Using only `is_active = 1` will surface 532 discontinued innovations (status_id=4) that should be excluded.
+
+**CRITICAL: result.id vs result.result_code — the multi-year identity problem:**
+- `result.id` — unique per annual submission row. The SAME innovation gets a NEW `id` every reporting year (2022, 2023, 2024). Do NOT count by `id` when answering "how many innovations".
+- `result.result_code` — persistent identifier. The same innovation keeps the same `result_code` across all years.
+- **Rule:** When asked "how many innovations", count `COUNT(DISTINCT result_code)`, never `COUNT(*)` or `COUNT(DISTINCT id)`.
+- Example: 5,615 active innovation rows exist, but only 2,755 distinct result_codes (unique innovations). Counting by id would overstate by 135%.
+
+**Canonical active innovation counts (calibrated against PRMS Results Dashboard, March 2026):**
+- Type 2 (Innovation Use): **668** unique innovations
+- Type 7 (Innovation Development): **1,992** unique innovations
+- Type 10 (Innovation Package): **95** unique innovations
+- **Total: 2,755 unique active innovations**
+These counts use: is_active=1, is_discontinued=0/NULL, latest reported_year_id per result_code.
+
+**status_id values:**
+1=Editing, 2=Quality Assessed, 3=Submitted, 4=Discontinued, 5=Pending Review, 6=Approved, 7=Rejected
+
+**Latest-year deduplication pattern** (use when showing "current state" of each innovation):
+```sql
+SELECT r.id, r.result_code, r.title, r.reported_year_id, r.result_type_id
+FROM result r
+INNER JOIN (
+  SELECT result_code, MAX(reported_year_id) as max_year
+  FROM result
+  WHERE result_type_id IN (2, 7, 10)
+    AND is_active = 1
+    AND (is_discontinued IS NULL OR is_discontinued = 0)
+  GROUP BY result_code
+) latest ON r.result_code = latest.result_code
+        AND r.reported_year_id = latest.max_year
+WHERE r.result_type_id IN (2, 7, 10)
+  AND r.is_active = 1
+  AND (r.is_discontinued IS NULL OR r.is_discontinued = 0)
+```
 
 **Tool parameters:**
 - `sql` (required): A SQL SELECT query

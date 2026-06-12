@@ -389,8 +389,10 @@ Every CGIAR output/outcome is a row in `result`. Key columns:
 ## Query Construction Patterns
 
 ### Always do:
-- Filter `WHERE r.is_active = 1` on the result table
+- Filter `WHERE r.is_active = 1` AND `(r.is_discontinued IS NULL OR r.is_discontinued = 0)` on the result table — using only is_active=1 will surface 532 discontinued innovations (status_id=4) that should be hidden
 - Filter `WHERE <alias>.is_active = 1` on ALL junction tables
+- When counting innovations, use `COUNT(DISTINCT r.result_code)` — never `COUNT(*)` or `COUNT(DISTINCT r.id)`. The same innovation gets a new `r.id` each reporting year, so counting by id overcounts by ~135%. The result_code is the persistent innovation identifier across years.
+- For "how many active innovations" questions: the canonical totals (calibrated against PRMS Results Dashboard) are 668 (Type 2) + 1,992 (Type 7) + 95 (Type 10) = **2,755 total**. Your query should confirm this, not differ from it.
 - Use descriptive table aliases (r=result, rbi=results_by_inititiative, rc=result_country, etc.)
 - Include ORDER BY for meaningful sorting
 - Be explicit about LIMIT
@@ -403,7 +405,9 @@ SELECT cit.name AS innovation_type, COUNT(*) AS count
 FROM result r
 JOIN results_innovations_dev rid ON r.id = rid.results_id AND rid.is_active = 1
 JOIN clarisa_innovation_type cit ON rid.innovation_type_id = cit.code
-WHERE r.is_active = 1 AND r.result_type_id = 7
+WHERE r.is_active = 1
+  AND (r.is_discontinued IS NULL OR r.is_discontinued = 0)
+  AND r.result_type_id = 7
 GROUP BY cit.name ORDER BY count DESC;
 ```
 
@@ -413,7 +417,9 @@ SELECT ci.short_name, COUNT(*) AS innovation_count
 FROM result r
 JOIN results_by_inititiative rbi ON r.id = rbi.result_id AND rbi.is_active = 1
 JOIN clarisa_initiatives ci ON rbi.inititiative_id = ci.id
-WHERE r.is_active = 1 AND r.result_type_id = 7
+WHERE r.is_active = 1
+  AND (r.is_discontinued IS NULL OR r.is_discontinued = 0)
+  AND r.result_type_id = 7
 GROUP BY ci.short_name ORDER BY innovation_count DESC;
 ```
 
@@ -423,7 +429,9 @@ SELECT cirl.level, cirl.name AS readiness_level, COUNT(*) AS count
 FROM result r
 JOIN results_innovations_dev rid ON r.id = rid.results_id AND rid.is_active = 1
 JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
-WHERE r.is_active = 1 AND r.result_type_id = 7
+WHERE r.is_active = 1
+  AND (r.is_discontinued IS NULL OR r.is_discontinued = 0)
+  AND r.result_type_id = 7
 GROUP BY cirl.level, cirl.name ORDER BY cirl.level;
 ```
 
@@ -433,7 +441,9 @@ SELECT cc.name AS country, COUNT(*) AS result_count
 FROM result r
 JOIN result_country rc ON r.id = rc.result_id AND rc.is_active = 1
 JOIN clarisa_countries cc ON rc.country_id = cc.id
-WHERE r.is_active = 1 AND r.result_type_id = 7
+WHERE r.is_active = 1
+  AND (r.is_discontinued IS NULL OR r.is_discontinued = 0)
+  AND r.result_type_id = 7
 GROUP BY cc.name ORDER BY result_count DESC;
 ```
 
@@ -641,7 +651,7 @@ The headline finding and why it matters for CGIAR's mission.
 ### PRMS Query Guidance
 When you need data from the PRMS database:
 - Use the `mcp__synapsis__prms_query` tool with SQL SELECT queries
-- Always filter `WHERE is_active = 1` on result and junction tables
+- Always filter `WHERE is_active = 1 AND (is_discontinued IS NULL OR is_discontinued = 0)` on the result table; `WHERE is_active = 1` on junction tables. Count innovations by `COUNT(DISTINCT result_code)`, not by id.
 - Known schema typos: `results_by_inititiative` (extra 'i'), `inititiative_id`, `results_id` (with 's') in innovation tables, `institutionId` (camelCase) in clarisa_center
 - Result type IDs: 7=Innovation Development, 2=Innovation Use, 1=Policy Change, 5=Capacity Sharing, 6=Knowledge Product, 10=Innovation Package
 - The database snapshot is from March 2026
