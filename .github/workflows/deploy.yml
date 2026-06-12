@@ -110,23 +110,20 @@ jobs:
         run: |
           mkdir -p data
 
-          # Try S3 first (fast, cached from previous runs)
-          if aws s3 cp "s3://$S3_BUCKET/prdb.sqlite" data/prdb.sqlite 2>/dev/null; then
-            echo "Downloaded PRMS database from S3 cache"
-          else
-            echo "S3 cache miss — downloading from GitHub release..."
-            gh release download prms-db-v1 \
-              --repo "${{ github.repository }}" \
-              --pattern "prdb.sqlite" \
-              --dir data
+          # DB refreshed 2026-06-13: always pull from GitHub release to get canonical March 2026 snapshot
+          # S3 cache invalidated — remove stale May-2026 object and replace with canonical version
+          echo "Pulling canonical PRMS database from GitHub release (cache refresh)..."
+          gh release download prms-db-v1 \
+            --repo "${{ github.repository }}" \
+            --pattern "prdb.sqlite" \
+            --dir data
 
-            # Create S3 bucket and cache for future runs
-            echo "Caching PRMS database to S3..."
-            aws s3 mb "s3://$S3_BUCKET" --region ${{ env.AWS_REGION }} 2>/dev/null || true
-            aws s3 cp data/prdb.sqlite "s3://$S3_BUCKET/prdb.sqlite" || {
-              echo "::warning::Failed to cache PRMS database to S3 (non-fatal)"
-            }
-          fi
+          # Refresh S3 cache with canonical DB
+          echo "Refreshing S3 cache with canonical DB..."
+          aws s3 mb "s3://$S3_BUCKET" --region ${{ env.AWS_REGION }} 2>/dev/null || true
+          aws s3 cp data/prdb.sqlite "s3://$S3_BUCKET/prdb.sqlite" || {
+            echo "::warning::Failed to refresh S3 cache (non-fatal)"
+          }
 
           # Verify file exists and has reasonable size
           FILE_SIZE=$(stat -c%s data/prdb.sqlite 2>/dev/null || stat -f%z data/prdb.sqlite 2>/dev/null || echo "0")
