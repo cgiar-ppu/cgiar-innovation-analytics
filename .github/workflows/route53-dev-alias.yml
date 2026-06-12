@@ -1,0 +1,46 @@
+name: Create Route53 Dev Alias (One-Off)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  create-route53-record:
+    runs-on: ubuntu-latest
+    environment: MGMT
+    steps:
+      - name: Configure AWS credentials (ai-sandbox MGMT role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::919959486181:role/cicd/github-actions-cgiar-innovation-analytics-MGMT-deploy
+          aws-region: eu-central-1
+
+      - name: Create A alias record for dev URL
+        run: |
+          aws route53 change-resource-record-sets \
+            --hosted-zone-id Z079841559W4HJ5A3Q2Y \
+            --change-batch '{
+              "Changes": [{
+                "Action": "UPSERT",
+                "ResourceRecordSet": {
+                  "Name": "innovation-analytics-dev.synapsis-analytics.com",
+                  "Type": "A",
+                  "AliasTarget": {
+                    "HostedZoneId": "Z215JYRZR1TBD5",
+                    "DNSName": "cgiar-ia-dev-1903003658.eu-central-1.elb.amazonaws.com",
+                    "EvaluateTargetHealth": true
+                  }
+                }
+              }]
+            }'
+          echo "Route53 UPSERT submitted successfully"
+
+      - name: Verify record exists
+        run: |
+          aws route53 list-resource-record-sets \
+            --hosted-zone-id Z079841559W4HJ5A3Q2Y \
+            --query "ResourceRecordSets[?Name=='innovation-analytics-dev.synapsis-analytics.com.']" \
+            --output json
