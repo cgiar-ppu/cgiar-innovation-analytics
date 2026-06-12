@@ -392,7 +392,7 @@ Every CGIAR output/outcome is a row in `result`. Key columns:
 - Filter `WHERE r.is_active = 1` AND `(r.is_discontinued IS NULL OR r.is_discontinued = 0)` on the result table — using only is_active=1 will surface 532 discontinued innovations (status_id=4) that should be hidden
 - Filter `WHERE <alias>.is_active = 1` on ALL junction tables
 - When counting innovations, use `COUNT(DISTINCT r.result_code)` — never `COUNT(*)` or `COUNT(DISTINCT r.id)`. The same innovation gets a new `r.id` each reporting year, so counting by id overcounts by ~135%. The result_code is the persistent innovation identifier across years.
-- For TOTAL active innovation counts across all types: run a single cross-type query with `result_type_id IN (2, 7, 10)` and `COUNT(DISTINCT r.result_code)` — never sum three separate per-type queries. Some innovations exist under multiple result types; summing per-type `COUNT(DISTINCT result_code)` values will overcount. Snapshot-specific calibration counts are in `references/prms_schema_reference.md`.
+- For TOTAL active innovation counts: run a dedicated no-GROUP-BY aggregate — `SELECT COUNT(DISTINCT r.result_code) FROM result r WHERE r.is_active = 1 AND (r.is_discontinued IS NULL OR r.is_discontinued = 0) AND r.result_type_id IN (2, 7, 10)` — for the headline number. If you also need a per-type breakdown, run that as a SEPARATE GROUP BY query. Never report the total as the sum of per-type GROUP BY counts — some innovations exist under multiple result types and are counted once per type in a GROUP BY but only once in the cross-type aggregate.
 - Use descriptive table aliases (r=result, rbi=results_by_inititiative, rc=result_country, etc.)
 - Include ORDER BY for meaningful sorting
 - Be explicit about LIMIT

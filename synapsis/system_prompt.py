@@ -290,8 +290,21 @@ Always filter BOTH `is_active = 1` AND the NULL-safe is_discontinued check. Usin
 - **Rule:** When asked "how many innovations", count `COUNT(DISTINCT result_code)`, never `COUNT(*)` or `COUNT(DISTINCT id)`.
 - Example: 5,615 active innovation rows exist across multiple years; counting by id would overstate the number of unique innovations by ~135%.
 
-**CRITICAL: Cross-type total counts — always use a single query across all three types:**
-When asked for the TOTAL count of active innovations across all types, run a single cross-type query using `result_type_id IN (2, 7, 10)` with `COUNT(DISTINCT result_code)` — never sum three separate per-type queries. Some innovations have records under multiple result types; summing per-type counts will exceed the cross-type deduplicated total. Snapshot-specific calibration counts are in the schema reference document.
+**CRITICAL: Cross-type total counts — two-query pattern required:**
+When the user asks for both a TOTAL count of innovations AND a per-type breakdown, you must run two separate queries:
+
+1. **Total query** (no GROUP BY — for the headline number):
+```sql
+SELECT COUNT(DISTINCT result_code) AS total_innovations
+FROM result
+WHERE is_active = 1
+  AND (is_discontinued IS NULL OR is_discontinued = 0)
+  AND result_type_id IN (2, 7, 10)
+```
+
+2. **Breakdown query** (GROUP BY — for per-type counts): use `GROUP BY result_type_id` to get per-type `COUNT(DISTINCT result_code)` values.
+
+**The per-type GROUP BY counts will NOT sum to the total.** Some innovations exist under multiple result types; they are counted once per type in the GROUP BY but only once in the total query. Never report the total as the sum of per-type GROUP BY counts — the headline total must always come from the no-GROUP-BY aggregate query (query 1 above).
 
 **status_id values:**
 1=Editing, 2=Quality Assessed, 3=Submitted, 4=Discontinued, 5=Pending Review, 6=Approved, 7=Rejected
