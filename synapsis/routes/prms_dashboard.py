@@ -52,18 +52,22 @@ SELECT COUNT(DISTINCT result_code) FROM result
 WHERE is_active = 1 AND result_type_id IN (2, 7, 10);
 """
 
+# Canonical innovation-development count: count by result_type_id on the
+# result table (cross-type, distinct result_code), matching the
+# results_by_type chart and the agent's verified counts. The previous
+# results_innovations_dev join undercounted (1966 vs 2006) because not every
+# innovation-development result has an active detail row in that table.
 _SQL_TOTAL_INNOVATIONS = """
-SELECT COUNT(DISTINCT r.result_code)
-FROM results_innovations_dev rid
-JOIN result r ON r.id = rid.results_id
-WHERE rid.is_active = 1 AND r.is_active = 1;
+SELECT COUNT(DISTINCT result_code) FROM result
+WHERE is_active = 1 AND result_type_id = 7;
 """
 
+# Canonical innovation-use count: count by result_type_id (type 2) on the
+# result table. The previous results_innovations_use join undercounted
+# (488 vs 669) for the same reason as above.
 _SQL_INNOVATION_USES = """
-SELECT COUNT(DISTINCT r.result_code)
-FROM results_innovations_use riu
-JOIN result r ON r.id = riu.results_id
-WHERE riu.is_active = 1 AND r.is_active = 1;
+SELECT COUNT(DISTINCT result_code) FROM result
+WHERE is_active = 1 AND result_type_id = 2;
 """
 
 _SQL_ACTIVE_INITIATIVES = """
@@ -187,11 +191,14 @@ def _fetch_prms_data() -> dict[str, Any]:
         # Innovations by type (pie chart)
         try:
             results_by_type_data = _rows(cur, _SQL_RESULTS_BY_TYPE)
-            total_results_count = sum(r["count"] for r in results_by_type_data)
+            # Note: summing per-type counts double-counts results that carry
+            # more than one innovation type, so it does not equal the distinct
+            # total_results (2755). Keep the description generic rather than
+            # baking in a potentially misleading snapshot number.
             charts["results_by_type"] = {
                 "chartType": "pie",
                 "title": "Innovations by Type",
-                "description": f"Distribution of {total_results_count:,} innovation results across types",
+                "description": "Distribution of innovation results across types",
                 "xAxisKey": "type",
                 "data": results_by_type_data,
                 "series": [{"key": "count", "label": "Innovations", "color": "#427730"}],

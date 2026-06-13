@@ -140,8 +140,8 @@ export const mockFiles = [
 export const mockPRMSDashboard: PRMSDashboardData = {
   kpis: {
     total_results: 2755,
-    total_innovations: 1966,
-    innovation_uses: 488,
+    total_innovations: 2006,
+    innovation_uses: 669,
     active_initiatives: 54,
     countries_covered: 124,
     innovation_packages: 95,
@@ -152,8 +152,8 @@ export const mockPRMSDashboard: PRMSDashboardData = {
       title: 'Innovations by Type',
       description: 'Distribution of innovation results across types',
       data: [
-        { type: 'Innovation development', count: 1966 },
-        { type: 'Innovation use', count: 488 },
+        { type: 'Innovation development', count: 2006 },
+        { type: 'Innovation use', count: 669 },
         { type: 'Innovation Package', count: 95 },
       ],
       series: [{ key: 'count', label: 'Innovations' }],
