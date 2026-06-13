@@ -8,6 +8,7 @@ can be maintained independently.
 """
 
 import logging
+from functools import lru_cache
 from pathlib import Path
 
 from synapsis.config import IS_MACOS, PROJECT_DIR
@@ -15,6 +16,7 @@ from synapsis.config import IS_MACOS, PROJECT_DIR
 logger = logging.getLogger("synapsis_agent")
 
 
+@lru_cache(maxsize=1)
 def _load_prms_schema_reference() -> str:
     """Load the PRMS schema reference document for injection into the system prompt.
 
@@ -52,6 +54,7 @@ _KNOWLEDGE_BASE_FILES: list[tuple[str, int, str]] = [
 ]
 
 
+@lru_cache(maxsize=1)
 def _load_knowledge_base() -> str:
     """Load CGIAR domain knowledge files from references/ for system prompt injection.
 
