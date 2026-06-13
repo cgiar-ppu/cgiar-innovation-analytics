@@ -28,7 +28,7 @@ from synapsis.utils.responses import error_response, success_response
 
 PRMS_DB_PATH: str = os.getenv(
     "PRMS_DB_PATH",
-    "/Users/smithai/workspace/coding/PRMSDB/prdb.sqlite",
+    "/Users/smithai/workspace/coding/PRMSDB/fresh_13June2026/prdb_fresh.sqlite",
 )
 
 # Safety limits
@@ -344,7 +344,7 @@ async def prms_query(args: dict[str, Any]) -> dict[str, Any]:
         "---",
         f"SQL executed: {limited_sql}",
         f"Execution time: {elapsed:.2f}s",
-        f"Source: PRMS Database (snapshot 2026-03-18)",
+        f"Source: PRMS Database (snapshot 2026-06-13)",
     ]
     if question:
         meta_lines.insert(1, f"Question: {question}")
