@@ -100,6 +100,18 @@ async def on_startup():
     await init_fleet_db()
     logger.info("Databases initialized (chat, workflow, fleet)")
 
+    # Ensure analytical indexes exist on the PRMS `result` table. The PRMS DB is
+    # periodically replaced with a fresh artifact that ships without indexes, so
+    # we (re)create them at every startup via CREATE INDEX IF NOT EXISTS. Mirrors
+    # the PRMS_DB_PATH resolution used by prms_query.py / prms_dashboard.py.
+    from synapsis.db_init import ensure_result_indexes
+    _prms_db_path = _os.getenv(
+        "PRMS_DB_PATH",
+        "/Users/smithai/workspace/coding/PRMSDB/prdb.sqlite",
+    )
+    ensure_result_indexes(_prms_db_path)
+    logger.info("PRMS result-table indexes ensured (%s)", _prms_db_path)
+
     # Start the background idle session reaper
     from synapsis.session import session_manager as _sm
     _sm.start_reaper()
