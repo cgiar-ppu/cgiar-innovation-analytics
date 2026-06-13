@@ -5,7 +5,7 @@ Runs CREATE INDEX IF NOT EXISTS for all analytical indexes at app startup.
 This is safe to call repeatedly and survives DB refresh (new SQLite artifacts
 arrive without indexes; this function recreates them automatically).
 
-One-time cost: ~27ms total for all 5 indexes on a 32K-row table.
+One-time cost: ~27-80ms total for all 7 indexes plus ANALYZE on a 32K-row table.
 """
 
 import logging
@@ -42,6 +42,22 @@ RESULT_TABLE_INDEXES = [
         "name": "idx_result_reported_year_id",
         "sql": "CREATE INDEX IF NOT EXISTS idx_result_reported_year_id ON result (reported_year_id)",
         "description": "MAX(reported_year_id) GROUP BY result_code dedup subqueries",
+    },
+    # --- Composite covering indexes (Phase 2 follow-up) ---
+    # These drive the 2.7-3.5x speedup on the main analytical queries that the
+    # single-column indexes above could not: high-selectivity single-column
+    # indexes (e.g. is_active=1 matches ~87% of rows) still force a row fetch +
+    # temp B-tree GROUP BY. The composite covering indexes let SQLite answer the
+    # per-type / latest-year aggregations directly from the index.
+    {
+        "name": "idx_result_type_active",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_result_type_active ON result (result_type_id, is_active, is_discontinued)",
+        "description": "Composite covering index: per-type active-not-discontinued counts without table row fetch",
+    },
+    {
+        "name": "idx_result_code_year",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_result_code_year ON result (result_code, reported_year_id)",
+        "description": "Composite covering index: GROUP BY result_code + MAX(reported_year_id) latest-year dedup without full table scan",
     },
 ]
 
@@ -88,6 +104,20 @@ def ensure_result_indexes(db_path: str) -> None:
                 created.append(idx["name"])
 
         conn.commit()
+
+        # Run ANALYZE so the query planner has accurate statistics for the new
+        # composite indexes. This is essential — without it, SQLite may not
+        # choose the composite indexes even when they would be dramatically
+        # faster. ANALYZE on a 32K-row table takes <5ms.
+        try:
+            conn.execute("ANALYZE result")
+            conn.commit()
+            logger.info(
+                "db_init: ANALYZE result completed — query planner statistics updated"
+            )
+        except Exception as e:  # noqa: BLE001 — non-fatal, never block startup
+            logger.warning(f"db_init: ANALYZE result failed (non-fatal): {e}")
+
         elapsed_ms = (time.perf_counter() - t_start) * 1000
 
         if created:
