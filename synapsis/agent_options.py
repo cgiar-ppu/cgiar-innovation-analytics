@@ -6,6 +6,7 @@ so both the WebSocket handler and the stateless query endpoint can share
 the same agent configuration.
 """
 
+from pathlib import Path
 from typing import Optional
 
 from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
@@ -18,6 +19,52 @@ from synapsis.constants import MAX_BUFFER_SIZE
 from synapsis.tools import synapsis_mcp, computer_use_mcp
 from synapsis.hooks import safety_validator, audit_logger, audit_logger_post
 from synapsis.agents import build_system_prompt, load_all_agents
+
+
+# ---------------------------------------------------------------------------
+# System-prompt file path
+# ---------------------------------------------------------------------------
+# On Linux the system prompt (~131 KB) exceeds ARG_MAX when passed as a CLI
+# argument to the `claude` binary (OSError [Errno 7] Argument list too long).
+# We write it to a temp file once per session startup and pass the path via
+# --system-prompt-file instead, which the bundled claude binary supports.
+# The file is in /tmp (ephemeral, container-local) and is always rewritten on
+# each call to build_agent_options, so it is always up-to-date.
+# ---------------------------------------------------------------------------
+_SYSTEM_PROMPT_FILE = Path("/tmp/cgiar-ia-system-prompt.txt")
+
+
+def _write_system_prompt_file(prompt_text: str) -> dict:
+    """Write system prompt to a temp file and return a SystemPromptFile dict.
+
+    Using --system-prompt-file instead of --system-prompt avoids the Linux
+    ARG_MAX limit (128 KB) that breaks subprocess launch when the system
+    prompt exceeds it.
+
+    Args:
+        prompt_text: The full system prompt string.
+
+    Returns:
+        A dict compatible with ClaudeAgentOptions.system_prompt of the form
+        {"type": "file", "path": "<absolute path>"}.
+    """
+    try:
+        _SYSTEM_PROMPT_FILE.write_text(prompt_text, encoding="utf-8")
+        logger.debug(
+            "System prompt written to file (%d chars): %s",
+            len(prompt_text),
+            _SYSTEM_PROMPT_FILE,
+        )
+    except OSError as exc:
+        # If we can't write the file (rare), fall back to inline string and
+        # let the OS decide whether the arg fits.
+        logger.warning(
+            "Could not write system prompt file %s: %s — falling back to inline",
+            _SYSTEM_PROMPT_FILE,
+            exc,
+        )
+        return prompt_text  # type: ignore[return-value]
+    return {"type": "file", "path": str(_SYSTEM_PROMPT_FILE)}
 
 
 # ---------------------------------------------------------------------------
@@ -167,10 +214,11 @@ async def build_agent_options(
     if computer_use_mcp is not None:
         mcp_servers["computer-use"] = computer_use_mcp
 
+    sp = _write_system_prompt_file(build_system_prompt(all_agents))
     opts = ClaudeAgentOptions(
         allowed_tools=ALLOWED_TOOLS,
         permission_mode="bypassPermissions",
-        system_prompt=build_system_prompt(all_agents),
+        system_prompt=sp,
         cwd=str(WORKSPACE),
         model=model_override if model_override else MODEL,
         fallback_model=FALLBACK_MODEL,
@@ -251,10 +299,11 @@ async def build_generic_agent_options(
     if computer_use_mcp is not None:
         mcp_servers["computer-use"] = computer_use_mcp
 
+    sp = _write_system_prompt_file(_build_generic_system_prompt(all_agents))
     opts = ClaudeAgentOptions(
         allowed_tools=ALLOWED_TOOLS,
         permission_mode="bypassPermissions",
-        system_prompt=_build_generic_system_prompt(all_agents),
+        system_prompt=sp,
         cwd=str(WORKSPACE),
         model=model_override if model_override else MODEL,
         fallback_model=FALLBACK_MODEL,

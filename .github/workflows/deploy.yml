@@ -101,44 +101,70 @@ jobs:
             --image-scanning-configuration scanOnPush=true
 
       # -----------------------------------------------------------------
-      # Download PRMS database (S3 cache → GitHub release fallback)
+      # Download PRMS database (S3 primary → Mac mini secondary → hard fail)
+      # -----------------------------------------------------------------
+      # Canonical source: June 2026 snapshot (prdb_fresh.sqlite, 422,367,232 bytes).
+      # Dedup CTE yields 2024=445 innovations (naive GROUP BY inflates to 1,016).
+      # S3 was seeded on 2026-06-14 from this same snapshot.
+      #
+      # Fallback chain (both must be June 2026; NO March/488 fallback):
+      #   1. S3 bucket (eu-central-1) — durable, fast, cost-negligible
+      #   2. Mac mini HTTP server (p3001.synaptic.synapsis-analytics.com) — backup
+      #   3. Hard fail — deploy stops rather than baking in wrong data
       # -----------------------------------------------------------------
       - name: Download PRMS database
         env:
-          GH_TOKEN: ${{ github.token }}
           S3_BUCKET: cgiar-ia-artifacts-${{ env.EXPECTED_ACCOUNT }}
         run: |
           mkdir -p data
 
-          # Download June 2026 PRMS snapshot (canonical: 2024=445 via dedup CTE).
-          # Primary: served from Mac mini via SSH tunnel (GitHub upload rate-limited).
-          # Fallback: GitHub release v1 (March 2026 / 2024=488) if Mac host unavailable.
-          # After first successful deploy, S3 cache is refreshed; switch to S3-first on next commit.
-          echo "Downloading PRMS database (June 2026 snapshot, 2024=445)..."
-          curl -fL --progress-bar \
-            "https://p3001.synaptic.synapsis-analytics.com/prdb_fresh.sqlite" \
-            -o data/prdb.sqlite || {
-            echo "::warning::Mac host unavailable, falling back to GitHub release v1 (March 2026 / 2024=488)"
-            gh release download prms-db-v1 \
-              --repo "${{ github.repository }}" \
-              --pattern "prdb.sqlite" \
-              --dir data
-          }
+          DB_FETCHED=false
 
-          # Refresh S3 cache for next deploy (non-fatal)
-          echo "Refreshing S3 cache..."
-          aws s3 mb "s3://$S3_BUCKET" --region ${{ env.AWS_REGION }} 2>/dev/null || true
-          aws s3 cp data/prdb.sqlite "s3://$S3_BUCKET/prdb.sqlite" || {
-            echo "::warning::Failed to refresh S3 cache (non-fatal)"
-          }
+          # 1. Try S3 first (durable, already holds June 2026 / 422 MB snapshot)
+          echo "Attempting S3 download: s3://$S3_BUCKET/prdb.sqlite ..."
+          if aws s3 cp "s3://$S3_BUCKET/prdb.sqlite" data/prdb.sqlite; then
+            echo "S3 download succeeded."
+            DB_FETCHED=true
+          else
+            echo "::warning::S3 download failed — trying Mac mini backup..."
+          fi
 
-          # Verify file exists and has reasonable size
-          FILE_SIZE=$(stat -c%s data/prdb.sqlite 2>/dev/null || stat -f%z data/prdb.sqlite 2>/dev/null || echo "0")
-          echo "PRMS database size: $FILE_SIZE bytes"
-          if [ "$FILE_SIZE" -lt 100000000 ]; then
-            echo "::error::PRMS database too small ($FILE_SIZE bytes). Expected ~400MB."
+          # 2. Try Mac mini HTTP server (SSH-tunnelled; June 2026 / 422 MB)
+          if [ "$DB_FETCHED" = "false" ]; then
+            echo "Attempting Mac mini download: https://p3001.synaptic.synapsis-analytics.com/prdb_fresh.sqlite ..."
+            if curl -fL --progress-bar \
+                "https://p3001.synaptic.synapsis-analytics.com/prdb_fresh.sqlite" \
+                -o data/prdb.sqlite; then
+              echo "Mac mini download succeeded."
+              DB_FETCHED=true
+              # Refresh S3 from freshly downloaded file
+              echo "Refreshing S3 from Mac mini source..."
+              aws s3 mb "s3://$S3_BUCKET" --region ${{ env.AWS_REGION }} 2>/dev/null || true
+              aws s3 cp data/prdb.sqlite "s3://$S3_BUCKET/prdb.sqlite" || \
+                echo "::warning::S3 refresh failed (non-fatal — S3 still holds previous June 2026 copy)"
+            else
+              echo "::warning::Mac mini download failed."
+            fi
+          fi
+
+          # 3. Hard fail — never fall back to stale March/488 data
+          if [ "$DB_FETCHED" = "false" ]; then
+            echo "::error::Both S3 and Mac mini sources failed. Cannot obtain June 2026 PRMS database."
+            echo "::error::Refusing to deploy with stale data. Fix S3 or Mac mini before retrying."
             exit 1
           fi
+
+          # Verify size: June 2026 = 422,367,232 bytes; March 2026 = 419,123,200 bytes.
+          # Threshold 421,000,000 rejects March data if it somehow ended up in S3.
+          FILE_SIZE=$(stat -c%s data/prdb.sqlite 2>/dev/null || stat -f%z data/prdb.sqlite 2>/dev/null || echo "0")
+          echo "PRMS database size: $FILE_SIZE bytes"
+          if [ "$FILE_SIZE" -lt 421000000 ]; then
+            echo "::error::PRMS database is $FILE_SIZE bytes — below the 421 MB threshold for the June 2026 snapshot."
+            echo "::error::Expected ~422,367,232 bytes (June 13 2026). March 2026 stale copy is 419,123,200 bytes."
+            echo "::error::Re-seed S3 with the June 2026 snapshot before retrying."
+            exit 1
+          fi
+          echo "Size check passed: $FILE_SIZE bytes (≥ 421 MB — June 2026 snapshot confirmed)."
 
       # -----------------------------------------------------------------
       # Docker: Build and push image
