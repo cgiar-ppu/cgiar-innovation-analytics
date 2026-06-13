@@ -155,7 +155,7 @@ GROUP BY ci.official_code, ci.name ORDER BY n DESC;
 
 ### 4.4 Innovation developments by year (dedup CTE required — simple GROUP BY is WRONG)
 
-> ⚠️ **Common mistake:** `COUNT(DISTINCT result_code) ... GROUP BY reported_year_id` WITHOUT the dedup CTE returns **inflated counts** (e.g. 2024 returns 1,016 instead of 445). Why: a result_code carried forward from phase 4 (2024) into phase 6 (2025) has one row with `reported_year_id=2024` AND another with `reported_year_id=2025` — so a naive GROUP BY counts it in BOTH years. The correct approach: apply the dedup CTE first (one canonical row per result_code), THEN group by `reported_year_id` of that canonical row. "2024 innovations" = result_codes whose LATEST active phase is Reporting 2024.
+> ⚠️ **Common mistake:** `COUNT(DISTINCT result_code) ... GROUP BY reported_year_id` WITHOUT the dedup CTE returns **inflated counts** (e.g. 2024 returns 1,016 instead of ~445–488 depending on which DB snapshot is loaded — see annotation below). Why: a result_code carried forward from phase 4 (2024) into phase 6 (2025) has one row with `reported_year_id=2024` AND another with `reported_year_id=2025` — so a naive GROUP BY counts it in BOTH years. The correct approach: apply the dedup CTE first (one canonical row per result_code), THEN group by `reported_year_id` of that canonical row. "2024 innovations" = result_codes whose LATEST active phase is Reporting 2024.
 
 ```sql
 WITH ord(v,o) AS (VALUES (1,0),(3,1),(4,2),(6,3)),
@@ -175,8 +175,11 @@ deduped AS (
 SELECT reported_year_id AS year, COUNT(*) AS n
 FROM deduped
 GROUP BY reported_year_id ORDER BY year;
--- CORRECT: 2022:83  2023:172  2024:445  2025:963
--- DO NOT use simple GROUP BY reported_year_id without the CTE — gives 2022:477, 2023:872, 2024:1016, 2025:963
+-- CORRECT (dedup CTE — exact integers are snapshot-dependent):
+--   prdb_fresh.sqlite (June 13 2026 mysqldump, dashboard-exact):  2022:83  2023:172  2024:445  2025:963
+--   prdb.sqlite       (live server, ~Mar 2026 snapshot):           2022:83  2023:172  2024:488  2025:902
+-- What matters is using the dedup CTE — NOT a naive WHERE reported_year_id filter.
+-- DO NOT use simple GROUP BY reported_year_id without the CTE — inflated: 2022:477, 2023:872, 2024:1016, 2025:963
 ```
 
 ### 4.5 Geographic distribution of innovation developments
