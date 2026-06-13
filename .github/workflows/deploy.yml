@@ -110,16 +110,23 @@ jobs:
         run: |
           mkdir -p data
 
-          # DB refreshed 2026-06-13: always pull from GitHub release to get canonical March 2026 snapshot
-          # S3 cache invalidated — remove stale May-2026 object and replace with canonical version
-          echo "Pulling canonical PRMS database from GitHub release (cache refresh)..."
-          gh release download prms-db-v1 \
-            --repo "${{ github.repository }}" \
-            --pattern "prdb.sqlite" \
-            --dir data
+          # Download June 2026 PRMS snapshot (canonical: 2024=445 via dedup CTE).
+          # Primary: served from Mac mini via SSH tunnel (GitHub upload rate-limited).
+          # Fallback: GitHub release v1 (March 2026 / 2024=488) if Mac host unavailable.
+          # After first successful deploy, S3 cache is refreshed; switch to S3-first on next commit.
+          echo "Downloading PRMS database (June 2026 snapshot, 2024=445)..."
+          curl -fL --progress-bar \
+            "https://p3001.synaptic.synapsis-analytics.com/prdb_fresh.sqlite" \
+            -o data/prdb.sqlite || {
+            echo "::warning::Mac host unavailable, falling back to GitHub release v1 (March 2026 / 2024=488)"
+            gh release download prms-db-v1 \
+              --repo "${{ github.repository }}" \
+              --pattern "prdb.sqlite" \
+              --dir data
+          }
 
-          # Refresh S3 cache with canonical DB
-          echo "Refreshing S3 cache with canonical DB..."
+          # Refresh S3 cache for next deploy (non-fatal)
+          echo "Refreshing S3 cache..."
           aws s3 mb "s3://$S3_BUCKET" --region ${{ env.AWS_REGION }} 2>/dev/null || true
           aws s3 cp data/prdb.sqlite "s3://$S3_BUCKET/prdb.sqlite" || {
             echo "::warning::Failed to refresh S3 cache (non-fatal)"
@@ -330,7 +337,7 @@ jobs:
               'docker image prune -af --filter until=24h || true',
               'SSM_PREFIX=/cgiar-ia-${{ env.STAGE }}',
               'ANTHROPIC_KEY=\$(aws ssm get-parameter --name \$SSM_PREFIX/anthropic-api-key --with-decryption --query Parameter.Value --output text --region $REGION 2>/dev/null || echo \"\")',
-              'docker run -d --name $CONTAINER_NAME --restart always --log-driver=awslogs --log-opt awslogs-region=$REGION --log-opt awslogs-group=/cgiar-ia/${{ env.STAGE }} --log-opt awslogs-stream=$CONTAINER_NAME --log-opt awslogs-create-group=true --log-opt mode=non-blocking --log-opt max-buffer-size=4m -p 7780:7780 -e AWS_REGION=$REGION -e ANTHROPIC_API_KEY=\$ANTHROPIC_KEY -e SYNAPSIS_PORT=7780 -e SYNAPSIS_HOST=0.0.0.0 -e SYNAPSIS_PLATFORM=linux -e PRMS_DB_PATH=/app/data/prdb.sqlite -e SYNAPSIS_MODEL=claude-opus-4-6 -e SYNAPSIS_MAX_TURNS=200 -e SYNAPSIS_WORKSPACE=/workspace $ECR_URI:$ECR_TAG',
+              'docker run -d --name $CONTAINER_NAME --restart always --log-driver=awslogs --log-opt awslogs-region=$REGION --log-opt awslogs-group=/cgiar-ia/${{ env.STAGE }} --log-opt awslogs-stream=$CONTAINER_NAME --log-opt awslogs-create-group=true --log-opt mode=non-blocking --log-opt max-buffer-size=4m -p 7780:7780 -e AWS_REGION=$REGION -e ANTHROPIC_API_KEY=\$ANTHROPIC_KEY -e SYNAPSIS_PORT=7780 -e SYNAPSIS_HOST=0.0.0.0 -e SYNAPSIS_PLATFORM=linux -e PRMS_DB_PATH=/app/data/prdb.sqlite -e SYNAPSIS_MODEL=claude-sonnet-4-6 -e SYNAPSIS_MAX_TURNS=200 -e SYNAPSIS_WORKSPACE=/workspace $ECR_URI:$ECR_TAG',
               'for i in \$(seq 1 15); do if curl -sf http://localhost:7780/api/health; then echo \"Container healthy\"; exit 0; fi; sleep 2; done; echo \"Health check timed out\"; exit 1'
             ]" \
             --query "Command.CommandId" --output text 2>&1) || {
