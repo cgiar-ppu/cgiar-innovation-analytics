@@ -1,0 +1,139 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)",
+      "Glob(*)",
+      "Grep(*)",
+
+      "Bash(git *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(find *)",
+      "Bash(python3 *)",
+      "Bash(pip *)",
+      "Bash(npm *)",
+      "Bash(node *)",
+      "Bash(brew *)",
+      "Bash(which *)",
+      "Bash(echo *)",
+      "Bash(mkdir *)",
+      "Bash(cp *)",
+      "Bash(mv *)",
+      "Bash(touch *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(sort *)",
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "Bash(jq *)",
+      "Bash(aws *)",
+      "Bash(gh *)",
+      "Bash(sqlite3 *)",
+      "Bash(tmux *)",
+      "Bash(cd *)",
+      "Bash(pwd)",
+      "Bash(date)",
+      "Bash(whoami)",
+      "Bash(hostname)",
+      "Bash(uname *)",
+      "Bash(env)",
+      "Bash(export *)",
+      "Bash(source *)",
+      "Bash(chmod *)",
+      "Bash(stat *)",
+      "Bash(du *)",
+      "Bash(df *)",
+      "Bash(ps *)",
+      "Bash(kill *)",
+      "Bash(open *)",
+      "Bash(pbcopy)",
+      "Bash(pbpaste)",
+      "Bash(screencapture *)",
+      "Bash(cliclick *)",
+
+      "mcp__synapsis__*",
+      "mcp__knowledge-base__*",
+      "mcp__desktop-control__*",
+      "mcp__aws-knowledge__*",
+      "mcp__playwright__*",
+      "mcp__computer-use__*",
+      "mcp__claude_ai_Context7__*",
+      "mcp__claude_ai_Postman__*",
+      "mcp__claude_ai_atlassian__*",
+      "mcp__claude_ai_Gmail__*",
+      "mcp__claude_ai_Google_Calendar__*",
+      "mcp__claude_ai_Google_Drive__*",
+
+      "Agent(*)",
+      "NotebookEdit(*)",
+
+      "WebSearch(*)",
+      "WebFetch(*)"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Bash(mkfs*)",
+      "Bash(dd if=*)",
+      "Bash(shutdown*)",
+      "Bash(reboot*)",
+      "Bash(git push --force origin main*)",
+      "Bash(git push --force origin master*)",
+      "Bash(git push -f origin main*)",
+      "Bash(git push -f origin master*)"
+    ]
+  },
+  "agentProgressSummaries": true,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/smithai/workspace/synapsis-terminal-migration/scripts/hooks/safety_check.py"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__computer-use__*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/smithai/workspace/synapsis-terminal-migration/scripts/hooks/computer_use_guard.py"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__playwright__*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/smithai/workspace/synapsis-terminal-migration/scripts/hooks/computer_use_guard.py"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/smithai/workspace/synapsis-terminal-migration/scripts/hooks/audit_log.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/smithai/workspace/synapsis-terminal-migration/scripts/hooks/audit_log.py"
+          }
+        ]
+      }
+    ]
+  }
+}
