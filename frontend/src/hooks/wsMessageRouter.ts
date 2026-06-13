@@ -50,6 +50,12 @@ export function routeWebSocketMessage(
     return true
   }
 
+  if (msg.type === 'model_switched') {
+    // Backend confirmed the active session's model change.
+    useSessionsStore.getState().setSessionModel(msg.session_id, msg.model)
+    return true
+  }
+
   if (msg.type === 'session_update') {
     handleSessionUpdate(msg)
     return true

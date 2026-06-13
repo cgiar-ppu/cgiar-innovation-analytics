@@ -46,6 +46,7 @@ from synapsis.handlers.chat_handlers import (
     handle_switch_session,
     handle_new_session,
     handle_retry,
+    handle_switch_model,
     handle_user_message,
 )
 
@@ -70,6 +71,8 @@ async def ws_chat(websocket: WebSocket) -> None:
       {"type": "new_session"}                -- start a fresh session
       {"type": "switch_session",
        "session_id": "<sid>"}                -- switch to / resume an existing session
+      {"type": "switch_model",
+       "model": "..."}                       -- switch the active session's model
       {"type": "retry_with_model",
        "message": "...", "model": "..."}     -- retry with AUP fallback model
 
@@ -188,6 +191,15 @@ async def ws_chat(websocket: WebSocket) -> None:
                 session_id, client = await handle_new_session(
                     session_id, send_json
                 )
+                continue
+
+            # --- Switch the active session's model mid-conversation ---
+            if msg_type == "switch_model":
+                result = await handle_switch_model(
+                    payload, session_id, send_json
+                )
+                if result is not None:
+                    client = result
                 continue
 
             # ----------------------------------------------------------

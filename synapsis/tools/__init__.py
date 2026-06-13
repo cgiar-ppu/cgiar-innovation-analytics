@@ -1,5 +1,6 @@
 """
-Synapsis MCP tools — memory persistence, agent management, and Slack notifications.
+Synapsis MCP tools — memory persistence, agent management, image generation,
+and Slack notifications.
 Computer use tools live in a separate 'computer-use' MCP server.
 """
 
@@ -15,6 +16,8 @@ from synapsis.tools.prms_query import prms_query
 from synapsis.tools.create_chart import create_chart
 from synapsis.tools.scenario_analysis import scenario_analysis
 from synapsis.tools.partner_identification import partner_identification
+from synapsis.tools.images import image_generate, image_edit
+from synapsis.tools.html_dashboard import html_dashboard
 
 # ---------------------------------------------------------------------------
 # Memory + agent management + Slack MCP server
@@ -49,6 +52,9 @@ synapsis_mcp = create_sdk_mcp_server(
         create_chart,
         scenario_analysis,
         partner_identification,
+        image_generate,
+        image_edit,
+        html_dashboard,
     ],
 )
 

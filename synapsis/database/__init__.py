@@ -26,6 +26,8 @@ from synapsis.database.sessions import (  # noqa: F401
     get_claude_session_id,
     save_initial_context,
     consume_initial_context,
+    get_session_model,
+    update_session_model,
 )
 
 # -- Task status -------------------------------------------------------------

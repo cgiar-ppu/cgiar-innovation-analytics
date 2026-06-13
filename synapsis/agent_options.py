@@ -84,6 +84,11 @@ ALLOWED_TOOLS: list[str] = [
     "mcp__synapsis__slack_notify",
     # MCP PRMS database query tool
     "mcp__synapsis__prms_query",
+    # MCP image generation / editing tools (OpenAI gpt-image-2)
+    "mcp__synapsis__image_generate",
+    "mcp__synapsis__image_edit",
+    # MCP interactive HTML dashboard generator
+    "mcp__synapsis__html_dashboard",
     # MCP fleet management tools
     "mcp__synapsis__fleet_create",
     "mcp__synapsis__fleet_spawn",

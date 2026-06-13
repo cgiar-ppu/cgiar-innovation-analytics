@@ -32,6 +32,8 @@ export type ServerMessage =
   | { type: 'error'; message: string }
   /** AUP/policy violation detected — suggests a fallback model. */
   | { type: 'aup_error'; message: string; fallback_model: string }
+  /** Confirmation that the active session's model was switched. */
+  | { type: 'model_switched'; model: string; session_id: string }
   /** A sub-agent (Task tool) has started or completed. */
   | { type: 'agent_activity'; agent: string; status: 'started' | 'completed'; tool_use_id: string }
   /** Early notification that the agent is generating a tool call. */
@@ -65,5 +67,7 @@ export type ClientMessage =
   | { type: 'new_session' }
   /** Switch the WebSocket to an existing session. */
   | { type: 'switch_session'; session_id: string }
+  /** Switch the active session's model mid-conversation. */
+  | { type: 'switch_model'; model: string }
   /** Retry a message with a different model (AUP fallback). */
   | { type: 'retry_with_model'; message: string; model: string }

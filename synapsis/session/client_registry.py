@@ -27,7 +27,7 @@ from synapsis.constants import (
     SESSION_CREATION_RATE_WINDOW,
     SESSION_CREATION_RATE_LIMIT,
 )
-from synapsis.database import create_session, get_claude_session_id
+from synapsis.database import create_session, get_claude_session_id, get_session_model
 from synapsis.agent_options import build_agent_options
 from synapsis.session.client_factory import create_client_with_retry
 
@@ -164,17 +164,23 @@ class ClientRegistry:
     async def _create_and_connect_client(
         self,
         resume_session_id: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> ClaudeSDKClient:
         """Build agent options, create a ClaudeSDKClient, and connect it.
 
         Args:
             resume_session_id: If provided, the Claude SDK session UUID to resume.
                                Pass None or empty string to start a fresh session.
+            model:             Optional model ID override for this client. Pass
+                               None or empty string to use the server default.
 
         Returns:
             A connected ClaudeSDKClient ready to receive queries.
         """
-        options = await build_agent_options(resume_session_id=resume_session_id)
+        options = await build_agent_options(
+            resume_session_id=resume_session_id,
+            model_override=model or None,
+        )
         return await create_client_with_retry(
             options,
             max_retries=2,
@@ -283,7 +289,12 @@ class ClientRegistry:
         (slow path) and ``ensure_session`` (case 2).
         """
         claude_sid = await get_claude_session_id(session_id)
-        client = await self._create_and_connect_client(resume_session_id=claude_sid)
+        # Use the session's persisted model so resumed clients keep the model
+        # the user selected for this chat (falls back to server default if "").
+        model = await get_session_model(session_id)
+        client = await self._create_and_connect_client(
+            resume_session_id=claude_sid, model=model or None,
+        )
 
         if claude_sid:
             # Post-connect health check: some sessions are corrupted and cause
@@ -296,7 +307,9 @@ class ClientRegistry:
                     "(Claude session %s is likely corrupted) — falling back to fresh session",
                     session_id, claude_sid,
                 )
-                client = await self._create_and_connect_client(resume_session_id=None)
+                client = await self._create_and_connect_client(
+                    resume_session_id=None, model=model or None,
+                )
                 logger.info(
                     "Fresh fallback client created for session %s (history preserved in DB, "
                     "but Claude context reset)",

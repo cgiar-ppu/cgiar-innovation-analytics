@@ -40,6 +40,7 @@ from synapsis.routes import (
     skills_router,
     fleet_router,
     prms_dashboard_router,
+    images_router,
 )
 from synapsis.websocket import ws_chat, get_activity_stats, cleanup_session_client
 from synapsis.workflow_ws import ws_workflow
@@ -83,6 +84,7 @@ app.include_router(agent_query_router)
 app.include_router(skills_router)
 app.include_router(fleet_router)
 app.include_router(prms_dashboard_router)
+app.include_router(images_router)
 
 # -- Register WebSocket endpoints --
 app.websocket("/ws/chat")(ws_chat)

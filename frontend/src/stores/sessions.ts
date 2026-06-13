@@ -57,6 +57,16 @@ interface SessionsState {
   markSessionComplete: (id: string) => void
 
   /**
+   * Optimistically update the model for a session in the local list.
+   * Called when the user picks a different model in the selector pill (the
+   * backend confirms via a `model_switched` WebSocket frame).
+   *
+   * @param id    - The `session_id` whose model changed.
+   * @param model - The new model ID.
+   */
+  setSessionModel: (id: string, model: string) => void
+
+  /**
    * Sends a PATCH request to rename a session and optimistically updates the
    * local {@link sessions} list.
    *
@@ -122,6 +132,12 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     next.delete(id)
     return { busySessions: next }
   }),
+
+  setSessionModel: (id, model) => set((s) => ({
+    sessions: s.sessions.map((sess) =>
+      sess.session_id === id ? { ...sess, model } : sess,
+    ),
+  })),
 
   renameSession: async (id, title) => {
     await api.renameSession(id, title)

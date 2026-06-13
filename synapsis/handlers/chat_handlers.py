@@ -20,8 +20,14 @@ from typing import Optional
 from claude_agent_sdk import ClaudeSDKClient
 
 from synapsis.config import logger, FALLBACK_MODEL
+from synapsis.constants import SELECTABLE_MODEL_IDS
 from synapsis.agent_options import build_agent_options
-from synapsis.database import save_message, consume_initial_context
+from synapsis.database import (
+    save_message,
+    consume_initial_context,
+    get_claude_session_id,
+    update_session_model,
+)
 from synapsis.chat_run_manager import chat_run_manager
 from synapsis.session_manager import (
     sessions,
@@ -200,6 +206,83 @@ async def handle_retry(
     )
 
     return retry_client
+
+
+# ---------------------------------------------------------------------------
+# handle_switch_model
+# ---------------------------------------------------------------------------
+
+async def handle_switch_model(
+    payload: dict,
+    session_id: Optional[str],
+    send_json,
+) -> Optional[ClaudeSDKClient]:
+    """Handle a ``{"type": "switch_model", "model": "..."}`` frame.
+
+    Switches the active session to a different model mid-conversation:
+    1. Validates the requested model against SELECTABLE_MODEL_IDS.
+    2. Cancels any in-flight managed task for the session.
+    3. Persists the new model to the sessions table FIRST, so any resume path
+       (reconnect, REST send) picks up the new model.
+    4. Tears down the old SDK client subprocess.
+    5. Creates a fresh client with ``model_override`` and resumes the Claude
+       SDK session (preserving conversation context).
+    6. Broadcasts ``model_switched`` to all viewers of the session.
+
+    Returns the new client on success, or None on validation failure / connect
+    error (in which case the caller keeps its existing client ref).
+    """
+    from synapsis.session_manager import cleanup_session_client
+
+    new_model = payload.get("model", "").strip()
+    if new_model not in SELECTABLE_MODEL_IDS:
+        await send_json(
+            {"type": "error", "message": f"Invalid model '{new_model}'"},
+            sid=session_id,
+        )
+        return None
+    if not session_id:
+        await send_json(
+            {"type": "error", "message": "No active session to switch model on"}
+        )
+        return None
+
+    logger.info("Switching session %s to model %s", session_id, new_model)
+
+    # Cancel any in-flight managed task for this session
+    await chat_run_manager.cancel(session_id)
+
+    # Persist first so any resume path picks up the new model
+    await update_session_model(session_id, new_model)
+
+    # Tear down the old subprocess
+    await cleanup_session_client(session_id)
+
+    # Resume the Claude SDK conversation (if any) under the new model
+    claude_sid = await get_claude_session_id(session_id)
+    try:
+        options = await build_agent_options(
+            resume_session_id=claude_sid or None, model_override=new_model
+        )
+        new_client = ClaudeSDKClient(options=options)
+        await new_client.connect()
+    except Exception as exc:
+        logger.exception("Model switch failed for session %s", session_id)
+        await send_json(
+            {"type": "error", "message": f"Model switch failed: {exc}"},
+            sid=session_id,
+        )
+        return None
+
+    sessions[session_id] = new_client
+
+    # Confirm to the switching device and all other viewers
+    confirm = {"type": "model_switched", "model": new_model, "session_id": session_id}
+    await send_json(confirm, sid=session_id)
+    await broadcast_to_session(session_id, confirm, exclude=send_json)
+    await broadcast_to_all({"type": "sessions_changed"}, exclude=send_json)
+
+    return new_client
 
 
 # ---------------------------------------------------------------------------

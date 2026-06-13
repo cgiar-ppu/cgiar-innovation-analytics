@@ -6,6 +6,7 @@ import { useWebSocketContext } from '../../contexts/WebSocketContext';
 import { useUIStore } from '../../stores/ui';
 import { ThemeToggle } from './ThemeToggle';
 import { TTSToggle } from '../chat/TTSToggle';
+import { ModelSelector } from './ModelSelector';
 import type { AppConfig } from '../../lib/types';
 
 const NAV_ITEMS = [
@@ -121,12 +122,8 @@ export default function TopBar({ config }: TopBarProps) {
 
         {/* Right side: status, controls */}
         <div className="flex items-center gap-2 ml-4">
-          {/* Model badge — subtle, large screens only */}
-          {config && (
-            <span className="text-[10px] px-2 py-0.5 rounded-full text-[var(--text-muted)]/60 hidden xl:inline-block font-mono border border-[var(--border)]">
-              {config.model}
-            </span>
-          )}
+          {/* Model selector pill — switch between Sonnet 4.6 / Opus 4.8 */}
+          <ModelSelector config={config} />
 
           {/* Connection status — minimal dot indicator */}
           <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] px-2 py-1 rounded-full border border-[var(--border)]" title={statusText}>
