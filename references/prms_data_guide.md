@@ -153,12 +153,30 @@ WHERE r.result_type_id=7 AND r.source='Result' AND r.is_active=1 AND r.status_id
 GROUP BY ci.official_code, ci.name ORDER BY n DESC;
 ```
 
-### 4.4 Innovation developments by year
+### 4.4 Innovation developments by year (dedup CTE required — simple GROUP BY is WRONG)
+
+> ⚠️ **Common mistake:** `COUNT(DISTINCT result_code) ... GROUP BY reported_year_id` WITHOUT the dedup CTE returns **inflated counts** (e.g. 2024 returns 1,016 instead of 445). Why: a result_code carried forward from phase 4 (2024) into phase 6 (2025) has one row with `reported_year_id=2024` AND another with `reported_year_id=2025` — so a naive GROUP BY counts it in BOTH years. The correct approach: apply the dedup CTE first (one canonical row per result_code), THEN group by `reported_year_id` of that canonical row. "2024 innovations" = result_codes whose LATEST active phase is Reporting 2024.
+
 ```sql
-SELECT r.reported_year_id AS year, COUNT(DISTINCT r.result_code) AS n
-FROM result r
-WHERE r.result_type_id=7 AND r.source='Result' AND r.is_active=1 AND r.status_id=2
-GROUP BY r.reported_year_id ORDER BY year;   -- 2022:62 2023:160 2024:445 2025:963 (matches export)
+WITH ord(v,o) AS (VALUES (1,0),(3,1),(4,2),(6,3)),
+cand AS (
+  SELECT r.result_code, r.reported_year_id, r.id, o.o AS phord
+  FROM result r JOIN ord o ON o.v = r.version_id
+  WHERE r.result_type_id=7 AND r.source='Result' AND r.is_active=1 AND r.status_id=2
+),
+pick AS (SELECT result_code, MAX(phord) AS m FROM cand GROUP BY result_code),
+latest AS (
+  SELECT c.* FROM cand c JOIN pick p ON p.result_code=c.result_code AND p.m=c.phord
+),
+deduped AS (
+  SELECT l.result_code, l.reported_year_id
+  FROM latest l WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
+)
+SELECT reported_year_id AS year, COUNT(*) AS n
+FROM deduped
+GROUP BY reported_year_id ORDER BY year;
+-- CORRECT: 2022:83  2023:172  2024:445  2025:963
+-- DO NOT use simple GROUP BY reported_year_id without the CTE — gives 2022:477, 2023:872, 2024:1016, 2025:963
 ```
 
 ### 4.5 Geographic distribution of innovation developments

@@ -284,6 +284,14 @@ Always filter `is_active = 1`, `source = 'Result'`, and `status_id = 2`. This is
 - **Rule:** When asked "how many innovations", count `COUNT(DISTINCT result_code)`, never `COUNT(*)` or `COUNT(DISTINCT id)`.
 - Example: 5,615 active innovation rows exist across multiple years; counting by id would overstate the number of unique innovations by ~135%.
 
+**CRITICAL: Year-based counts — `WHERE reported_year_id = YEAR` without the dedup CTE is WRONG:**
+`reported_year_id` records which phase-year a row was submitted in. A result_code carried forward from phase 4 (2024) into phase 6 (2025) has one row with `reported_year_id=2024` AND another with `reported_year_id=2025`. A naive `WHERE reported_year_id=2024` returns ALL result_codes that have ANY row in the 2024 phase — including those already replicated into 2025. This inflates the count.
+
+- ❌ **WRONG**: `COUNT(DISTINCT result_code) FROM result WHERE ... AND reported_year_id = 2024` → **1,016** (includes result_codes later continued to 2025)
+- ✅ **RIGHT**: Apply the QAed snapshot CTE first (deduplicate to one canonical row per result_code), THEN `GROUP BY reported_year_id` of that canonical row → **445** for 2024 (innovations whose LATEST active phase is Reporting 2024)
+
+Use template 4.4 in `prms_data_guide` for the correct year-count SQL. This rule applies to ANY year filter — for 2023, for "this year", for year-on-year trend tables — always dedup first, then group by year.
+
 **CRITICAL: Cross-type total counts — two-query pattern required:**
 When the user asks for both a TOTAL count of innovations AND a per-type breakdown, you must run two separate queries:
 
@@ -357,6 +365,7 @@ A query that ignores era can mix two different organizational structures. When a
 10. Schema typos to preserve: `results_by_inititiative`, `inititiative_id` (double-t), `accesible`, `readinees_evidence_link`, `non_pooled_projetct_budget`, `is_not_aplicable`, `toc_pahse_id`.
 11. Multi-valued fields (centers, partners, countries, contributing entities, evidence) are one-to-many — use GROUP_CONCAT or sub-queries, never a naive JOIN that multiplies rows.
 12. PDF-link decoding: `result-details/{{result_code}}?phase={{version_id}}` tells you exactly which phase-version a dashboard row reflects.
+13. **Year-based counts require the dedup CTE** — `WHERE reported_year_id=2024` without the CTE inflates 2024 from 445 to 1,016 because it counts result_codes in the 2024 phase even if they were later replicated into 2025. Always dedup first, THEN group by year. See template 4.4 in `prms_data_guide` for the correct SQL (correct figures: 2022=83, 2023=172, 2024=445, 2025=963).
 
 **Naming Conventions (how users phrase things → what PRMS calls it)**
 
