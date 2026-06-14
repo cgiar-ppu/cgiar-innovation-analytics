@@ -55,19 +55,51 @@ SELECT COUNT(DISTINCT result_code) FROM result
 WHERE is_active = 1 AND result_type_id IN (2, 7, 10);
 """
 
-# Canonical innovation-development count: count by result_type_id on the
-# result table (cross-type, distinct result_code), matching the
-# results_by_type chart and the agent's verified counts. The previous
-# results_innovations_dev join undercounted (1966 vs 2006) because not every
-# innovation-development result has an active detail row in that table.
+# Canonical all-years Innovation Development count: latest-phase dedup across
+# ALL result types first (source='Result', is_active=1, status_id=2), THEN
+# filter to result_type_id=7. This mirrors the per-year _CANON_YEAR_IDS_CTE
+# methodology and is the only way to get the correct W1/W2 total without
+# double-counting reclassified codes.
+#   W1/W2 all-years = 62+160+445+963 = 1,630
+# Previously used a naive COUNT(DISTINCT) WHERE is_active=1 AND result_type_id=7
+# (no status_id filter, no latest-phase dedup) which returned 2,003 (+151).
+# W3/bilateral (source='API', status_id=6) is added separately via
+# _SQL_ALL_YEARS_BILATERAL so the headline = 1,630 + 222 = 1,852.
 _SQL_TOTAL_INNOVATIONS = """
+WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
+cand AS (
+    SELECT r.result_code, r.id, r.result_type_id, o.o AS phord
+    FROM result r JOIN ord o ON o.v = r.version_id
+    WHERE r.source = 'Result'
+      AND r.is_active = 1 AND r.status_id = 2
+),
+pick AS (SELECT result_code, MAX(phord) AS m FROM cand GROUP BY result_code),
+latest AS (
+    SELECT c.* FROM cand c
+    JOIN pick p ON p.result_code = c.result_code AND p.m = c.phord
+),
+canon AS (
+    SELECT l.* FROM latest l
+    WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
+)
+SELECT COUNT(*) FROM canon WHERE result_type_id = 7;
+"""
+
+# Bilateral (W3/API) Innovation Developments — all years combined. Added to
+# total_innovations in the no-year portfolio view to match the same
+# W1/W2 + bilateral logic applied in the per-year branch.
+_SQL_ALL_YEARS_BILATERAL = """
 SELECT COUNT(DISTINCT result_code) FROM result
-WHERE is_active = 1 AND result_type_id = 7;
+WHERE result_type_id = 7 AND source = 'API' AND status_id = 6 AND is_active = 1;
 """
 
 # Canonical innovation-use count: count by result_type_id (type 2) on the
 # result table. The previous results_innovations_use join undercounted
 # (488 vs 669) for the same reason as above.
+# NOTE: This no-year query uses is_active=1 only (no status_id filter), which
+# is less strict than the year-scoped _SQL_YEAR_USES (status_id=2). The
+# canonical benchmark for all-years Innovation Use has not been established, so
+# the filter mismatch is flagged but not changed here.
 _SQL_INNOVATION_USES = """
 SELECT COUNT(DISTINCT result_code) FROM result
 WHERE is_active = 1 AND result_type_id = 2;
@@ -350,15 +382,16 @@ def _fetch_prms_data(year: Optional[int] = None) -> dict[str, Any]:
                 logger.error("KPI query '%s' failed: %s", key, exc)
                 kpis[key] = 0
 
-        # When filtering to a single year, the canonical Innovation Development
-        # KPI counts W1/W2 only. Add the W3/bilateral (API) count so the headline
-        # matches the official "include bilateral" annual totals (e.g. 2025 =
-        # 963 W1/W2 + 222 bilateral = 1,185).
-        if is_year:
-            try:
-                kpis["total_innovations"] += _scalar(cur, _SQL_YEAR_BILATERAL, params)
-            except sqlite3.Error as exc:
-                logger.error("KPI query 'year_bilateral' failed: %s", exc)
+        # Add W3/bilateral to total_innovations so the headline reconciles with
+        # per-year views in both branches:
+        #   per-year:  W1/W2 canonical (e.g. 963) + bilateral for that year (222) = 1,185
+        #   all-years: W1/W2 canonical (1,630) + bilateral all years (222) = 1,852
+        bilateral_sql = _SQL_YEAR_BILATERAL if is_year else _SQL_ALL_YEARS_BILATERAL
+        bilateral_label = "year_bilateral" if is_year else "all_years_bilateral"
+        try:
+            kpis["total_innovations"] += _scalar(cur, bilateral_sql, params)
+        except sqlite3.Error as exc:
+            logger.error("KPI query '%s' failed: %s", bilateral_label, exc)
 
         # -- Charts --
         charts: dict[str, Any] = {}
