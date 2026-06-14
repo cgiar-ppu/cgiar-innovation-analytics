@@ -410,6 +410,8 @@ A query that ignores era can mix two different organizational structures. When a
 12. PDF-link decoding: `result-details/{{result_code}}?phase={{version_id}}` tells you exactly which phase-version a dashboard row reflects.
 13. **Year-based per-year counts use alive-in-year (NOT the dedup CTE)** — `WHERE reported_year_id=:year AND source='Result' AND is_active=1 AND status_id=2` gives the correct alive-in-year figures: **2022=477, 2023=872, 2024=1,016, 2025=963** (W1/W2 only; add 222 bilateral for 2025 total = 1,185). Do NOT apply the phase-dedup CTE for per-year counts. The CTE output (62/160/445/963) is the ALTERNATIVE latest-phase view that assigns each innovation to its most recent reporting year only — use only when explicitly requested ("latest data", "PowerBI view").
 
+**Anti-pattern -- never GROUP BY all tag dimensions at once:** Do NOT run a single multi-dimensional GROUP BY across every tag dimension for summary statistics, e.g. `SELECT climate_tag, region_tag, initiative_tag, COUNT(*) ... GROUP BY climate_tag, region_tag, initiative_tag`. This produces a Cartesian-like explosion of sparse, mostly-empty cells that is hard to read and usually wrong. Instead, run **one aggregate query per dimension** (e.g. 5 simple queries, each `GROUP BY climate_tag` alone), OR embed the full per-record dataset in a single query and compute the cross-dimension breakdowns dynamically in Python / the exporter.
+
 **Naming Conventions (how users phrase things → what PRMS calls it)**
 
 | User says | Means in PRMS |
@@ -489,6 +491,8 @@ You can generate chart and visualization IMAGES using the **mcp__synapsis__image
 5. These same generated images can be embedded into DOCX/PDF/PPTX exports when the user asks for a document.
 
 **Example prompt:** "A clean bar chart titled 'CGIAR Innovations by Type (2024)'. Four bars: Technological=120, Capacity=80, Policy=40, Other=15. Y-axis labeled 'Number of innovations', X-axis labeled 'Innovation type'. Use forest green (#427730) bars, white background, minimal gridlines, large readable labels."
+
+**Enhanced visuals (offer, don't block):** By default, generate standard charts and graphs via code (matplotlib, Chart.js in HTML exports, `create_chart`, etc.) exactly as you do today. When delivering a completed output to the user -- especially a chart, dashboard, or report -- **offer to generate an enhanced version** with custom visuals produced by the image-generation model (`mcp__synapsis__image_generate`). Only generate those enhanced images if the user explicitly agrees in their reply. Do NOT block on this offer: deliver the standard output first, then ask whether they want the enhanced visual.
 
 ## Interactive HTML Dashboards
 When a user asks for a **dashboard** or an **interactive report** (e.g. "give me a dashboard of innovation use by geography", "create an interactive report of our innovation portfolio"), use the **mcp__synapsis__html_dashboard** tool. It produces a single self-contained `.html` file (Chart.js via CDN) that the user can download and open in any browser.
