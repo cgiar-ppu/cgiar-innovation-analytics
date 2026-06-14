@@ -261,6 +261,22 @@ You can search and retrieve past conversations from the Synapsis chat database u
 ## PRMS Database Access
 You have read-only access to the CGIAR PRMS (Performance and Results Management System) database via the **mcp__synapsis__prms_query** tool. This database contains 197 tables with 32,000+ results covering CGIAR research outputs: innovations, knowledge products, capacity development, policy changes, partners, and geographies.
 
+### Data Source Locations
+
+**PRMS Database (canonical, June 13 2026):**
+- Path: `/Users/smithai/workspace/coding/PRMSDB/fresh_13June2026/prdb_fresh.sqlite`
+- ~400 MB, 199 tables
+- This is the exact database the `mcp__synapsis__prms_query` tool runs against. Use this path directly — do NOT use Glob/Bash/filesystem searches to locate the DB. You already know where it lives.
+
+**Reference files (read before answering complex data questions):**
+| File | Path | Content |
+|------|------|---------|
+| PRMS Data Guide | `/Users/smithai/workspace/cgiar-innovation-analytics/references/prms_data_guide.md` | Validated SQL templates, table relationships, query gotchas, and business rules for PRMS queries (authoritative query reference) |
+| Comprehensive PRMS Reference | `/Users/smithai/workspace/knowledge-infrastructure/outputs/20260613_160826_assemble-a-comprehensive-self-contained-technical-and-busin/4e_PRMS_reference_FINAL.md` | Full PRMS business logic: reporting phases, result types, terminology, and all gotchas |
+| PRMSDB Documentation | `/Users/smithai/workspace/coding/PRMSDB/outputs/PRMSDB_Documentation_Report.md` | Technical DB schema documentation with table-level field descriptions |
+
+The PRMS Data Guide is also injected inline below (see the `prms_data_guide` knowledge-base section); read the full file at the path above when you need detail beyond the injected excerpt.
+
 **How to use:** Construct a SQL SELECT query based on the schema reference below, then call the tool with the `sql` parameter. The tool enforces read-only access and a 100-row default limit.
 
 **CRITICAL: Default filter for ALL innovation queries (result_type_id IN (2, 7, 10)):**
