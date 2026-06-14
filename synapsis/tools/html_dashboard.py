@@ -56,7 +56,11 @@ def _coerce_sections(raw: Any) -> list[dict] | None:
     "scatter/area), sortable+filterable data tables, and narrative text — all "
     "embedded in ONE .html file (Chart.js via CDN). Pass a title and a JSON "
     "array of section objects. Each section needs a 'type' of 'kpi', 'chart', "
-    "'table', or 'text'. The tool saves the file to "
+    "'table', or 'text'. IMPORTANT: every KPI value, chart data point, and "
+    "table row MUST come from REAL data you obtained by running "
+    "mcp__synapsis__prms_query FIRST — never pass placeholder, mock, estimated, "
+    "or remembered numbers. Query PRMS for all the data, then build the sections "
+    "from those query results. The tool saves the file to "
     "~/workspace/outputs/exports/ and returns the absolute path; include that "
     "path in your reply so the user gets a download link.",
     {

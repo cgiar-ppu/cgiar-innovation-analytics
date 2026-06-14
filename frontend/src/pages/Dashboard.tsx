@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { Sprout, TrendingUp, Lightbulb, BookOpen, MessageSquare, Database, Bot, AlertTriangle, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
@@ -9,14 +10,36 @@ import Badge from '../components/common/Badge';
 import { InteractiveChart } from '../components/chat/InteractiveChart';
 import type { PRMSDashboardData, ActivityDataPoint } from '../lib/types-extended';
 
+// "all" = the all-years portfolio view; otherwise a specific reporting year.
+const YEAR_OPTIONS = ['all', '2025', '2024', '2023', '2022'] as const;
+type YearFilter = (typeof YEAR_OPTIONS)[number];
+
 export default function Dashboard() {
   const navigate = useNavigate();
 
+  const [selectedYear, setSelectedYear] = useState<YearFilter>('all');
+  // Keep the latest selectedYear available to the (memoized) fetcher.
+  const yearRef = useRef<YearFilter>(selectedYear);
+  yearRef.current = selectedYear;
+
   const { data: prmsData, isLive, refetch, loading } = useApi<PRMSDashboardData>(
-    () => dashboardService.getPRMSStats(),
+    () =>
+      dashboardService.getPRMSStats(
+        yearRef.current === 'all' ? null : Number(yearRef.current)
+      ),
     mockPRMSDashboard,
     { interval: 60000 }
   );
+
+  // Re-fetch whenever the user changes the year filter.
+  const didMount = useRef(false);
+  useEffect(() => {
+    if (!didMount.current) {
+      didMount.current = true;
+      return;
+    }
+    refetch();
+  }, [selectedYear, refetch]);
 
   const { data: activity } = useApi<ActivityDataPoint[]>(
     () => dashboardService.getActivity(),
@@ -46,10 +69,26 @@ export default function Dashboard() {
         <div>
           <h1 className="text-2xl font-bold text-[var(--text)] font-serif">Innovation Analytics</h1>
           <p className="text-sm text-[var(--text-muted)] mt-1">
-            CGIAR innovation portfolio — {kpis.total_results.toLocaleString()} innovations across {kpis.countries_covered} countries
+            CGIAR innovation portfolio{selectedYear !== 'all' ? ` · ${selectedYear}` : ''} — {kpis.total_results.toLocaleString()} innovations across {kpis.countries_covered} countries
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Year filter */}
+          <label className="flex items-center gap-2 text-sm text-[var(--text-muted)]">
+            <span className="hidden sm:inline">Year</span>
+            <select
+              value={selectedYear}
+              onChange={(e) => setSelectedYear(e.target.value as YearFilter)}
+              disabled={loading}
+              className="px-3 py-1.5 text-sm rounded-lg border border-[var(--border)] bg-[var(--surface-solid)] text-[var(--text)] hover:bg-[var(--surface-2)] transition-colors disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-[#427730]/40"
+            >
+              {YEAR_OPTIONS.map((y) => (
+                <option key={y} value={y}>
+                  {y === 'all' ? 'All years' : y}
+                </option>
+              ))}
+            </select>
+          </label>
           <button
             onClick={refetch}
             disabled={loading}

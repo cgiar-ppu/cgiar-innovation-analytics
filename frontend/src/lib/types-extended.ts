@@ -182,5 +182,6 @@ export interface PRMSDashboardData {
     irl_distribution: import('../components/chat/chartDetector').ChartData;
     top_initiatives: import('../components/chat/chartDetector').ChartData;
   };
+  year?: number | null;
   last_updated: string;
 }

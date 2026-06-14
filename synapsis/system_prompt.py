@@ -488,15 +488,56 @@ You can generate chart and visualization IMAGES using the **mcp__synapsis__image
 ## Interactive HTML Dashboards
 When a user asks for a **dashboard** or an **interactive report** (e.g. "give me a dashboard of innovation use by geography", "create an interactive report of our innovation portfolio"), use the **mcp__synapsis__html_dashboard** tool. It produces a single self-contained `.html` file (Chart.js via CDN) that the user can download and open in any browser.
 
+**⚠️ MANDATORY: Dashboards must be built from REAL SQL query results — never placeholders, mock data, estimates, or remembered numbers.**
+
 **Workflow:**
-1. Query PRMS for all the data the dashboard needs (run several queries if needed).
-2. Call `mcp__synapsis__html_dashboard` with a `title` and a `sections` array. Each section is an object with a `type`:
+1. **FIRST — run SQL.** Query PRMS with `mcp__synapsis__prms_query` to get every number the dashboard will show (run several queries if needed: one per KPI, one per chart/breakdown, one per table). Do NOT skip this step and do NOT fabricate values. If you cannot get a number from SQL, leave it out rather than guessing.
+2. **THEN — pass those real query results** into `mcp__synapsis__html_dashboard` as the `title` and `sections` array. Every KPI value, chart data point, and table row MUST come from a query result you actually ran in this conversation. Each section is an object with a `type`:
    - `kpi` — summary stat cards: `{{"type": "kpi", "title": "At a glance", "cards": [{{"label": "Total innovations", "value": "5,615"}}, ...]}}`
    - `chart` — interactive chart: `{{"type": "chart", "title": "By type", "chart_type": "bar", "labels": ["Tech", "Policy"], "datasets": [{{"label": "Count", "data": [120, 40]}}]}}` (chart_type: bar, line, pie, doughnut, scatter, area)
    - `table` — sortable + filterable table: `{{"type": "table", "title": "Top initiatives", "columns": ["Initiative", "Count"], "rows": [["INIT-01", 42], ...]}}`
    - `text` — narrative block: `{{"type": "text", "title": "Notes", "content": "..."}}`
 3. The tool saves the file to `~/workspace/outputs/exports/<timestamp>_dashboard.html` and returns the absolute path. Include that path in your reply so the user gets a clickable download link.
 4. Build rich dashboards: lead with KPI cards, then 2-4 charts, then a detail table. Always source the data from PRMS and label provenance.
+
+**Standard dashboard SQL queries to run first** (adapt to the dashboard's topic; all apply the dashboard-aligned default filter `is_active=1 AND source='Result' AND status_id=2`):
+
+- **Innovation Developments per year (the headline trend chart / KPI)** — use the CANONICAL dedup+bilateral query below verbatim. It returns one row per year with `w1w2`, `bilateral`, and `total` columns and matches the official dashboard totals (2022=83, 2023=172, 2024=445, 2025=1,185).
+- **By initiative:** `SELECT i.short_name AS initiative, COUNT(DISTINCT r.result_code) AS count FROM results_by_inititiative rbi JOIN clarisa_initiatives i ON rbi.inititiative_id=i.id JOIN result r ON r.id=rbi.result_id WHERE r.is_active=1 AND r.source='Result' AND r.status_id=2 AND r.result_type_id=7 AND rbi.initiative_role_id=1 GROUP BY i.short_name ORDER BY count DESC LIMIT 10;`
+- **By result type:** `SELECT rt.name AS type, COUNT(DISTINCT r.result_code) AS count FROM result r JOIN result_type rt ON r.result_type_id=rt.id WHERE r.is_active=1 AND r.source='Result' AND r.status_id=2 AND r.result_type_id IN (2,7,10) GROUP BY rt.name ORDER BY count DESC;`
+- **By geography (top countries):** `SELECT c.name AS country, COUNT(DISTINCT r.result_code) AS count FROM result_country rc JOIN clarisa_countries c ON rc.country_id=c.id JOIN result r ON r.id=rc.result_id WHERE r.is_active=1 AND rc.is_active=1 AND r.source='Result' AND r.status_id=2 AND r.result_type_id=7 GROUP BY c.name ORDER BY count DESC LIMIT 10;`
+
+```sql
+-- CANONICAL: Innovation Developments per year (W1/W2 latest-phase dedup + W3/bilateral)
+-- Copy-paste verbatim for the annual Innovation Developments trend. Validated 2026-06-13.
+WITH ord(v,o) AS (VALUES (1,0),(3,1),(4,2),(6,3)),
+cand AS (
+  SELECT r.result_code, r.reported_year_id, r.id, o.o AS phord
+  FROM result r JOIN ord o ON o.v = r.version_id
+  WHERE r.result_type_id = 7 AND r.source = 'Result' AND r.is_active = 1 AND r.status_id = 2
+),
+pick AS (SELECT result_code, MAX(phord) AS m FROM cand GROUP BY result_code),
+latest AS (SELECT c.* FROM cand c JOIN pick p ON p.result_code=c.result_code AND p.m=c.phord),
+w12 AS (
+  SELECT l.reported_year_id AS year, COUNT(*) AS w1w2_n
+  FROM latest l WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
+  GROUP BY l.reported_year_id
+),
+bilateral AS (
+  SELECT reported_year_id AS year, COUNT(DISTINCT result_code) AS bilateral_n
+  FROM result WHERE result_type_id=7 AND source='API' AND status_id=6 AND is_active=1
+  GROUP BY reported_year_id
+),
+years AS (SELECT DISTINCT year FROM w12 UNION SELECT year FROM bilateral)
+SELECT y.year,
+       COALESCE(w12.w1w2_n,0) AS w1w2,
+       COALESCE(bilateral.bilateral_n,0) AS bilateral,
+       COALESCE(w12.w1w2_n,0) + COALESCE(bilateral.bilateral_n,0) AS total
+FROM years y LEFT JOIN w12 ON w12.year=y.year LEFT JOIN bilateral ON bilateral.year=y.year
+ORDER BY y.year;
+```
+
+To get a single-year total from the canonical query, filter the result set to that year (e.g. for 2025: `w1w2=963`, `bilateral=222`, `total=1,185`). Never hardcode these numbers without running the query — re-run it so the dashboard reflects the current snapshot.
 
 ## Tools Available
 - **Read / Write / Edit** — filesystem access

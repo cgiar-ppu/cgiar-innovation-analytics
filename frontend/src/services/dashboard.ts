@@ -33,7 +33,8 @@ export const dashboardService = {
     return (data as { activity?: ActivityDataPoint[] }).activity ?? (data as ActivityDataPoint[]);
   },
 
-  async getPRMSStats(): Promise<PRMSDashboardData> {
-    return api.get<PRMSDashboardData>('/api/dashboard/prms-stats');
+  async getPRMSStats(year?: number | null): Promise<PRMSDashboardData> {
+    const qs = year ? `?year=${year}` : '';
+    return api.get<PRMSDashboardData>(`/api/dashboard/prms-stats${qs}`);
   },
 };
