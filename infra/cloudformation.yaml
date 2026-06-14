@@ -264,7 +264,7 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
-            VolumeSize: 31
+            VolumeSize: 32
             VolumeType: gp3
             Encrypted: true
       Tags:
@@ -334,8 +334,8 @@ Resources:
               -e SYNAPSIS_PLATFORM="linux" \
               -e SYNAPSIS_WORKSPACE="/workspace" \
               -e PRMS_DB_PATH="/app/data/prdb.sqlite" \
-              -e SYNAPSIS_MODEL="claude-opus-4-6" \
-              -e SYNAPSIS_FALLBACK_MODEL="claude-sonnet-4-5-20250929" \
+              -e SYNAPSIS_MODEL="claude-sonnet-4-6" \
+              -e SYNAPSIS_FALLBACK_MODEL="claude-opus-4-8" \
               -e SYNAPSIS_MAX_TURNS="200" \
               -e GIT_SHA="$IMAGE_TAG" \
               "$ECR_REPO:$IMAGE_TAG"
