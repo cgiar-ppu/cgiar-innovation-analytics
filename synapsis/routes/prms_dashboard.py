@@ -215,56 +215,48 @@ LIMIT 10;
 # ---------------------------------------------------------------------------
 # Year-scoped queries
 # ---------------------------------------------------------------------------
-# When a specific year is requested, the dashboard is sliced to that reporting
-# year. We anchor the Innovation Development slice to the CANONICAL latest-phase
-# dedup (matching the official annual totals 2022=62, 2023=160, 2024=445,
-# 2025=1,185 for W1/W2 'Result' source), so the headline KPI is dashboard-
-# aligned rather than the inflated "alive-in-year" count.
+# When a specific year is requested, the dashboard uses ALIVE-IN-YEAR counting:
+# an Innovation Development (type 7) is counted for year X if it has at least
+# one active, Quality-Assessed W1/W2 row with reported_year_id = X. A
+# result_code that reported in 2022, 2023, and 2025 counts for ALL three years.
 #
-# _CANON_YEAR_IDS_CTE produces canon_year_ids(result_id) — the set of result.id
-# rows that are the canonical latest-phase row for a result_code whose canonical
-# year == :year. Downstream KPI/chart queries JOIN against it so every breakdown
-# is consistent with the headline number. :year is bound twice via named params.
-_CANON_YEAR_IDS_CTE = """
-WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
--- Candidate set spans ALL result types (no type filter here). Filtering to
--- type 7 BEFORE the latest-phase dedup is WRONG: it keeps a stale earlier
--- phase as "latest" for codes whose newest phase is a different type, which
--- inflated 2022/2023 to 83/172. Dedup across all types first, then filter
--- result_type_id = 7 at the very end (in canon_year_ids). This yields the
--- canonical W1/W2 counts 2022=62, 2023=160, 2024=445, 2025=963.
-cand AS (
-    SELECT r.result_code, r.reported_year_id, r.id, r.result_type_id, o.o AS phord
-    FROM result r JOIN ord o ON o.v = r.version_id
-    WHERE r.source = 'Result'
-      AND r.is_active = 1 AND r.status_id = 2
-),
-pick AS (SELECT result_code, MAX(phord) AS m FROM cand GROUP BY result_code),
-latest AS (
-    SELECT c.* FROM cand c
-    JOIN pick p ON p.result_code = c.result_code AND p.m = c.phord
-),
-canon AS (
-    SELECT l.* FROM latest l
-    WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
-),
-canon_year_ids AS (
-    SELECT id AS result_id, result_code FROM canon
-    WHERE result_type_id = 7 AND reported_year_id = :year
-)
-"""
+# This is the correct default per-year interpretation ("innovations active in
+# year X"). The alternative "latest-phase dedup" (which assigns each code to
+# exactly ONE year — its most recent) is the PowerBI custom-latest view and
+# yields 62/160/445/963; it is available via the prms_query_cookbook.md but
+# is NOT the dashboard default.
+#
+# Alive-in-year W1/W2 counts (verified against June 13 DB):
+#   2022 = 477, 2023 = 872, 2024 = 1,016, 2025 = 963 + 222 bilateral = 1,185
+#
+# The alive-in-year scope flows to ALL per-year breakdowns (countries, IRL,
+# initiatives, type chart). Each breakdown joins directly from the alive-in-year
+# result rows, so "innovations in 2023 by country" uses the 872-innovation set.
+#
+# NOTE: The _CANON_YEAR_IDS_CTE (latest-phase dedup, see prms_query_cookbook.md
+# Recipe 2) is no longer used for per-year views. It is retained in the all-
+# years queries (_SQL_TOTAL_INNOVATIONS, _SQL_RESULTS_BY_TYPE) for the headline
+# KPI which counts each innovation exactly once across all years.
 
 # Bilateral (W3/API) Innovation Developments for the requested year — added to
-# the headline count so it matches the canonical "include W3/bilateral" totals.
+# the headline count so it matches the "include W3/bilateral" totals.
+# Expected: 2025=222, 2022/2023/2024=0.
 _SQL_YEAR_BILATERAL = """
 SELECT COUNT(DISTINCT result_code) FROM result
 WHERE result_type_id = 7 AND source = 'API' AND status_id = 6
   AND is_active = 1 AND reported_year_id = :year;
 """
 
-# Headline Innovation Developments KPI for the year (W1/W2 canonical count).
-_SQL_YEAR_INNOVATIONS = _CANON_YEAR_IDS_CTE + """
-SELECT COUNT(*) FROM canon_year_ids;
+# Headline Innovation Developments KPI for the year — alive-in-year W1/W2 count.
+# Bilateral is added separately via _SQL_YEAR_BILATERAL in _fetch_prms_data.
+# Expected: 2022=477, 2023=872, 2024=1016, 2025=963 (pre-bilateral).
+_SQL_YEAR_INNOVATIONS = """
+SELECT COUNT(DISTINCT result_code) FROM result
+WHERE result_type_id = 7
+  AND source = 'Result'
+  AND is_active = 1
+  AND status_id = 2
+  AND reported_year_id = :year;
 """
 
 # Innovation Use (type 2) and Innovation Package (type 10) for the year use the
@@ -308,40 +300,67 @@ WHERE r.is_active = 1 AND rc.is_active = 1 AND r.source = 'Result'
   AND r.reported_year_id = :year;
 """
 
-# Charts scoped to the canonical Innovation Development slice for the year.
-_SQL_YEAR_TOP_COUNTRIES = _CANON_YEAR_IDS_CTE + """
-SELECT c.name AS country, COUNT(DISTINCT cyi.result_code) AS count
-FROM canon_year_ids cyi
-JOIN result_country rc ON rc.result_id = cyi.result_id AND rc.is_active = 1
+# Charts scoped to the alive-in-year Innovation Development set for the year.
+# Each breakdown joins directly from alive-in-year result rows so the scope
+# is consistent with the headline KPI (type 7, source='Result', is_active=1,
+# status_id=2, reported_year_id=:year).
+_SQL_YEAR_TOP_COUNTRIES = """
+SELECT c.name AS country, COUNT(DISTINCT r.result_code) AS count
+FROM result r
+JOIN result_country rc ON rc.result_id = r.id AND rc.is_active = 1
 JOIN clarisa_countries c ON rc.country_id = c.id
+WHERE r.result_type_id = 7
+  AND r.source = 'Result'
+  AND r.is_active = 1
+  AND r.status_id = 2
+  AND r.reported_year_id = :year
 GROUP BY c.name
 ORDER BY count DESC
 LIMIT 10;
 """
 
-_SQL_YEAR_IRL_DISTRIBUTION = _CANON_YEAR_IDS_CTE + """
-SELECT cirl.name AS level, COUNT(DISTINCT cyi.result_code) AS count
-FROM canon_year_ids cyi
-JOIN results_innovations_dev rid ON rid.results_id = cyi.result_id AND rid.is_active = 1
+_SQL_YEAR_IRL_DISTRIBUTION = """
+SELECT cirl.name AS level, COUNT(DISTINCT r.result_code) AS count
+FROM result r
+JOIN results_innovations_dev rid ON rid.results_id = r.id AND rid.is_active = 1
 JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
+WHERE r.result_type_id = 7
+  AND r.source = 'Result'
+  AND r.is_active = 1
+  AND r.status_id = 2
+  AND r.reported_year_id = :year
 GROUP BY cirl.name, cirl.id
 ORDER BY cirl.id;
 """
 
-_SQL_YEAR_TOP_INITIATIVES = _CANON_YEAR_IDS_CTE + """
-SELECT i.short_name AS initiative, COUNT(DISTINCT cyi.result_code) AS count
-FROM canon_year_ids cyi
-JOIN results_by_inititiative rbi ON rbi.result_id = cyi.result_id AND rbi.initiative_role_id = 1
+_SQL_YEAR_TOP_INITIATIVES = """
+SELECT i.short_name AS initiative, COUNT(DISTINCT r.result_code) AS count
+FROM result r
+JOIN results_by_inititiative rbi ON rbi.result_id = r.id AND rbi.initiative_role_id = 1
 JOIN clarisa_initiatives i ON rbi.inititiative_id = i.id
+WHERE r.result_type_id = 7
+  AND r.source = 'Result'
+  AND r.is_active = 1
+  AND r.status_id = 2
+  AND r.reported_year_id = :year
 GROUP BY i.short_name
 ORDER BY count DESC
 LIMIT 10;
 """
 
-# Results-by-type for a year: each innovation type counted with the dashboard
-# filter scoped to the reporting year. (type 7 uses the canonical W1/W2 count.)
-_SQL_YEAR_RESULTS_BY_TYPE = _CANON_YEAR_IDS_CTE + """
-SELECT 'Innovation Development' AS type, (SELECT COUNT(*) FROM canon_year_ids) AS count
+# Results-by-type chart for a year. Innovation Development bucket = alive-in-year
+# W1/W2 + bilateral, matching the total_innovations KPI (design rule: chart bucket
+# must equal its corresponding KPI card). Types 2 and 10 use Quality-Assessed
+# per-year counts (no dedup needed for these types at year granularity).
+_SQL_YEAR_RESULTS_BY_TYPE = """
+SELECT 'Innovation Development' AS type,
+    (SELECT COUNT(DISTINCT result_code) FROM result
+     WHERE result_type_id = 7 AND source = 'Result' AND is_active = 1 AND status_id = 2
+       AND reported_year_id = :year)
+    +
+    (SELECT COUNT(DISTINCT result_code) FROM result
+     WHERE result_type_id = 7 AND source = 'API' AND is_active = 1 AND status_id = 6
+       AND reported_year_id = :year) AS count
 UNION ALL
 SELECT 'Innovation Use' AS type, (
     SELECT COUNT(DISTINCT result_code) FROM result
@@ -383,9 +402,12 @@ def _fetch_prms_data(year: Optional[int] = None) -> dict[str, Any]:
 
     Args:
         year: If provided (2022-2025), the dashboard is sliced to that reporting
-            year — Innovation Development KPIs and charts use the canonical
-            latest-phase dedup so the headline matches the official annual
-            totals. If None, returns the all-years portfolio view (unchanged).
+            year using ALIVE-IN-YEAR counting: an Innovation Development (type 7)
+            is counted for year X if it has at least one active, Quality-Assessed
+            W1/W2 row in that year. Expected W1/W2 totals: 2022=477, 2023=872,
+            2024=1016, 2025=963 (+222 bilateral = 1185). All breakdown charts
+            (countries, IRL, initiatives, type) use the same alive-in-year scope.
+            If None, returns the all-years portfolio view (headline = 1,852).
 
     Returns the full API response dict. Raises FileNotFoundError if the
     database file does not exist, and sqlite3.Error on query failures.
@@ -430,14 +452,23 @@ def _fetch_prms_data(year: Optional[int] = None) -> dict[str, Any]:
 
         # Add W3/bilateral to total_innovations so the headline reconciles with
         # per-year views in both branches:
-        #   per-year:  W1/W2 canonical (e.g. 963) + bilateral for that year (222) = 1,185
-        #   all-years: W1/W2 canonical (1,630) + bilateral all years (222) = 1,852
+        #   per-year:  W1/W2 alive-in-year (e.g. 963) + bilateral for that year (222) = 1,185
+        #   all-years: W1/W2 latest-dedup (1,630) + bilateral all years (222) = 1,852
+        # For per-year responses, also expose the W1/W2 and bilateral components
+        # as separate callout fields so the UI can show the funding-source breakdown.
         bilateral_sql = _SQL_YEAR_BILATERAL if is_year else _SQL_ALL_YEARS_BILATERAL
         bilateral_label = "year_bilateral" if is_year else "all_years_bilateral"
         try:
-            kpis["total_innovations"] += _scalar(cur, bilateral_sql, params)
+            bilateral_count = _scalar(cur, bilateral_sql, params)
+            if is_year:
+                kpis["total_innovations_w1w2"] = kpis.get("total_innovations", 0)
+                kpis["total_innovations_bilateral"] = bilateral_count
+            kpis["total_innovations"] += bilateral_count
         except sqlite3.Error as exc:
             logger.error("KPI query '%s' failed: %s", bilateral_label, exc)
+            if is_year:
+                kpis["total_innovations_w1w2"] = kpis.get("total_innovations", 0)
+                kpis["total_innovations_bilateral"] = 0
 
         # -- Charts --
         charts: dict[str, Any] = {}

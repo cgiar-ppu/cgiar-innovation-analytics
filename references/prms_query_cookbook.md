@@ -9,12 +9,13 @@
 
 | Metric | All-years | 2022 | 2023 | 2024 | 2025 |
 |--------|-----------|------|------|------|------|
-| Innovation Development (type 7) — alive-in-year | 1,852¹ | **[TBD]** | **[TBD]** | **[TBD]** | **1,185** |
-| Innovation Development (type 7) — latest-phase (alt) | 1,852 | 62 | 160 | 445 | 963+222=1,185 |
-| Innovation Use (type 2) — naive | — | — | — | — | 675 |
-| Innovation Package (type 10) — naive | — | — | — | — | 96 |
+| Innovation Development (type 7) — alive-in-year (**DEFAULT**) | —¹ | **477** | **872** | **1,016** | **1,185** |
+| Innovation Development (type 7) — latest-phase dedup (alt) | **1,852**² | 62 | 160 | 445 | 963+222=1,185 |
+| Innovation Use (type 2) — naive | 675 | — | — | — | — |
+| Innovation Package (type 10) — naive | 96 | — | — | — | — |
 
-¹ All-years total = 1,630 W1/W2 (latest-dedup) + 222 bilateral = 1,852. Always use this for the headline "total innovations" KPI.
+¹ "Alive-in-year" is a per-year concept — sums across years exceed unique innovations because a code reporting in multiple years is counted multiple times. The all-years headline always uses the latest-phase dedup (1,852).  
+² All-years total = 1,630 W1/W2 (latest-dedup) + 222 bilateral = 1,852. Always use this for the headline "total innovations" KPI.
 
 ---
 
@@ -98,40 +99,75 @@ GROUP BY reported_year_id ORDER BY reported_year_id;
 
 ---
 
-## Recipe 3: Alive-in-Year Count (DEFAULT per-year count) ⚠️ PLACEHOLDER
+## Recipe 3: Alive-in-Year Count (DEFAULT per-year count) ✅
 
-**⚠️ STATUS: UNDER VALIDATION — do not use in production until SQL is confirmed.**
-
-**When to use:** User asks "how many innovations in [year X]" without explicit "latest" qualifier.
+**When to use:** User asks "how many innovations in [year X]" without an explicit "latest" qualifier. This is the default per-year interpretation.
 
 ### What / Why
-An innovation counts for year X if it has AT LEAST ONE result row reporting in year X — it was alive and reporting that year. A result_code that reported in 2022, 2023, and 2025 counts for all three years. This is the correct default interpretation.
+An innovation counts for year X if it has AT LEAST ONE active, Quality-Assessed result row with `reported_year_id = X`. A result_code that reported in 2022, 2023, and 2025 counts for all three years separately.
 
-Target numbers (to be confirmed against June 13 DB):
-- 2022: 477
-- 2023: 872
-- 2024: 1,016
-- 2025: 1,185 (963 W1/W2 + 222 bilateral)
+**Why this is the correct default:**
+- "Innovations in 2023" = innovations that were actively reporting in 2023, regardless of whether they continued into later years
+- Latest-phase dedup (Recipe 2) answers a different question: "which year was each innovation last active?" — it assigns each code to exactly one year
+- The dashboard `?year=2023` view shows alive-in-2023 data, not "innovations whose latest phase is 2023"
+
+### Scope routing rule
+**The alive-in-year set is the base population for ALL per-year breakdowns.**
+When computing "innovations in 2023 by country/type/initiative/IRL", the scope is the 872 alive-in-2023 innovations. Join the breakdown dimension table to the same alive-in-year result rows.
 
 ### SQL
+
+**W1/W2 component (per year — all years at once):**
 ```sql
--- ⚠️ PLACEHOLDER — exact filters TBD from alive-in-year investigation
--- For year X (W1/W2 component):
-SELECT COUNT(DISTINCT result_code) as count
+SELECT reported_year_id, COUNT(DISTINCT result_code) AS alive_count
 FROM result
 WHERE result_type_id = 7
   AND source = 'Result'
   AND is_active = 1
-  -- AND status_id = ? -- TBD
-  AND reported_year_id = :year;
-
--- Plus bilateral (2025 only):
--- SELECT COUNT(DISTINCT result_code) FROM result
--- WHERE result_type_id = 7 AND source = 'API' AND status_id = 6 AND is_active = 1
--- AND reported_year_id = :year;
+  AND status_id = 2
+GROUP BY reported_year_id
+ORDER BY reported_year_id;
+-- Output: 2022=477, 2023=872, 2024=1016, 2025=963
 ```
 
-**⚠️ TODO:** Replace with confirmed SQL from task-alive-in-year-sql-result.md investigation.
+**Combined W1/W2 + bilateral, parameterized for year X:**
+```sql
+SELECT COUNT(DISTINCT result_code) AS alive_in_year
+FROM result
+WHERE result_type_id = 7
+  AND reported_year_id = :year
+  AND (
+      (source = 'Result' AND is_active = 1 AND status_id = 2)   -- W1/W2
+      OR
+      (source = 'API'    AND is_active = 1 AND status_id = 6)   -- Bilateral W3
+  );
+-- Returns: 2022→477, 2023→872, 2024→1016, 2025→1185
+```
+
+**Breakdown query pattern (alive-in-year scope → per dimension):**
+```sql
+-- Example: innovations by country for year X (alive-in-year)
+SELECT c.name AS country, COUNT(DISTINCT r.result_code) AS count
+FROM result r
+JOIN result_country rc ON rc.result_id = r.id AND rc.is_active = 1
+JOIN clarisa_countries c ON rc.country_id = c.id
+WHERE r.result_type_id = 7
+  AND r.source = 'Result'
+  AND r.is_active = 1
+  AND r.status_id = 2
+  AND r.reported_year_id = :year
+GROUP BY c.name ORDER BY count DESC LIMIT 10;
+-- Same pattern for IRL (JOIN results_innovations_dev) and initiatives (JOIN results_by_inititiative)
+```
+
+**Expected output (verified against June 13 DB):**
+
+| Year | W1/W2 | Bilateral | Total |
+|------|-------|-----------|-------|
+| 2022 | 477 | 0 | **477** |
+| 2023 | 872 | 0 | **872** |
+| 2024 | 1,016 | 0 | **1,016** |
+| 2025 | 963 | 222 | **1,185** |
 
 ---
 
@@ -183,30 +219,51 @@ ORDER BY count DESC;
 
 ---
 
-## Recipe 5: Per-Year KPI (total_innovations for ?year=X)
+## Recipe 5: Per-Year KPI — `?year=X` Dashboard Endpoint ✅
 
-**When to use:** Dashboard `?year=X` parameter — the KPI headline for a specific year.  
-**Current implementation:** Uses the alive-in-year interpretation.
+**When to use:** Dashboard `?year=X` — headline `total_innovations` KPI for a specific reporting year.  
+**Implementation:** `_SQL_YEAR_INNOVATIONS` + `_SQL_YEAR_BILATERAL` in `prms_dashboard.py`
 
-### SQL (currently in _SQL_YEAR_INNOVATIONS + _SQL_YEAR_BILATERAL)
+### SQL
+
+**W1/W2 component (`_SQL_YEAR_INNOVATIONS`):**
 ```sql
--- W1/W2 for year X (alive-in-year — confirmed as correct):
--- [⚠️ PLACEHOLDER — exact SQL from Recipe 3 once confirmed]
+SELECT COUNT(DISTINCT result_code) FROM result
+WHERE result_type_id = 7
+  AND source = 'Result'
+  AND is_active = 1
+  AND status_id = 2
+  AND reported_year_id = :year;
+-- 2022=477, 2023=872, 2024=1016, 2025=963
+```
 
--- Bilateral for year X:
-SELECT COUNT(DISTINCT result_code) as bilateral
-FROM result
+**Bilateral component (`_SQL_YEAR_BILATERAL`, added separately):**
+```sql
+SELECT COUNT(DISTINCT result_code) FROM result
 WHERE result_type_id = 7 AND source = 'API'
   AND status_id = 6 AND is_active = 1
   AND reported_year_id = :year;
--- 2025: 222, other years: 0
+-- 2025=222, other years=0
 ```
 
-**Expected:**
-- ?year=2022: 477 (to be confirmed)
-- ?year=2023: 872 (to be confirmed)
-- ?year=2024: 1,016 (to be confirmed)
-- ?year=2025: 1,185 (963 + 222) ✅ confirmed
+**API response fields (per-year):**
+```json
+{
+  "kpis": {
+    "total_innovations": 1185,           // combined W1/W2 + bilateral
+    "total_innovations_w1w2": 963,       // callout: W1/W2 component
+    "total_innovations_bilateral": 222   // callout: bilateral component
+  }
+}
+```
+
+**Expected results (verified):**
+| `?year=` | `total_innovations` | `w1w2` | `bilateral` |
+|----------|--------------------|---------|-----------  |
+| 2022 | 477 | 477 | 0 |
+| 2023 | 872 | 872 | 0 |
+| 2024 | 1,016 | 1,016 | 0 |
+| 2025 | **1,185** | 963 | 222 |
 
 ---
 
@@ -263,8 +320,8 @@ The correct pattern: build the candidate set across ALL result types first, then
 
 ## Open Items (Pending Investigation)
 
-### OI-1: Alive-in-year per-year SQL (HIGH PRIORITY)
-Exact SQL to reproduce 477/872/1016/963 not yet confirmed. See `analysis/task-alive-in-year-sql-result.md` when complete.
+### OI-1: Alive-in-year per-year SQL ✅ RESOLVED (2026-06-14)
+SQL confirmed in `analysis/task-alive-in-year-sql-result.md`. Filter: `result_type_id=7, source='Result', is_active=1, status_id=2, reported_year_id=:year`. Outputs: 477/872/1016/963. Implemented in prms_dashboard.py. See Recipe 3.
 
 ### OI-2: Innovation Use canonicalization
 Naive=675, canon CTE=550, export=~624. Root cause unknown. See prms_data_guide.md § 11.2.

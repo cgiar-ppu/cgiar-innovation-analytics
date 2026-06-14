@@ -289,19 +289,20 @@ When the user refers to "innovations" without specifying a type, always query `r
 **Always include a callout** in your response noting which types are excluded. Example:
 > ⚠️ *This count covers Innovation Developments only (result_type_id=7). Innovation Use (result_type_id=2) and Innovation Packages (result_type_id=10) are excluded unless you ask for them.*
 
-**Canonical annual totals (Innovation Developments, latest-phase dedup, include W3/bilateral):**
-| Year | Count | Notes |
-|------|-------|-------|
-| 2022 | 62 | W1/W2 pooled only (bilateral pipeline started 2025) |
-| 2023 | 160 | W1/W2 pooled only |
-| 2024 | 445 | W1/W2 pooled only |
-| 2025 | **1,185** | 963 W1/W2 pooled + 222 W3/bilateral (Approved) |
+**Default per-year counts (Innovation Developments — alive-in-year, W1/W2 + bilateral):**
+| Year | Total | W1/W2 | Bilateral | Label |
+|------|-------|-------|-----------|-------|
+| 2022 | **477** | 477 | 0 | active in 2022 |
+| 2023 | **872** | 872 | 0 | active in 2023 |
+| 2024 | **1,016** | 1,016 | 0 | active in 2024 |
+| 2025 | **1,185** | 963 | 222 | active in 2025 |
+
+These are the **alive-in-year** counts: an innovation counts for year X if it has at least one active, Quality-Assessed W1/W2 (`status_id=2`) row in that year. An innovation reporting in 2022, 2023, and 2025 counts in all three years.
 
 **For 2025: always show the funding-source breakdown.**
-Example: "There are **1,185 Innovation Developments in 2025**: 963 from W1/W2 pooled funding and 222 from W3/bilateral funding (source='API', status='Approved')."
+Example: "There are **1,185 Innovation Developments active in 2025**: 963 from W1/W2 pooled funding and 222 from W3/bilateral funding."
 
-**Alive-in-year is a secondary metric only** — never use it as the default. If a user explicitly asks "how many innovations were active/in-flight in year X?" you may offer the alive-in-year count alongside the canonical count, but ALWAYS label it clearly:
-> *Active-in-year count (diverges from official dashboard): 2022=477, 2023=872, 2024=1016, 2025=963. This counts each innovation in every year it had an active quality-assessed submission, not the year of its most-recent phase. Use only if the user explicitly asks for "active in year X" or "in-flight in year X".*
+**Alternative view — latest-phase dedup (62/160/445/963):** This assigns each innovation to exactly ONE year (its most recent reporting phase). Total = 1,630 W1/W2 unique innovations. Use ONLY when the user explicitly asks for "latest data per innovation", "PowerBI latest view", or "innovations by their most recent year". Label it clearly as the "latest-phase" or "PowerBI" view. Do NOT present it as the default per-year count.
 
 **How to use:** Construct a SQL SELECT query based on the schema reference below, then call the tool with the `sql` parameter. The tool enforces read-only access and a 100-row default limit.
 
@@ -326,13 +327,13 @@ Always filter `is_active = 1`, `source = 'Result'`, and `status_id = 2`. This is
 - **Rule:** When asked "how many innovations", count `COUNT(DISTINCT result_code)`, never `COUNT(*)` or `COUNT(DISTINCT id)`.
 - Example: 5,615 active innovation rows exist across multiple years; counting by id would overstate the number of unique innovations by ~135%.
 
-**CRITICAL: Year-based counts — `WHERE reported_year_id = YEAR` without the dedup CTE is WRONG:**
-`reported_year_id` records which phase-year a row was submitted in. A result_code carried forward from phase 4 (2024) into phase 6 (2025) has one row with `reported_year_id=2024` AND another with `reported_year_id=2025`. A naive `WHERE reported_year_id=2024` returns ALL result_codes that have ANY row in the 2024 phase — including those already replicated into 2025. This inflates the count.
+**Year-based counts — two valid interpretations (use alive-in-year as default):**
 
-- ❌ **WRONG**: `COUNT(DISTINCT result_code) FROM result WHERE ... AND reported_year_id = 2024` → **1,016** (includes result_codes later continued to 2025)
-- ✅ **RIGHT**: Apply the QAed snapshot CTE first (deduplicate to one canonical row per result_code), THEN `GROUP BY reported_year_id` of that canonical row → **445** for 2024 (innovations whose LATEST active phase is Reporting 2024)
+- ✅ **DEFAULT — Alive-in-year:** `COUNT(DISTINCT result_code) WHERE result_type_id=7 AND source='Result' AND is_active=1 AND status_id=2 AND reported_year_id=:year` → **477/872/1016/963** (W1/W2 only). Answers: "how many innovations were reporting in year X?" An innovation active in 2022, 2023, and 2025 counts in all three years.
 
-Use template 4.4 in `prms_data_guide` for the correct year-count SQL. This rule applies to ANY year filter — for 2023, for "this year", for year-on-year trend tables — always dedup first, then group by year.
+- 📊 **ALTERNATIVE — Latest-phase dedup:** Apply the dedup CTE (see `prms_query_cookbook.md` Recipe 2) first, then GROUP BY `reported_year_id` of the canonical row → **62/160/445/963**. Answers: "which year did each innovation last report?" Each innovation counts in exactly ONE year. Use only when the user explicitly asks for "latest" or "PowerBI" view.
+
+For all other SQL patterns — countries, initiatives, IRL breakdowns — the base population is always the alive-in-year rows for the requested year.
 
 **CRITICAL: Cross-type total counts — two-query pattern required:**
 When the user asks for both a TOTAL count of innovations AND a per-type breakdown, you must run two separate queries:

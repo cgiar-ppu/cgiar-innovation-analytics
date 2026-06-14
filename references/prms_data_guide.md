@@ -10,16 +10,37 @@
 
 These are **locked**. They were reproduced exactly from `prdb_fresh.sqlite` using the corrected dedup CTE (Section 4) and verified 1:1 against the dashboard's Innovation Developments Excel export (1,630 rows; one row per logical innovation).
 
-### Innovation Developments — W1/W2 pooled, by year (the default count)
+### Innovation Developments — W1/W2 pooled, ALIVE-IN-YEAR (the default per-year count)
 
-| Year | W1/W2 count |
-|------|-------------|
-| 2022 | **62**  |
-| 2023 | **160** |
-| 2024 | **445** |
-| 2025 | **963** |
+| Year | W1/W2 alive-in-year | W3/bilateral | **Total** |
+|------|---------------------|--------------|-----------|
+| 2022 | **477** | 0 | **477** |
+| 2023 | **872** | 0 | **872** |
+| 2024 | **1,016** | 0 | **1,016** |
+| 2025 | **963** | **222** | **1,185** |
 
-These match the **CGIAR Results Dashboard export exactly** for all four years. The Excel export's `Year` column value-counts are 62 / 160 / 445 / 963 — identical to the corrected CTE output.
+**Alive-in-year** counts an innovation in year X if it has at least one active, Quality-Assessed (`status_id=2`) W1/W2 (`source='Result'`) row with `reported_year_id = X`. A result_code that reported in 2022, 2023, and 2025 counts in all three years. These are the correct default answers for "how many innovations in year X?"
+
+Verified SQL (June 13 DB):
+```sql
+SELECT reported_year_id, COUNT(DISTINCT result_code) AS alive_count
+FROM result WHERE result_type_id=7 AND source='Result' AND is_active=1 AND status_id=2
+GROUP BY reported_year_id ORDER BY reported_year_id;
+-- 2022=477, 2023=872, 2024=1016, 2025=963 ✓
+```
+
+### Innovation Developments — LATEST-PHASE DEDUP (alternative view)
+
+The **latest-phase dedup** assigns each innovation to exactly ONE year — the year of its most-recent Quality-Assessed phase. These numbers match the CGIAR Results Dashboard Excel export's `Year` column value-counts (one row per logical innovation).
+
+| Year | W1/W2 latest-phase | Notes |
+|------|-------------------|-------|
+| 2022 | **62** | Innovations whose LAST phase is in 2022 |
+| 2023 | **160** | |
+| 2024 | **445** | |
+| 2025 | **963** | + 222 bilateral = **1,185** grand total |
+
+**Sum check:** 62+160+445+963 = **1,630** W1/W2 unique innovations (all-years headline before bilateral). See Section 4 for the dedup CTE. Use this view only when the user explicitly asks for "latest data per innovation" or "PowerBI latest" — it is NOT the default per-year count.
 
 ### Innovation Developments — 2025 grand total (pooled + bilateral)
 
@@ -179,8 +200,15 @@ ORDER BY reported_year_id;
 
 > All templates are SQLite, validated against `prdb_fresh.sqlite`. Join satellites on `result.id`; dedup/count on `result_code`. Filter `is_active = 1` everywhere.
 
-### 6.1 Count by year — W1/W2 only (the default)
-The corrected dedup CTE from Section 4. **Output: 2022=62, 2023=160, 2024=445, 2025=963.**
+### 6.1 Count by year — W1/W2 only (the default — ALIVE-IN-YEAR)
+```sql
+SELECT reported_year_id, COUNT(DISTINCT result_code) AS alive_count
+FROM result WHERE result_type_id=7 AND source='Result' AND is_active=1 AND status_id=2
+GROUP BY reported_year_id ORDER BY reported_year_id;
+```
+**Output: 2022=477, 2023=872, 2024=1016, 2025=963.**
+
+For the latest-phase dedup alternative (62/160/445/963), use the corrected dedup CTE from Section 4.
 
 ### 6.2 Count by year — including bilateral (dashboard grand total)
 ```sql
