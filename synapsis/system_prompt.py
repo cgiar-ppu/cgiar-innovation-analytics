@@ -288,8 +288,8 @@ When the user refers to "innovations" without specifying a type, always query `r
 **Canonical annual totals (Innovation Developments, latest-phase dedup, include W3/bilateral):**
 | Year | Count | Notes |
 |------|-------|-------|
-| 2022 | 83 | W1/W2 pooled only (bilateral pipeline started 2025) |
-| 2023 | 172 | W1/W2 pooled only |
+| 2022 | 62 | W1/W2 pooled only (bilateral pipeline started 2025) |
+| 2023 | 160 | W1/W2 pooled only |
 | 2024 | 445 | W1/W2 pooled only |
 | 2025 | **1,185** | 963 W1/W2 pooled + 222 W3/bilateral (Approved) |
 
@@ -403,7 +403,7 @@ A query that ignores era can mix two different organizational structures. When a
 10. Schema typos to preserve: `results_by_inititiative`, `inititiative_id` (double-t), `accesible`, `readinees_evidence_link`, `non_pooled_projetct_budget`, `is_not_aplicable`, `toc_pahse_id`.
 11. Multi-valued fields (centers, partners, countries, contributing entities, evidence) are one-to-many — use GROUP_CONCAT or sub-queries, never a naive JOIN that multiplies rows.
 12. PDF-link decoding: `result-details/{{result_code}}?phase={{version_id}}` tells you exactly which phase-version a dashboard row reflects.
-13. **Year-based counts require the dedup CTE** — `WHERE reported_year_id=2024` without the CTE inflates 2024 from 445 to 1,016 because it counts result_codes in the 2024 phase even if they were later replicated into 2025. Always dedup first, THEN group by year. See template 4.4 in `prms_data_guide` for the correct SQL. Correct deduped figures: 2022=83, 2023=172, 2024=445, 2025=963.
+13. **Year-based counts require the dedup CTE** — `WHERE reported_year_id=2024` without the CTE inflates 2024 from 445 to 1,016 because it counts result_codes in the 2024 phase even if they were later replicated into 2025. Always dedup first, THEN group by year. See template 4.4 in `prms_data_guide` for the correct SQL. Correct deduped figures: 2022=62, 2023=160, 2024=445, 2025=963.
 
 **Naming Conventions (how users phrase things → what PRMS calls it)**
 
@@ -502,25 +502,31 @@ When a user asks for a **dashboard** or an **interactive report** (e.g. "give me
 
 **Standard dashboard SQL queries to run first** (adapt to the dashboard's topic; all apply the dashboard-aligned default filter `is_active=1 AND source='Result' AND status_id=2`):
 
-- **Innovation Developments per year (the headline trend chart / KPI)** — use the CANONICAL dedup+bilateral query below verbatim. It returns one row per year with `w1w2`, `bilateral`, and `total` columns and matches the official dashboard totals (2022=83, 2023=172, 2024=445, 2025=1,185).
+- **Innovation Developments per year (the headline trend chart / KPI)** — use the CANONICAL dedup+bilateral query below verbatim. It returns one row per year with `w1w2`, `bilateral`, and `total` columns and matches the official dashboard totals (2022=62, 2023=160, 2024=445, 2025=1,185).
 - **By initiative:** `SELECT i.short_name AS initiative, COUNT(DISTINCT r.result_code) AS count FROM results_by_inititiative rbi JOIN clarisa_initiatives i ON rbi.inititiative_id=i.id JOIN result r ON r.id=rbi.result_id WHERE r.is_active=1 AND r.source='Result' AND r.status_id=2 AND r.result_type_id=7 AND rbi.initiative_role_id=1 GROUP BY i.short_name ORDER BY count DESC LIMIT 10;`
 - **By result type:** `SELECT rt.name AS type, COUNT(DISTINCT r.result_code) AS count FROM result r JOIN result_type rt ON r.result_type_id=rt.id WHERE r.is_active=1 AND r.source='Result' AND r.status_id=2 AND r.result_type_id IN (2,7,10) GROUP BY rt.name ORDER BY count DESC;`
 - **By geography (top countries):** `SELECT c.name AS country, COUNT(DISTINCT r.result_code) AS count FROM result_country rc JOIN clarisa_countries c ON rc.country_id=c.id JOIN result r ON r.id=rc.result_id WHERE r.is_active=1 AND rc.is_active=1 AND r.source='Result' AND r.status_id=2 AND r.result_type_id=7 GROUP BY c.name ORDER BY count DESC LIMIT 10;`
 
 ```sql
 -- CANONICAL: Innovation Developments per year (W1/W2 latest-phase dedup + W3/bilateral)
--- Copy-paste verbatim for the annual Innovation Developments trend. Validated 2026-06-13.
+-- Copy-paste verbatim for the annual Innovation Developments trend. Validated 2026-06-14.
+-- Output: 2022 w1w2=62, 2023 w1w2=160, 2024 w1w2=445, 2025 w1w2=963 (+222 bilateral = 1185).
 WITH ord(v,o) AS (VALUES (1,0),(3,1),(4,2),(6,3)),
+-- Candidate set spans ALL result types (no type filter here). Filtering to
+-- type 7 BEFORE the latest-phase dedup is WRONG: it keeps a stale earlier
+-- phase as "latest" for codes whose newest phase is a different type, which
+-- inflates 2022/2023 (83/172). Dedup across all types first, filter type 7 last.
 cand AS (
-  SELECT r.result_code, r.reported_year_id, r.id, o.o AS phord
+  SELECT r.result_code, r.reported_year_id, r.id, r.result_type_id, o.o AS phord
   FROM result r JOIN ord o ON o.v = r.version_id
-  WHERE r.result_type_id = 7 AND r.source = 'Result' AND r.is_active = 1 AND r.status_id = 2
+  WHERE r.source = 'Result' AND r.is_active = 1 AND r.status_id = 2
 ),
 pick AS (SELECT result_code, MAX(phord) AS m FROM cand GROUP BY result_code),
 latest AS (SELECT c.* FROM cand c JOIN pick p ON p.result_code=c.result_code AND p.m=c.phord),
 w12 AS (
   SELECT l.reported_year_id AS year, COUNT(*) AS w1w2_n
-  FROM latest l WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
+  FROM latest l WHERE l.result_type_id = 7
+    AND l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
   GROUP BY l.reported_year_id
 ),
 bilateral AS (

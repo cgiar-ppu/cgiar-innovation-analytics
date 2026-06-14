@@ -139,7 +139,7 @@ LIMIT 10;
 # ---------------------------------------------------------------------------
 # When a specific year is requested, the dashboard is sliced to that reporting
 # year. We anchor the Innovation Development slice to the CANONICAL latest-phase
-# dedup (matching the official annual totals 2022=83, 2023=172, 2024=445,
+# dedup (matching the official annual totals 2022=62, 2023=160, 2024=445,
 # 2025=1,185 for W1/W2 'Result' source), so the headline KPI is dashboard-
 # aligned rather than the inflated "alive-in-year" count.
 #
@@ -149,10 +149,16 @@ LIMIT 10;
 # is consistent with the headline number. :year is bound twice via named params.
 _CANON_YEAR_IDS_CTE = """
 WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
+-- Candidate set spans ALL result types (no type filter here). Filtering to
+-- type 7 BEFORE the latest-phase dedup is WRONG: it keeps a stale earlier
+-- phase as "latest" for codes whose newest phase is a different type, which
+-- inflated 2022/2023 to 83/172. Dedup across all types first, then filter
+-- result_type_id = 7 at the very end (in canon_year_ids). This yields the
+-- canonical W1/W2 counts 2022=62, 2023=160, 2024=445, 2025=963.
 cand AS (
-    SELECT r.result_code, r.reported_year_id, r.id, o.o AS phord
+    SELECT r.result_code, r.reported_year_id, r.id, r.result_type_id, o.o AS phord
     FROM result r JOIN ord o ON o.v = r.version_id
-    WHERE r.result_type_id = 7 AND r.source = 'Result'
+    WHERE r.source = 'Result'
       AND r.is_active = 1 AND r.status_id = 2
 ),
 pick AS (SELECT result_code, MAX(phord) AS m FROM cand GROUP BY result_code),
@@ -165,7 +171,8 @@ canon AS (
     WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
 ),
 canon_year_ids AS (
-    SELECT id AS result_id, result_code FROM canon WHERE reported_year_id = :year
+    SELECT id AS result_id, result_code FROM canon
+    WHERE result_type_id = 7 AND reported_year_id = :year
 )
 """
 
