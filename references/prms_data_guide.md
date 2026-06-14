@@ -454,3 +454,89 @@ The dashboard's per-year counts **ARE reproducible from the SQLite DB alone** us
 | 5 | Pending Review | API Bilateral Status |
 | 6 | Approved | **W3/bilateral dashboard-published gate** (API Bilateral Status) |
 | 7 | Rejected | API Bilateral Status (failed QA — excluded) |
+
+---
+
+## 11. Open Items — Innovation Use and Innovation Package Canonicalization
+
+These items are explicitly deferred from Phase 2 and must not be silently
+resolved without a dedicated investigation.
+
+### 11.1 Innovation Development — FULLY CANONICALIZED ✅
+
+Innovation Development (result_type_id=7) is the only type that has been fully
+canonicalized in the dashboard. The methodology is:
+
+1. Latest-phase dedup CTE: candidate set spans ALL result types
+   (source='Result', is_active=1, status_id=2); latest phase selected by
+   version_id priority order (1→3→4→6); tie-break by MAX(id).
+2. Filter to result_type_id=7 at the end → W1/W2 all-years total = 1,630
+   (2022=62, 2023=160, 2024=445, 2025=963).
+3. Plus bilateral W3 (source='API', status_id=6, is_active=1,
+   result_type_id=7) = 222 (all 2025).
+4. Headline = 1,630 + 222 = **1,852**.
+
+All dashboard outputs (KPI card, results_by_type chart bucket, per-year
+endpoints) use this methodology. There is no "2,003" or "2,003-anywhere"
+contradiction remaining.
+
+### 11.2 Innovation Use (result_type_id=2) — open ⚠️
+
+Three counts exist and do not reconcile:
+
+| Source | Count | Filter |
+|--------|-------|--------|
+| Dashboard KPI (`_SQL_INNOVATION_USES`) | **675** | `is_active=1, result_type_id=2` (naive) |
+| Canon CTE (dedup + status_id=2) | **550** | `source='Result', is_active=1, status_id=2, result_type_id=2` |
+| Export (row count from CSV) | **~624** | per-year filter on the PRMS export |
+
+The 675 figure is used in both the KPI card and the results_by_type chart
+bucket so they are currently consistent (no visible contradiction), but the
+methodology differs from the Innovation Development treatment.
+
+**Root cause not yet investigated.** Possible explanations: Innovation Use
+results carry a different status_id distribution; some active type-2 rows have
+source='API'; the export uses a different year filter. **Do not assume 675 is
+canonical** — it has not been cross-checked against the live PRMS dashboard.
+
+**Action required:** Run the canonical counts by status_id for result_type_id=2;
+compare against the export and the live dashboard export for a single year;
+decide whether to adopt a canonical methodology or document 675 as the
+agreed-upon figure.
+
+### 11.3 Innovation Package (result_type_id=10) — open ⚠️
+
+| Source | Count | Filter |
+|--------|-------|--------|
+| Dashboard KPI (`_SQL_INNOVATION_PACKAGES`) | **96** | `is_active=1, result_type_id=10` (naive) |
+| Canon CTE (dedup + status_id=2) | **0** | `source='Result', is_active=1, status_id=2, result_type_id=10` |
+
+The canon CTE returns zero because **no type-10 rows in the current DB snapshot
+satisfy `source='Result' AND status_id=2`**. This means Innovation Packages
+are either submitted under a different source (e.g. 'API', or 'Initiative
+bilateral result') or carry a different status_id than the W1/W2 gate (2 =
+Quality Assessed).
+
+This is a data characteristic of the DB snapshot, not a query bug. The 96
+figure used by the KPI and chart bucket may be correct, or it may be
+over-counting active-but-not-QAed packages.
+
+**Action required:** Check `SELECT DISTINCT source, status_id, COUNT(*) FROM
+result WHERE result_type_id=10 AND is_active=1 GROUP BY source, status_id;`
+to understand the source/status landscape for type-10 results. Compare against
+the live PRMS dashboard package count. Define and document the canonical
+methodology before any further changes to the Innovation Package count.
+
+### 11.4 Dashboard chart — current state (Phase 2 close)
+
+The all-years `results_by_type` chart currently uses:
+
+| Type | Methodology | Expected value | KPI match? |
+|------|-------------|----------------|------------|
+| Innovation Development | Canon CTE + bilateral | **1,852** | ✅ |
+| Innovation Use | Naive (`is_active=1`) | **675** | ✅ |
+| Innovation Package | Naive (`is_active=1`) | **96** | ✅ |
+
+All three chart buckets match their KPI cards (no visible contradictions).
+Types 2 and 10 are intentionally left on naive counts until their canonical
+methodologies are established in a follow-up investigation.

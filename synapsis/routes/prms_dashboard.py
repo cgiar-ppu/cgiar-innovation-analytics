@@ -125,16 +125,28 @@ SELECT COUNT(DISTINCT result_code) FROM result
 WHERE is_active = 1 AND result_type_id = 10;
 """
 
-# All-years results-by-type chart: each bucket uses the same methodology as its
-# year-scoped counterpart (_SQL_YEAR_RESULTS_BY_TYPE):
-#   - All three types share the same dedup CTE (source='Result', is_active=1,
-#     status_id=2) so the candidate pool is consistent across types.
-#   - Innovation Development (type 7): deduped W1/W2 count (1,630) PLUS
-#     bilateral/W3 (source='API', status_id=6, is_active=1) (222) = 1,852.
-#     This makes the chart bucket equal the total_innovations KPI headline.
-#   - Innovation Use (type 2) and Innovation Package (type 10): deduped count
-#     from the same canon CTE, matching the methodology of _SQL_YEAR_USES and
-#     _SQL_YEAR_PACKAGES. Previously used naive is_active-only counts.
+# All-years results-by-type chart.
+#
+# Design rule: every bucket MUST equal its corresponding KPI card so a user
+# never sees two different numbers for the same thing on the default view.
+#
+# - Innovation Development (type 7): latest-phase dedup CTE across ALL result
+#   types (source='Result', is_active=1, status_id=2) then filter to type 7
+#   = 1,630 W1/W2, PLUS bilateral W3 (source='API', status_id=6) = 222.
+#   Chart bucket = 1,852 = total_innovations KPI. Fully canonicalized. ✅
+#
+# - Innovation Use (type 2): naive is_active=1 count, matching
+#   _SQL_INNOVATION_USES. Chart bucket = 675 = innovation_uses KPI. The
+#   canonical (dedup + status_id=2) count yields 550, and the export yields
+#   ~624. These divergences are a known open item (see prms_data_guide.md
+#   § Open Items). Using naive here keeps chart and KPI in sync.
+#
+# - Innovation Package (type 10): naive is_active=1 count, matching
+#   _SQL_INNOVATION_PACKAGES. Chart bucket = 96 = innovation_packages KPI.
+#   The canonical (dedup + status_id=2) count is 0 because no type-10 rows
+#   satisfy source='Result' AND status_id=2 in this DB — a known open item
+#   (see prms_data_guide.md § Open Items). Using naive here keeps chart and
+#   KPI in sync until the data characteristic is understood.
 _SQL_RESULTS_BY_TYPE = """
 WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
 cand AS (
@@ -159,10 +171,12 @@ SELECT 'Innovation Development' AS type,
        AND status_id = 6 AND is_active = 1) AS count
 UNION ALL
 SELECT 'Innovation Use' AS type,
-    (SELECT COUNT(*) FROM canon WHERE result_type_id = 2) AS count
+    (SELECT COUNT(DISTINCT result_code) FROM result
+     WHERE is_active = 1 AND result_type_id = 2) AS count
 UNION ALL
 SELECT 'Innovation Package' AS type,
-    (SELECT COUNT(*) FROM canon WHERE result_type_id = 10) AS count
+    (SELECT COUNT(DISTINCT result_code) FROM result
+     WHERE is_active = 1 AND result_type_id = 10) AS count
 ORDER BY count DESC;
 """
 
