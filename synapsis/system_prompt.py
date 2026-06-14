@@ -274,7 +274,7 @@ You have read-only access to the CGIAR PRMS (Performance and Results Management 
 
 | File | Path | Content |
 |------|------|---------|
-| **PRMS Query Cookbook** | `/Users/smithai/workspace/cgiar-innovation-analytics/references/prms_query_cookbook.md` | **START HERE for any PRMS/data question.** Question-type → verified SQL pattern map. Recipes for all-years total (1,852), per-year alive-in-year (placeholder), latest-phase dedup alternative (1,630), results-by-type chart, and per-year KPIs. Anti-patterns and open items documented. |
+| **PRMS Query Cookbook** | `/Users/smithai/workspace/cgiar-innovation-analytics/references/prms_query_cookbook.md` | **START HERE for any PRMS/data question.** Question-type → verified SQL pattern map. Recipes for all-years total (1,852), per-year alive-in-year (Recipes 3 & 5, verified: 477/872/1016/1185), latest-phase dedup alternative (62/160/445/963), results-by-type chart, and per-year KPIs. Anti-patterns and open items documented. |
 | PRMS Data Guide | `/Users/smithai/workspace/cgiar-innovation-analytics/references/prms_data_guide.md` | Validated SQL templates, table relationships, query gotchas, and business rules for PRMS queries (authoritative query reference) |
 | Comprehensive PRMS Reference | `/Users/smithai/workspace/knowledge-infrastructure/outputs/20260613_160826_assemble-a-comprehensive-self-contained-technical-and-busin/4e_PRMS_reference_FINAL.md` | Full PRMS business logic: reporting phases, result types, terminology, and all gotchas |
 | PRMSDB Documentation | `/Users/smithai/workspace/coding/PRMSDB/outputs/PRMSDB_Documentation_Report.md` | Technical DB schema documentation with table-level field descriptions |
@@ -356,9 +356,9 @@ WHERE is_active = 1
 
 `status_id = 2` ("Quality Assessed") is the de-facto **dashboard publication gate** — it is the condition that determines whether a result is "published to the dashboard". A ~2% residual over-inclusion vs the live dashboard is expected (it comes from a manually-refreshed semantic-model gate that cannot be fully reproduced from stored fields) — surface it as a caveat, not an error.
 
-**Dashboard-aligned deduplication (QAed snapshot selector)** — use when showing the "current state" of each innovation, and whenever you need numbers that match the official Results Dashboard exports.
+**Dashboard-aligned deduplication (QAed snapshot selector — ALL-YEARS HEADLINE ONLY)** — use for the all-years headline total (1,852 = 1,630 W1/W2 + 222 bilateral) or when comparing to official dashboard "total innovations" exports. Do NOT use for per-year counts — per-year always uses alive-in-year (477/872/1016/963 W1/W2; see the per-year default table above).
 
-This is the ONLY pattern that matches the official dashboard exports (validated 2026-06-13 against the live DB, 100% row recall). It dedups to one row per `result_code` by choosing the latest phase in the result's reporting CHAIN — NOT the latest calendar year. `MAX(reported_year_id)` is WRONG: the dashboard uses a phase-chain ordering (Reporting 1→3→4→6, IPSR 2→5→7) that is not the same as year ordering.
+It dedups to one row per `result_code` by choosing the latest phase in the result's reporting CHAIN — NOT the latest calendar year. `MAX(reported_year_id)` is WRONG: the dashboard uses a phase-chain ordering (Reporting 1→3→4→6, IPSR 2→5→7) that is not the same as year ordering.
 
 ```sql
 WITH ord(v,o) AS (VALUES (1,0),(3,1),(4,2),(6,3)),   -- Reporting chain
@@ -396,7 +396,7 @@ A query that ignores era can mix two different organizational structures. When a
 
 **Business Rules & Critical Gotchas** (from the PRMS data guide, Section 5 — internalize these before writing any query):
 
-1. Dashboard counts use the QAed snapshot — `source='Result' AND is_active=1 AND status_id=2`, deduped to one row per `result_code` (latest phase in its chain). This is the SINGLE most important rule.
+1. **Per-year counts use alive-in-year (NOT the dedup CTE):** `source='Result' AND is_active=1 AND status_id=2 AND reported_year_id=:year` yields 477/872/1016/963 W1/W2 (add 222 bilateral for 2025 total = 1,185). **All-years headline** uses the QAed snapshot deduped to one row per `result_code` (latest phase in chain) = 1,852 total. These are two different queries for two different purposes — do not conflate them. This is the SINGLE most important rule.
 2. `status_id=2` = "Quality Assessed" is the de-facto "published to dashboard" gate. A ~2% residual over-inclusion vs the live dashboard is expected (manually-refreshed semantic-model gate) — surface as a caveat, not an error.
 3. Funding filter: `source='Result'` = W1/W2 pooled; `source='API'` = W3/Bilateral. NEVER silently mix them.
 4. Join satellites on `result.id`, dedup/count on `result_code`. Mixing them causes double-counting.
@@ -408,7 +408,7 @@ A query that ignores era can mix two different organizational structures. When a
 10. Schema typos to preserve: `results_by_inititiative`, `inititiative_id` (double-t), `accesible`, `readinees_evidence_link`, `non_pooled_projetct_budget`, `is_not_aplicable`, `toc_pahse_id`.
 11. Multi-valued fields (centers, partners, countries, contributing entities, evidence) are one-to-many — use GROUP_CONCAT or sub-queries, never a naive JOIN that multiplies rows.
 12. PDF-link decoding: `result-details/{{result_code}}?phase={{version_id}}` tells you exactly which phase-version a dashboard row reflects.
-13. **Year-based counts require the dedup CTE** — `WHERE reported_year_id=2024` without the CTE inflates 2024 from 445 to 1,016 because it counts result_codes in the 2024 phase even if they were later replicated into 2025. Always dedup first, THEN group by year. See template 4.4 in `prms_data_guide` for the correct SQL. Correct deduped figures: 2022=62, 2023=160, 2024=445, 2025=963.
+13. **Year-based per-year counts use alive-in-year (NOT the dedup CTE)** — `WHERE reported_year_id=:year AND source='Result' AND is_active=1 AND status_id=2` gives the correct alive-in-year figures: **2022=477, 2023=872, 2024=1,016, 2025=963** (W1/W2 only; add 222 bilateral for 2025 total = 1,185). Do NOT apply the phase-dedup CTE for per-year counts. The CTE output (62/160/445/963) is the ALTERNATIVE latest-phase view that assigns each innovation to its most recent reporting year only — use only when explicitly requested ("latest data", "PowerBI view").
 
 **Naming Conventions (how users phrase things → what PRMS calls it)**
 
