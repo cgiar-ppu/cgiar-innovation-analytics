@@ -264,7 +264,7 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
-            VolumeSize: 30
+            VolumeSize: 31
             VolumeType: gp3
             Encrypted: true
       Tags:
