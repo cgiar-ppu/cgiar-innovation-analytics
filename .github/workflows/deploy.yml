@@ -64,13 +64,13 @@ jobs:
       # Checkout
       # -----------------------------------------------------------------
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5.0.1
 
       # -----------------------------------------------------------------
       # AWS Authentication (OIDC)
       # -----------------------------------------------------------------
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.2.0
         with:
           role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
