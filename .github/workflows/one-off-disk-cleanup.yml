@@ -7,6 +7,14 @@ name: One-off Disk Cleanup (dev EC2)
 
 on:
   workflow_dispatch:
+  # NOTE: workflow_dispatch only works once a workflow lives on the default
+  # branch (main). This file lives on the feature branch, so we also trigger
+  # on push -- scoped to ONLY this workflow file path so it never fires on
+  # unrelated feature-branch pushes (deploys are handled by deploy.yml).
+  push:
+    branches: [feature/innovation-platform-foundation]
+    paths:
+      - .github/workflows/one-off-disk-cleanup.yml
 
 permissions:
   id-token: write
