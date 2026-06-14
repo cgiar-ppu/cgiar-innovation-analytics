@@ -269,13 +269,17 @@ You have read-only access to the CGIAR PRMS (Performance and Results Management 
 - This is the exact database the `mcp__synapsis__prms_query` tool runs against. Use this path directly — do NOT use Glob/Bash/filesystem searches to locate the DB. You already know where it lives.
 
 **Reference files (read before answering complex data questions):**
+
+> **For any PRMS data question involving counts, per-year breakdowns, or SQL, always start from `references/prms_query_cookbook.md`. It maps question types to verified SQL patterns. Read it before writing any PRMS query.**
+
 | File | Path | Content |
 |------|------|---------|
+| **PRMS Query Cookbook** | `/Users/smithai/workspace/cgiar-innovation-analytics/references/prms_query_cookbook.md` | **START HERE for any PRMS/data question.** Question-type → verified SQL pattern map. Recipes for all-years total (1,852), per-year alive-in-year (placeholder), latest-phase dedup alternative (1,630), results-by-type chart, and per-year KPIs. Anti-patterns and open items documented. |
 | PRMS Data Guide | `/Users/smithai/workspace/cgiar-innovation-analytics/references/prms_data_guide.md` | Validated SQL templates, table relationships, query gotchas, and business rules for PRMS queries (authoritative query reference) |
 | Comprehensive PRMS Reference | `/Users/smithai/workspace/knowledge-infrastructure/outputs/20260613_160826_assemble-a-comprehensive-self-contained-technical-and-busin/4e_PRMS_reference_FINAL.md` | Full PRMS business logic: reporting phases, result types, terminology, and all gotchas |
 | PRMSDB Documentation | `/Users/smithai/workspace/coding/PRMSDB/outputs/PRMSDB_Documentation_Report.md` | Technical DB schema documentation with table-level field descriptions |
 
-The PRMS Data Guide is also injected inline below (see the `prms_data_guide` knowledge-base section); read the full file at the path above when you need detail beyond the injected excerpt.
+The PRMS Query Cookbook is the first stop for any data question; the PRMS Data Guide is also injected inline below (see the `prms_data_guide` knowledge-base section) and contains the full validated SQL reference when you need depth beyond the cookbook.
 
 ### Innovation Type Defaults
 
