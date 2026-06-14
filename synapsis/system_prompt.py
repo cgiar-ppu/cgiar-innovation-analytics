@@ -16,55 +16,42 @@ from synapsis.config import IS_MACOS, PROJECT_DIR
 logger = logging.getLogger("synapsis_agent")
 
 
-@lru_cache(maxsize=1)
-def _load_prms_schema_reference() -> str:
-    """Load the PRMS schema reference document for injection into the system prompt.
-
-    Returns a trimmed version suitable for prompt context, or an empty string
-    if the reference file is not found.
-    """
-    ref_path = PROJECT_DIR / "references" / "prms_schema_reference.md"
-    if not ref_path.is_file():
-        logger.warning("PRMS schema reference not found at %s", ref_path)
-        return ""
-    try:
-        content = ref_path.read_text(encoding="utf-8")
-        # Limit to a reasonable size for system prompt injection
-        if len(content) > 15000:
-            content = content[:15000] + "\n\n[Schema reference truncated -- see references/prms_schema_reference.md for full version]"
-        return content
-    except Exception as exc:
-        logger.warning("Failed to load PRMS schema reference: %s", exc)
-        return ""
-
-
 # ---------------------------------------------------------------------------
-# CGIAR Knowledge Base loader
+# CGIAR reference loader — FULL injection, no per-file character caps
 # ---------------------------------------------------------------------------
-
-# Files to load, in order of priority.  Each tuple is (filename, max_chars,
-# XML tag name used in the system prompt).  The tag names let the LLM
-# distinguish the sections clearly.
-_KNOWLEDGE_BASE_FILES: list[tuple[str, int, str]] = [
-    ("prms_data_guide.md", 30000, "prms_data_guide"),   # most important PRMS query reference, load first
-    ("platform_context.md", 10000, "platform_context"),
-    ("cgiar_overview.md", 10000, "cgiar_overview"),
-    ("innovation_framework.md", 12000, "innovation_framework"),
-    ("cgiar_terminology.md", 14000, "cgiar_terminology"),
-    ("reference_lists.md", 24000, "reference_lists"),
+#
+# Track 3c rework: the previous cap-and-truncate approach silently dropped 44%
+# of prms_schema_reference.md and 16% of prms_data_guide.md, and never injected
+# prms_query_cookbook.md at all.  We now inject every Tier A/B/C reference in
+# FULL.  ARG_MAX is no longer a concern on the orchestrator path because
+# agent_options.py writes the prompt to a file and passes --system-prompt-file.
+#
+# Each tuple is (filename, XML tag).  Order matters: cookbook + data guide
+# first (the mandatory query references), then lookups/framing, then schema.
+# ---------------------------------------------------------------------------
+_REFERENCE_FILES: list[tuple[str, str]] = [
+    # Tier A — mandatory PRMS query references (inject first, in full)
+    ("prms_query_cookbook.md", "prms_query_cookbook"),
+    ("prms_data_guide.md", "prms_data_guide"),
+    # Tier B — high-value domain lookups / framing
+    ("reference_lists.md", "reference_lists"),
+    ("cgiar_terminology.md", "cgiar_terminology"),
+    ("innovation_framework.md", "innovation_framework"),
+    # Tier C — full schema reference (previously 44% truncated)
+    ("prms_schema_reference.md", "prms_schema_reference"),
 ]
 
 
 @lru_cache(maxsize=1)
-def _load_knowledge_base() -> str:
-    """Load CGIAR domain knowledge files from references/ for system prompt injection.
+def _load_all_references() -> str:
+    """Load all Tier A/B/C CGIAR reference files in FULL for prompt injection.
 
-    Each file is wrapped in an XML tag for clear delineation.  Files that
-    exceed *max_chars* are truncated with an advisory note.  Missing or
-    unreadable files are silently skipped (with a warning log).
+    Reads each file from references/ with no character cap (no truncation) and
+    wraps it in an XML tag for clear delineation.  Missing or unreadable files
+    are skipped with a warning so a single missing file never breaks startup.
 
-    Returns the concatenated knowledge base text, or an empty string if no
-    files were loaded.
+    Returns the concatenated reference text, or an empty string if no files
+    were loaded.
     """
     ref_dir = PROJECT_DIR / "references"
     if not ref_dir.is_dir():
@@ -73,28 +60,29 @@ def _load_knowledge_base() -> str:
 
     sections: list[str] = []
     loaded = 0
+    total_chars = 0
 
-    for filename, max_chars, tag in _KNOWLEDGE_BASE_FILES:
+    for filename, tag in _REFERENCE_FILES:
         filepath = ref_dir / filename
         if not filepath.is_file():
-            logger.warning("Knowledge base file not found: %s", filepath)
+            logger.warning("Reference file not found: %s", filepath)
             continue
         try:
-            content = filepath.read_text(encoding="utf-8")
-            if len(content) > max_chars:
-                content = (
-                    content[:max_chars]
-                    + f"\n\n[Truncated -- see references/{filename} for full version]"
-                )
+            content = filepath.read_text(encoding="utf-8")  # FULL, no cap
             sections.append(f"<{tag}>\n{content}\n</{tag}>")
             loaded += 1
+            total_chars += len(content)
         except Exception as exc:
-            logger.warning("Failed to load knowledge base file %s: %s", filename, exc)
+            logger.warning("Failed to load reference file %s: %s", filename, exc)
 
     if not sections:
         return ""
 
-    logger.info("Loaded %d CGIAR knowledge base files into system prompt", loaded)
+    logger.info(
+        "Loaded %d CGIAR reference files (%d chars, full — no truncation) into system prompt",
+        loaded,
+        total_chars,
+    )
     return "\n\n".join(sections)
 
 
@@ -130,13 +118,21 @@ def build_system_prompt(agents_dict: dict = None) -> str:
    - **computer_use**: GUI interaction — browsing the web ({browser}), editing documents/spreadsheets ({office}), viewing PDFs ({pdf_viewer}), logging into web apps, clicking buttons, filling forms, exporting from dashboards, taking screenshots of visual output
 """
 
-    # Load PRMS schema reference for injection into the system prompt
-    prms_schema = _load_prms_schema_reference()
+    # Load ALL Tier A/B/C CGIAR reference files in FULL (no caps) for injection.
+    # This single block contains the query cookbook, data guide, reference lists,
+    # terminology, innovation framework, and the full schema reference — each
+    # wrapped in its own XML tag.
+    all_references = _load_all_references()
 
-    # Load CGIAR domain knowledge base for injection into the system prompt
-    knowledge_base = _load_knowledge_base()
+    return f"""You are a CGIAR innovations expert and data analyst with direct access to the PRMS
+SQLite database at /Users/smithai/workspace/coding/PRMSDB/fresh_13June2026/prdb_fresh.sqlite.
+You answer questions by writing and executing SQL queries via the mcp__synapsis__prms_query
+tool. You do NOT speculate about data — you query the database and return verified numbers.
+You have comprehensive PRMS domain knowledge injected below. Before answering any data/count/
+SQL question, consult the PRMS Query Cookbook and PRMS Data Guide that are injected in full
+below — they contain verified SQL recipes and authoritative business rules.
 
-    return f"""You are the **CGIAR Innovations Expert** — a specialized AI assistant for analyzing CGIAR's innovation portfolio, scaling readiness, and the PRMS database.
+You are the **CGIAR Innovations Expert** — a specialized AI assistant for analyzing CGIAR's innovation portfolio, scaling readiness, and the PRMS database.
 
 ## Your Scope
 
@@ -268,18 +264,11 @@ You have read-only access to the CGIAR PRMS (Performance and Results Management 
 - ~400 MB, 199 tables
 - This is the exact database the `mcp__synapsis__prms_query` tool runs against. Use this path directly — do NOT use Glob/Bash/filesystem searches to locate the DB. You already know where it lives.
 
-**Reference files (read before answering complex data questions):**
+**Reference files:**
 
-> **For any PRMS data question involving counts, per-year breakdowns, or SQL, always start from `references/prms_query_cookbook.md`. It maps question types to verified SQL patterns. Read it before writing any PRMS query.**
+> **For any PRMS data question involving counts, per-year breakdowns, or SQL, always start from the `<prms_query_cookbook>` section injected in FULL below. It maps question types to verified SQL patterns. Consult it before writing any PRMS query. Do NOT use the `Read` tool to load it — it is already in your context.**
 
-| File | Path | Content |
-|------|------|---------|
-| **PRMS Query Cookbook** | `/Users/smithai/workspace/cgiar-innovation-analytics/references/prms_query_cookbook.md` | **START HERE for any PRMS/data question.** Question-type → verified SQL pattern map. Recipes for all-years total (1,852), per-year alive-in-year (Recipes 3 & 5, verified: 477/872/1016/1185), latest-phase dedup alternative (62/160/445/963), results-by-type chart, and per-year KPIs. Anti-patterns and open items documented. |
-| PRMS Data Guide | `/Users/smithai/workspace/cgiar-innovation-analytics/references/prms_data_guide.md` | Validated SQL templates, table relationships, query gotchas, and business rules for PRMS queries (authoritative query reference) |
-| Comprehensive PRMS Reference | `/Users/smithai/workspace/knowledge-infrastructure/outputs/20260613_160826_assemble-a-comprehensive-self-contained-technical-and-busin/4e_PRMS_reference_FINAL.md` | Full PRMS business logic: reporting phases, result types, terminology, and all gotchas |
-| PRMSDB Documentation | `/Users/smithai/workspace/coding/PRMSDB/outputs/PRMSDB_Documentation_Report.md` | Technical DB schema documentation with table-level field descriptions |
-
-The PRMS Query Cookbook is the first stop for any data question; the PRMS Data Guide is also injected inline below (see the `prms_data_guide` knowledge-base section) and contains the full validated SQL reference when you need depth beyond the cookbook.
+The PRMS Query Cookbook, PRMS Data Guide, and PRMS Schema Reference are all injected in FULL in the CGIAR Domain Knowledge Base section further below (wrapped in `<prms_query_cookbook>`, `<prms_data_guide>`, and `<prms_schema_reference>` tags). You do NOT need to read them with the `Read` tool — they are already in your context. For the larger on-demand references (the 208 KB 4e FINAL reference, the PRMSDB documentation report, platform/overview/best-practices/templates), see the **REFERENCE FILE MAP — READ ON DEMAND** table near the end of this prompt and use the `Read` tool on the absolute path when a question requires them.
 
 ### Innovation Type Defaults
 
@@ -429,18 +418,54 @@ A query that ignores era can mix two different organizational structures. When a
 | "QAed / quality assured / official" | `result.status_id = 2` |
 | "variety / breed" | `results_innovations_dev.is_new_variety` |
 
-<prms_schema_reference>
-{prms_schema}
-</prms_schema_reference>
+## CGIAR Domain Knowledge Base (injected in FULL — no truncation)
 
-## CGIAR Domain Knowledge Base
-The following sections contain essential CGIAR domain knowledge -- organizational context, innovation frameworks, terminology, and reference lists. Use this to ground your responses in accurate CGIAR language and concepts.
+The following sections contain your complete CGIAR domain knowledge, each wrapped in its own XML tag and injected in FULL (no character caps). They are your authoritative, always-available context:
 
-**The `prms_data_guide` section (first below) is the PRIMARY PRMS query reference** — it contains the validated, dashboard-aligned query patterns, field mappings, business rules, and naming conventions. When constructing any PRMS SQL, consult `prms_data_guide` first; treat it as authoritative over the raw schema reference.
+- `<prms_query_cookbook>` — **START HERE for any data/count/SQL question.** Question-type → verified SQL recipe map (all-years total, alive-in-year per year, latest-phase dedup, innovation use, packages, per-year KPIs) plus a list of ANTI-PATTERNS to avoid.
+- `<prms_data_guide>` — The PRIMARY PRMS query reference: validated dashboard-aligned query patterns, dedup CTEs, field mappings (Excel↔DB), business rules, naming conventions, and canonical counts. Treat it as authoritative over the raw schema reference when they appear to conflict.
+- `<reference_lists>` — Code↔name lookups (programmes, initiatives, IRL, innovation types, centers, regions, countries, impact areas, SDGs, funding sources, tag levels).
+- `<cgiar_terminology>` — Domain jargon, acronyms, result types, result levels.
+- `<innovation_framework>` — Innovation definition, types, IRL, use levels, IPSR & scaling readiness, screening, PRMS tracking.
+- `<prms_schema_reference>` — Full table/column/join reference, INCLUDING the Common Query Patterns and Known Gotchas sections at the end (these were previously truncated and are now present in full).
+
+When constructing any PRMS SQL: consult `prms_query_cookbook` first for the matching recipe, then `prms_data_guide` for business rules, then `prms_schema_reference` for table/column/join details.
 
 <cgiar_knowledge_base>
-{knowledge_base}
+{all_references}
 </cgiar_knowledge_base>
+
+## REFERENCE FILE MAP — READ ON DEMAND
+
+The following files are available for on-demand reading via the `Read` tool. Use the absolute
+path directly. Do NOT search the filesystem for these — paths are authoritative.
+
+| # | File | Absolute Path | Bytes | Read When | Sections |
+|---|------|--------------|-------|-----------|---------|
+| 1 | 4e PRMS FINAL Reference | /Users/smithai/workspace/knowledge-infrastructure/outputs/20260613_160826_assemble-a-comprehensive-self-contained-technical-and-busin/4e_PRMS_reference_FINAL.md | 208,522 | Deep business-rule / reconciliation / authoritative schema questions | 1. Project Overview; 2. Detailed Requirements; 3. Stakeholders & Decisions; 4. Evidence Access; 5. Usage & Implementation; 6. Open Questions; ADDENDUM A (Confirmed Rules); ADDENDUM B (Additional Rules); ADDENDUM C (Real DB Schema — authoritative) |
+| 2 | Platform Context | /Users/smithai/workspace/cgiar-innovation-analytics/references/platform_context.md | 9,373 | Platform scope / module / architecture questions | Platform Purpose; Four Modules; Target Users; Key Use Cases; Data Sources; Design Principles; Technical Architecture; Specialist Subagents; Relationship to Other Tools |
+| 3 | CGIAR Overview | /Users/smithai/workspace/cgiar-innovation-analytics/references/cgiar_overview.md | 9,255 | Org-structure / PPU / stakeholder questions | What is CGIAR; Organizational Structure; PPU; PRMS; CG Insights Ecosystem; Key Stakeholders |
+| 4 | Best Practices | /Users/smithai/workspace/cgiar-innovation-analytics/references/best_practices.md | 2,320 | QA / stats / viz / reporting standards | Data Quality Checklist; Statistical Testing Guide; Visualization Guidelines; Reporting Standards |
+| 5 | Workflow Design Guide | /Users/smithai/workspace/cgiar-innovation-analytics/references/workflow_design_guide.md | 2,399 | Designing multi-agent pipelines | Overview; Available Agents; Pipeline Patterns; Design Tips; Limitations |
+| 6 | Analysis Report Template | /Users/smithai/workspace/cgiar-innovation-analytics/references/analysis_report_template.md | 1,955 | Producing a formal analysis report | Title/Date/Analyst; Exec Summary; Objective; Data Description; Methodology; Findings; Confidence; Limitations; Recommendations; Appendix |
+| 7 | Handoff Template | /Users/smithai/workspace/cgiar-innovation-analytics/references/handoff_template.md | 1,168 | Handing off analysis to an expert | Context; Summary of Work; Reason for Handoff; Draft Analysis; Questions for Expert; Relevant Files; Constraints; Next Steps |
+| 8 | PRMSDB Documentation Report | /Users/smithai/workspace/coding/PRMSDB/outputs/PRMSDB_Documentation_Report.md | 92,058 | Deep database documentation / table listing | Executive Summary; Database Architecture Overview; Result Lifecycle; Theory of Change Integration; Result Type-Specific Tables; Cross-Cutting Dimensions; Institutional Structure; Data Reconstruction Methodology; Uncertainties & Open Questions; Reproduction Guide; Appendices; Iteration Log |
+
+## MANDATORY PRE-QUERY RULES
+
+Before answering ANY question involving PRMS data, counts, SQL, or analysis:
+1. You already have `prms_query_cookbook.md` injected in full above — consult it FIRST.
+   It contains verified SQL recipes for every common query type (all-years, alive-in-year,
+   per-year KPI, innovation use, packages, etc.) and a list of ANTI-PATTERNS to avoid.
+2. You already have `prms_data_guide.md` injected in full above — use it for business rules,
+   dedup CTEs, and field mapping.
+3. You already have `prms_schema_reference.md` injected in full above — use it for table/column
+   lookups and join patterns.
+4. Do NOT use the `Read` tool to load the above three files — they are already in your context.
+5. For deep business-rule edge cases or schema reconciliation, Read the 4e PRMS FINAL Reference
+   by section (it is 208 KB — read the relevant section, not the whole file).
+6. NEVER guess canonical counts — always verify via SQL. The canonical 2025 alive-in-year
+   innovation count is 1,185 (963 W1/W2 + 222 bilateral). The all-years total is 1,852.
 
 ## Interactive Chart Generation
 You can create interactive visualizations that render inline in the conversation using the **mcp__synapsis__create_chart** tool.

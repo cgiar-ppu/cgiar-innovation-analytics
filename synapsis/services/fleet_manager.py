@@ -5,12 +5,35 @@ Claude Code processes via ``claude -p --resume``.
 """
 
 import asyncio
+import contextlib
 import json
+import os
 import re
+import tempfile
 import time
 from typing import Callable, Awaitable
 
 from synapsis.config import logger, WORKSPACE
+
+
+def _write_system_prompt_tempfile(prompt_text: str) -> str:
+    """Write a system prompt to a temp file and return its absolute path.
+
+    Mirrors the orchestrator's --system-prompt-file mechanism in
+    ``synapsis/agent_options.py``: passing a large system prompt inline via
+    ``--system-prompt`` can exceed ARG_MAX (E2BIG / [Errno 7]) on Linux. Writing
+    it to a file and passing ``--system-prompt-file`` avoids that ceiling. The
+    caller is responsible for removing the file after the subprocess completes.
+    """
+    fd, path = tempfile.mkstemp(suffix=".txt", prefix="fleet-sp-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(prompt_text)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+        raise
+    return path
 from synapsis.database.fleet_operations import (
     create_fleet_agent, update_fleet_agent,
     update_agent_session, update_agent_status,
@@ -48,11 +71,15 @@ class FleetManager:
         Captures the session_id from JSON output for future ``--resume``.
         Returns the agent's response and session_id.
         """
+        # Write the system prompt to a temp file and pass --system-prompt-file
+        # instead of inline --system-prompt to avoid ARG_MAX (E2BIG) on large
+        # prompts. Mirrors the orchestrator mechanism in agent_options.py.
+        sp_file = _write_system_prompt_tempfile(system_prompt)
         cmd = [
             "claude", "-p", initial_task,
             "--output-format", "json",
             "--allowedTools", allowed_tools,
-            "--system-prompt", system_prompt,
+            "--system-prompt-file", sp_file,
             "--permission-mode", "acceptEdits",
         ]
 
@@ -79,6 +106,8 @@ class FleetManager:
                 raise TimeoutError(f"Agent {agent_id} timed out after {_AGENT_TIMEOUT}s")
             finally:
                 self._active_processes.pop(agent_id, None)
+                with contextlib.suppress(OSError):
+                    os.unlink(sp_file)
 
             output = stdout.decode("utf-8", errors="replace")
 
@@ -334,12 +363,16 @@ class FleetManager:
                 "message": f"Phase 1: Analyzing {analysis_target}",
             })
 
-        # Phase 1 — run the temporary initializer agent (no DB record needed)
+        # Phase 1 — run the temporary initializer agent (no DB record needed).
+        # Write the system prompt to a temp file and pass --system-prompt-file
+        # instead of inline --system-prompt to avoid ARG_MAX (E2BIG) on large
+        # prompts. Mirrors the orchestrator mechanism in agent_options.py.
+        sp_file = _write_system_prompt_tempfile(initializer_prompt)
         cmd = [
             "claude", "-p", initializer_task,
             "--output-format", "json",
             "--allowedTools", "Bash,Read,Glob,Grep",
-            "--system-prompt", initializer_prompt,
+            "--system-prompt-file", sp_file,
             "--permission-mode", "acceptEdits",
         ]
 
@@ -361,6 +394,9 @@ class FleetManager:
                 raise TimeoutError(
                     f"Initializer for '{agent_name}' timed out after {_AGENT_TIMEOUT}s"
                 )
+            finally:
+                with contextlib.suppress(OSError):
+                    os.unlink(sp_file)
 
             output = stdout.decode("utf-8", errors="replace")
 
