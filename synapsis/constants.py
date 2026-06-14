@@ -145,7 +145,30 @@ MEMORY_CATEGORIES: list[str] = [
 # Default model names (used as fallbacks in config.py)
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL: str = "claude-opus-4-6"
+DEFAULT_MODEL: str = "claude-sonnet-4-6"
+"""Default orchestrator model — Claude Sonnet 4.6 (fast, 1M context).
+
+This is the default selection in the chat model-selector pill. Users can
+switch the active session to Opus 4.8 via the selector (see SELECTABLE_MODELS).
+Override the server-wide default via the ``SYNAPSIS_MODEL`` env var."""
+
+# ---------------------------------------------------------------------------
+# Selectable models — exposed in the chat UI model-selector pill
+# ---------------------------------------------------------------------------
+
+SELECTABLE_MODELS: list[dict[str, str]] = [
+    {"id": "claude-sonnet-4-6", "label": "Sonnet 4.6"},
+    {"id": "claude-opus-4-8[1m]", "label": "Opus 4.8 (1M)"},
+]
+"""Curated models exposed in the chat UI model selector.
+
+Each entry has an ``id`` (passed to the SDK as the model override) and a short
+``label`` for the UI pill/dropdown. Sonnet 4.6 is the default; Opus 4.8 (1M)
+is the more powerful option. Exposed via GET /api/config as
+``selectable_models``."""
+
+SELECTABLE_MODEL_IDS: set[str] = {m["id"] for m in SELECTABLE_MODELS}
+"""Set of model IDs accepted by the ``switch_model`` WebSocket frame."""
 
 # ---------------------------------------------------------------------------
 # AUP / Policy error detection

@@ -48,6 +48,31 @@ export function finalizeThinking(state: ChatState) {
     if (lastThinking && lastThinking.content === prev.streamingThinking) {
       return { streamingThinking: '' }
     }
+
+    // Merge consecutive thinking into a single block instead of emitting a
+    // separate thinking message (and pill) for every interleaved text chunk.
+    // Extended-thinking models alternate thinking/text many times per turn,
+    // which previously produced 15-20 transient "thinking" pills. We collapse
+    // them: if the most recent message is itself a thinking block from the
+    // current turn, append the new reasoning to it rather than creating a new
+    // entry. The expandable ThinkingBlock that shows the full reasoning text is
+    // preserved — it just shows a single, consolidated block per turn.
+    const lastMsg = prev.messages[prev.messages.length - 1]
+    if (lastMsg && lastMsg.role === 'thinking') {
+      const mergedContent = `${lastMsg.content}\n\n${prev.streamingThinking}`
+      const mergedMessages = prev.messages.slice(0, -1)
+      mergedMessages.push({
+        ...lastMsg,
+        content: mergedContent,
+        timestamp: Date.now(),
+        isActive: false,
+      })
+      return {
+        messages: mergedMessages,
+        streamingThinking: '',
+      }
+    }
+
     return {
       messages: [
         ...prev.messages,

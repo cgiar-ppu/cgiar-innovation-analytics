@@ -1,0 +1,500 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CGIAR Innovation Analytics Service - EC2 instance running Docker container
+  with optional ALB/HTTPS (when ACM cert is provided), or direct HTTP access.
+
+# =============================================================================
+# Metadata - cfn-lint configuration
+# =============================================================================
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+        - W2001  # Parameters may appear unused but are referenced in UserData via Sub intrinsic
+        - W1030  # SubnetId2 is typed as String (not AWS::EC2::Subnet::Id) because it is optional with default ''
+
+# =============================================================================
+# Parameters
+# =============================================================================
+Parameters:
+  Stage:
+    Type: String
+    AllowedValues: [dev, staging, prod, feature]
+    Description: Deployment stage
+
+  InstanceType:
+    Type: String
+    Default: t3.large
+    AllowedValues: [t3.small, t3.medium, t3.large, t3.xlarge, t3.2xlarge]
+    Description: EC2 instance type
+
+  DomainName:
+    Type: String
+    Default: synapsis-analytics.com
+    Description: Base domain name
+
+  SubdomainPrefix:
+    Type: String
+    Default: innovation-analytics
+    Description: Subdomain prefix (final domain = prefix-stage.domain)
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for ALB and EC2
+
+  SubnetId1:
+    Type: AWS::EC2::Subnet::Id
+    Description: First public subnet (AZ-a) for ALB and EC2
+
+  SubnetId2:
+    Type: String
+    Default: ''
+    Description: Second public subnet (AZ-b) for ALB (required only when using ALB)
+
+  HostedZoneId:
+    Type: String
+    Default: ''
+    Description: Route53 hosted zone ID for DNS record (required only when using ALB)
+
+  AcmCertificateArn:
+    Type: String
+    Default: ''
+    Description: ACM certificate ARN for HTTPS (leave empty for HTTP-only mode)
+
+  EcrImageTag:
+    Type: String
+    Default: latest
+    Description: Docker image tag to deploy
+
+# =============================================================================
+# Conditions
+# =============================================================================
+Conditions:
+  HasAcmCert: !Not [!Equals [!Ref AcmCertificateArn, '']]
+  NoAcmCert: !Equals [!Ref AcmCertificateArn, '']
+  HasHostedZone: !Not [!Equals [!Ref HostedZoneId, '']]
+  HasAcmCertAndHostedZone: !And
+    - !Condition HasAcmCert
+    - !Condition HasHostedZone
+
+# =============================================================================
+# Mappings
+# =============================================================================
+Mappings:
+  StageMap:
+    dev:
+      SubdomainSuffix: "-dev"
+      ScStage: dev
+    staging:
+      SubdomainSuffix: "-staging"
+      ScStage: tst
+    prod:
+      SubdomainSuffix: ""
+      ScStage: prd
+    feature:
+      SubdomainSuffix: "-feature"
+      ScStage: dev
+
+# =============================================================================
+# Resources
+# =============================================================================
+Resources:
+
+  # ---------------------------------------------------------------------------
+  # NOTE: SSM Parameters and ECR Repository are managed by the deploy workflow
+  # (NOT by CloudFormation) to avoid ResourceExistenceCheck conflicts.
+  # The workflow creates them before CloudFormation runs.
+  # ---------------------------------------------------------------------------
+
+  # ---------------------------------------------------------------------------
+  # Security Groups
+  # ---------------------------------------------------------------------------
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: HasAcmCert
+    Properties:
+      GroupDescription: CGIAR Innovation Analytics ALB - HTTPS from internet
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub cgiar-ia-${Stage}-alb-sg
+        - Key: Project
+          Value: cgiar-ia
+        - Key: Environment
+          Value: !Ref Stage
+
+  AgentSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: CGIAR Innovation Analytics EC2 security group
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub cgiar-ia-${Stage}-ec2-sg
+        - Key: Project
+          Value: cgiar-ia
+        - Key: Environment
+          Value: !Ref Stage
+
+  # When ALB exists: allow inbound on 7780 from ALB security group only
+  AgentIngressFromALB:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasAcmCert
+    Properties:
+      GroupId: !Ref AgentSecurityGroup
+      IpProtocol: tcp
+      FromPort: 7780
+      ToPort: 7780
+      SourceSecurityGroupId: !Ref ALBSecurityGroup
+
+  # When no ALB: allow inbound on 7780 from anywhere (direct HTTP access)
+  AgentIngressDirect:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: NoAcmCert
+    Properties:
+      GroupId: !Ref AgentSecurityGroup
+      IpProtocol: tcp
+      FromPort: 7780
+      ToPort: 7780
+      CidrIp: 0.0.0.0/0
+
+  # ---------------------------------------------------------------------------
+  # IAM Role for EC2
+  # ---------------------------------------------------------------------------
+  AgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub cgiar-ia-${Stage}-ec2-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: SSMParameterRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cgiar-ia-${Stage}/*
+        - PolicyName: ECRPull
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                Resource: '*'
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - cloudwatch:PutMetricData
+                Resource: '*'
+
+  AgentInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub cgiar-ia-${Stage}-ec2-profile
+      Roles:
+        - !Ref AgentRole
+
+  # NOTE: ECR Repository is created by the deploy workflow, not CloudFormation.
+
+  # ---------------------------------------------------------------------------
+  # EC2 Instance (with guaranteed public IP via NetworkInterface)
+  # ---------------------------------------------------------------------------
+  AgentInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref AgentInstanceProfile
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          SubnetId: !Ref SubnetId1
+          AssociatePublicIpAddress: true
+          GroupSet:
+            - !Ref AgentSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub cgiar-ia-${Stage}
+        - Key: Project
+          Value: cgiar-ia
+        - Key: Environment
+          Value: !Ref Stage
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euo pipefail
+            exec > /var/log/user-data.log 2>&1
+
+            echo "=== CGIAR Innovation Analytics bootstrap ==="
+            STAGE="${Stage}"
+            REGION="${AWS::Region}"
+            ACCOUNT="${AWS::AccountId}"
+            ECR_REPO="${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cgiar-ia-service"
+            IMAGE_TAG="${EcrImageTag}"
+            CONTAINER_NAME="cgiar-innovation-analytics"
+            SSM_PREFIX="/cgiar-ia-${Stage}"
+
+            # --- Install Docker ---
+            dnf install -y docker
+            systemctl enable docker && systemctl start docker
+            usermod -aG docker ec2-user
+
+            # --- Fetch secrets from SSM ---
+            ANTHROPIC_KEY=$(aws ssm get-parameter --name "$SSM_PREFIX/anthropic-api-key" \
+              --with-decryption --query 'Parameter.Value' --output text --region "$REGION" 2>/dev/null || echo "")
+
+            # --- Login to ECR and pull image ---
+            aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com"
+            docker pull "$ECR_REPO:$IMAGE_TAG" || echo "WARN: Image pull failed (first deploy?)"
+
+            # --- Stop old container if running ---
+            docker stop "$CONTAINER_NAME" 2>/dev/null || true
+            docker rm "$CONTAINER_NAME" 2>/dev/null || true
+            docker image prune -af --filter "until=24h" || true
+
+            # --- Run container ---
+            docker run -d \
+              --name "$CONTAINER_NAME" \
+              --restart always \
+              --log-driver=awslogs \
+              --log-opt awslogs-region="$REGION" \
+              --log-opt awslogs-group="/cgiar-ia/${Stage}" \
+              --log-opt awslogs-stream="cgiar-innovation-analytics" \
+              --log-opt awslogs-create-group=true \
+              --log-opt mode=non-blocking \
+              --log-opt max-buffer-size=4m \
+              -p 7780:7780 \
+              -e AWS_REGION="$REGION" \
+              -e ANTHROPIC_API_KEY="$ANTHROPIC_KEY" \
+              -e SYNAPSIS_PORT="7780" \
+              -e SYNAPSIS_HOST="0.0.0.0" \
+              -e SYNAPSIS_PLATFORM="linux" \
+              -e SYNAPSIS_WORKSPACE="/workspace" \
+              -e PRMS_DB_PATH="/app/data/prdb.sqlite" \
+              -e SYNAPSIS_MODEL="claude-opus-4-6" \
+              -e SYNAPSIS_FALLBACK_MODEL="claude-sonnet-4-5-20250929" \
+              -e SYNAPSIS_MAX_TURNS="200" \
+              -e GIT_SHA="$IMAGE_TAG" \
+              "$ECR_REPO:$IMAGE_TAG"
+
+            # --- Wait for health check ---
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:7780/api/health >/dev/null 2>&1; then
+                echo "Health check passed after ${!i}s"
+                break
+              fi
+              sleep 2
+            done
+
+            # --- Install and configure CloudWatch Agent ---
+            echo "=== Installing CloudWatch Agent ==="
+            dnf install -y amazon-cloudwatch-agent
+
+            cat > /opt/aws/amazon-cloudwatch-agent/etc/config.json << 'CWEOF'
+            {
+              "metrics": {
+                "namespace": "CGIAR-IA/${Stage}",
+                "metrics_collected": {
+                  "mem": {
+                    "measurement": ["mem_used_percent", "mem_available"],
+                    "metrics_collection_interval": 60
+                  },
+                  "disk": {
+                    "measurement": ["disk_used_percent"],
+                    "resources": ["/"],
+                    "metrics_collection_interval": 300
+                  },
+                  "cpu": {
+                    "measurement": ["cpu_usage_active"],
+                    "metrics_collection_interval": 60
+                  }
+                }
+              }
+            }
+            CWEOF
+
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+              -a fetch-config -m ec2 \
+              -c file:/opt/aws/amazon-cloudwatch-agent/etc/config.json -s
+
+            echo "CloudWatch Agent started"
+
+            echo "=== Bootstrap complete ==="
+          - ScStage: !FindInMap [StageMap, !Ref Stage, ScStage]
+
+  # ---------------------------------------------------------------------------
+  # CloudWatch Log Group
+  # ---------------------------------------------------------------------------
+  AgentLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /cgiar-ia/${Stage}
+      RetentionInDays: 30
+      Tags:
+        - Key: Project
+          Value: cgiar-ia
+        - Key: Environment
+          Value: !Ref Stage
+
+  # ---------------------------------------------------------------------------
+  # Application Load Balancer (conditional - only when ACM cert is provided)
+  # ---------------------------------------------------------------------------
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Condition: HasAcmCert
+    Properties:
+      Name: !Sub cgiar-ia-${Stage}
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref SubnetId1
+        - !Ref SubnetId2
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '4000'
+        - Key: routing.http.desync_mitigation_mode
+          Value: 'monitor'
+      Tags:
+        - Key: Project
+          Value: cgiar-ia
+        - Key: Environment
+          Value: !Ref Stage
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: HasAcmCert
+    Properties:
+      Name: !Sub cgiar-ia-${Stage}-tg
+      Port: 7780
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: instance
+      Targets:
+        - Id: !Ref AgentInstance
+          Port: 7780
+      HealthCheckPath: /api/health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: 'true'
+        - Key: stickiness.type
+          Value: lb_cookie
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: '3600'
+      Tags:
+        - Key: Project
+          Value: cgiar-ia
+        - Key: Environment
+          Value: !Ref Stage
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasAcmCert
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref AcmCertificateArn
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ---------------------------------------------------------------------------
+  # Route53 DNS Record (conditional)
+  # ---------------------------------------------------------------------------
+  DNSRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasAcmCertAndHostedZone
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub
+        - "${SubdomainPrefix}${Suffix}.${DomainName}"
+        - Suffix: !FindInMap [StageMap, !Ref Stage, SubdomainSuffix]
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ALB.DNSName
+        HostedZoneId: !GetAtt ALB.CanonicalHostedZoneID
+
+# =============================================================================
+# Outputs
+# =============================================================================
+Outputs:
+  AgentURL:
+    Description: URL for the service (HTTPS via ALB or HTTP via EC2 public IP)
+    Value: !If
+      - HasAcmCert
+      - !Sub
+        - "https://${SubdomainPrefix}${Suffix}.${DomainName}"
+        - Suffix: !FindInMap [StageMap, !Ref Stage, SubdomainSuffix]
+      - !Sub "http://${AgentInstance.PublicIp}:7780"
+
+  InstanceId:
+    Description: EC2 instance ID (for SSM commands)
+    Value: !Ref AgentInstance
+
+  InstancePublicIp:
+    Description: EC2 public IP address
+    Value: !GetAtt AgentInstance.PublicIp
+
+  ALBDnsName:
+    Condition: HasAcmCert
+    Description: ALB DNS name
+    Value: !GetAtt ALB.DNSName
+
+  ECRRepoUri:
+    Description: ECR repository URI
+    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cgiar-ia-service
+
+  SecurityGroupId:
+    Description: EC2 security group ID
+    Value: !Ref AgentSecurityGroup
+
+  HasALB:
+    Description: Whether the stack has an ALB (for CI/CD health check routing)
+    Value: !If [HasAcmCert, 'true', 'false']

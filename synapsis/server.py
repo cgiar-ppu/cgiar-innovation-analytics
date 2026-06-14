@@ -39,6 +39,8 @@ from synapsis.routes import (
     agent_query_router,
     skills_router,
     fleet_router,
+    prms_dashboard_router,
+    images_router,
 )
 from synapsis.websocket import ws_chat, get_activity_stats, cleanup_session_client
 from synapsis.workflow_ws import ws_workflow
@@ -81,6 +83,8 @@ app.include_router(git_router)
 app.include_router(agent_query_router)
 app.include_router(skills_router)
 app.include_router(fleet_router)
+app.include_router(prms_dashboard_router)
+app.include_router(images_router)
 
 # -- Register WebSocket endpoints --
 app.websocket("/ws/chat")(ws_chat)
@@ -97,6 +101,18 @@ async def on_startup():
     await init_workflow_db()
     await init_fleet_db()
     logger.info("Databases initialized (chat, workflow, fleet)")
+
+    # Ensure analytical indexes exist on the PRMS `result` table. The PRMS DB is
+    # periodically replaced with a fresh artifact that ships without indexes, so
+    # we (re)create them at every startup via CREATE INDEX IF NOT EXISTS. Mirrors
+    # the PRMS_DB_PATH resolution used by prms_query.py / prms_dashboard.py.
+    from synapsis.db_init import ensure_result_indexes
+    _prms_db_path = _os.getenv(
+        "PRMS_DB_PATH",
+        "/Users/smithai/workspace/coding/PRMSDB/prdb.sqlite",
+    )
+    ensure_result_indexes(_prms_db_path)
+    logger.info("PRMS result-table indexes ensured (%s)", _prms_db_path)
 
     # Start the background idle session reaper
     from synapsis.session import session_manager as _sm

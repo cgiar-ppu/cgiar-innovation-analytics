@@ -7,8 +7,8 @@ interface ActivityChartProps {
 
 export default function ActivityChart({ data }: ActivityChartProps) {
   return (
-    <div className="glass rounded-xl border border-[var(--border)] p-5">
-      <h3 className="text-sm font-medium text-[var(--text-muted)] mb-4">Activity (Last 7 Days)</h3>
+    <div className="bg-[var(--surface-solid)] rounded-xl border border-[var(--border)] shadow-sm p-5">
+      <h3 className="text-sm font-semibold text-[var(--text)] font-serif mb-4">Activity (Last 7 Days)</h3>
       <div className="h-48">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>

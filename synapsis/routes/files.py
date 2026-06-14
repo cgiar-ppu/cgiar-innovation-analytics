@@ -54,9 +54,18 @@ async def list_files():
     return {"files": files}
 
 
+# Image/inline-renderable extensions are served WITHOUT a forced-download
+# Content-Disposition so the chat UI can display them inline via <img> tags.
+_INLINE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+
+
 @router.get("/files/{filename:path}")
 async def download_file(filename: str):
-    """Download a file from the workspace by relative path."""
+    """Serve a file from the workspace by relative path.
+
+    Images are served inline (so the chat UI can render them in <img> tags);
+    all other file types are served as downloads.
+    """
     path = (WORKSPACE / filename).resolve()
     workspace_resolved = WORKSPACE.resolve()
     # Prevent path traversal attacks
@@ -64,4 +73,7 @@ async def download_file(filename: str):
         raise HTTPException(403, "Access denied: path outside workspace")
     if not path.exists() or not path.is_file():
         raise HTTPException(404, "File not found")
+    if path.suffix.lower() in _INLINE_EXTENSIONS:
+        # Inline disposition — browser renders rather than forcing a download.
+        return FileResponse(path, content_disposition_type="inline")
     return FileResponse(path, filename=path.name)

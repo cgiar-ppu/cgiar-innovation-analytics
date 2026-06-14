@@ -63,11 +63,23 @@ export interface NewMemory {
  * Application configuration returned by `GET /api/config`.
  * Drives feature flags and UI labels throughout the app.
  */
+/**
+ * A model option exposed in the chat model-selector pill.
+ */
+export interface SelectableModel {
+  /** Model ID passed to the backend as the per-session override. */
+  id: string
+  /** Short human-readable label shown in the pill/dropdown. */
+  label: string
+}
+
 export interface AppConfig {
   /** Primary model identifier. */
   model: string
   /** Fallback model used when the primary is unavailable. */
   fallback_model: string
+  /** Models the user can pick from in the chat model-selector pill. */
+  selectable_models?: SelectableModel[]
   /** Maximum number of agentic turns per run. */
   max_turns: number
   /** Billing / authentication method in use. */

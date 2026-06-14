@@ -50,3 +50,11 @@ venv/
 # Frontend
 frontend/dist/
 node_modules/
+
+# PRMS database (too large for git, bundled in Docker at build time)
+data/*.sqlite
+data/*.db
+# SQLite transient runtime files (WAL / shared-memory)
+data/*.sqlite-shm
+data/*.sqlite-wal
+data/*.sqlite-journal

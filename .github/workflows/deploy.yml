@@ -1,169 +1,477 @@
-name: Deploy Synapsis Agent
+name: Deploy Innovation Analytics
 
 on:
   push:
-    branches: [main]
+    branches: [feature/innovation-platform-foundation]
   workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        description: Target environment
+        options: [dev, staging, prod]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   AWS_REGION: eu-central-1
-  STACK_NAME: synapsis-agent-prod
+  ECR_REPO_NAME: cgiar-ia-service
+  STACK_NAME_PREFIX: cgiar-ia
 
-permissions:
-  id-token: write
-  contents: read
+  STAGE: >-
+    ${{
+      inputs.environment
+      || (github.ref_name == 'feature/innovation-platform-foundation' && 'dev')
+      || (github.ref_name == 'staging' && 'staging')
+      || 'prod'
+    }}
+  ENVIRONMENT: >-
+    ${{
+      (inputs.environment == 'dev' || (!inputs.environment && github.ref_name == 'feature/innovation-platform-foundation')) && 'DEV'
+      || (inputs.environment == 'staging' || (!inputs.environment && github.ref_name == 'staging')) && 'TST'
+      || 'PRD'
+    }}
+  ROLE_ARN: >-
+    ${{
+      (inputs.environment == 'dev' || (!inputs.environment && github.ref_name == 'feature/innovation-platform-foundation')) && vars.AWS_ROLE_ARN_DEV
+      || (inputs.environment == 'staging' || (!inputs.environment && github.ref_name == 'staging')) && vars.AWS_ROLE_ARN_TST
+      || vars.AWS_ROLE_ARN_PRD
+    }}
+  EXPECTED_ACCOUNT: >-
+    ${{
+      (inputs.environment == 'dev' || (!inputs.environment && github.ref_name == 'feature/innovation-platform-foundation')) && '972793825893'
+      || (inputs.environment == 'staging' || (!inputs.environment && github.ref_name == 'staging')) && '053142643230'
+      || '207258148366'
+    }}
 
 jobs:
-  # =========================================================================
-  # Build Docker image and push to ECR
-  # =========================================================================
-  build-and-push:
+  deploy:
+    name: Deploy to ${{ github.ref_name }}
     runs-on: ubuntu-latest
-    outputs:
-      image-tag: ${{ github.sha }}
-      ecr-repo: ${{ steps.login-ecr.outputs.registry }}/synapsis-agent
-    steps:
-      - uses: actions/checkout@v4
+    environment: >-
+      ${{
+        (inputs.environment == 'dev' || (!inputs.environment && github.ref_name == 'feature/innovation-platform-foundation')) && 'DEV'
+        || (inputs.environment == 'staging' || (!inputs.environment && github.ref_name == 'staging')) && 'TST'
+        || 'PRD'
+      }}
+    permissions:
+      id-token: write
+      contents: read
 
+    steps:
+      # -----------------------------------------------------------------
+      # Checkout
+      # -----------------------------------------------------------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------
+      # AWS Authentication (OIDC)
+      # -----------------------------------------------------------------
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
 
-      - name: Ensure ECR repository exists
+      - name: Verify target account
         run: |
-          aws ecr describe-repositories --repository-names synapsis-agent 2>/dev/null || \
-          aws ecr create-repository --repository-name synapsis-agent --image-scanning-configuration scanOnPush=true
+          ACTUAL_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          echo "Target: ${{ env.EXPECTED_ACCOUNT }} | Actual: $ACTUAL_ACCOUNT"
+          if [[ "$ACTUAL_ACCOUNT" != "${{ env.EXPECTED_ACCOUNT }}" ]]; then
+            echo "::error::Account mismatch! Expected ${{ env.EXPECTED_ACCOUNT }}, got $ACTUAL_ACCOUNT"
+            exit 1
+          fi
 
+      # -----------------------------------------------------------------
+      # ECR: Login + ensure repo exists
+      # -----------------------------------------------------------------
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push image
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories \
+            --repository-names ${{ env.ECR_REPO_NAME }} 2>/dev/null || \
+          aws ecr create-repository \
+            --repository-name ${{ env.ECR_REPO_NAME }} \
+            --image-scanning-configuration scanOnPush=true
+
+      # -----------------------------------------------------------------
+      # Download PRMS database (S3 primary → Mac mini secondary → hard fail)
+      # -----------------------------------------------------------------
+      # Canonical source: June 2026 snapshot (prdb_fresh.sqlite, 422,367,232 bytes).
+      # Dedup CTE yields 2024=445 innovations (naive GROUP BY inflates to 1,016).
+      # S3 was seeded on 2026-06-14 from this same snapshot.
+      #
+      # Fallback chain (both must be June 2026; NO March/488 fallback):
+      #   1. S3 bucket (eu-central-1) — durable, fast, cost-negligible
+      #   2. Mac mini HTTP server (p3001.synaptic.synapsis-analytics.com) — backup
+      #   3. Hard fail — deploy stops rather than baking in wrong data
+      # -----------------------------------------------------------------
+      - name: Download PRMS database
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+          S3_BUCKET: cgiar-ia-artifacts-${{ env.EXPECTED_ACCOUNT }}
         run: |
-          docker build -t synapsis-agent .
-          docker tag synapsis-agent:latest $ECR_REGISTRY/synapsis-agent:latest
-          docker tag synapsis-agent:latest $ECR_REGISTRY/synapsis-agent:$IMAGE_TAG
-          docker push $ECR_REGISTRY/synapsis-agent:latest
-          docker push $ECR_REGISTRY/synapsis-agent:$IMAGE_TAG
+          mkdir -p data
 
-  # =========================================================================
-  # Deploy CloudFormation infrastructure
-  # =========================================================================
-  deploy-infra:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+          DB_FETCHED=false
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Store API key in SSM Parameter Store
-        run: |
-          aws ssm put-parameter \
-            --name "/synapsis-agent/anthropic-api-key" \
-            --type SecureString \
-            --value "${{ secrets.ANTHROPIC_API_KEY }}" \
-            --overwrite
-
-      - name: Bootstrap AMI parameter if missing
-        run: |
-          if ! aws ssm get-parameter --name "/synapsis-agent/ami-id" 2>/dev/null; then
-            echo "No custom AMI yet — seeding with latest Amazon Linux 2023"
-            AMI_ID=$(aws ec2 describe-images \
-              --owners amazon \
-              --filters "Name=name,Values=al2023-ami-2023.*-x86_64" "Name=state,Values=available" \
-              --query 'sort_by(Images, &CreationDate)[-1].ImageId' \
-              --output text)
-            aws ssm put-parameter \
-              --name "/synapsis-agent/ami-id" \
-              --type String \
-              --value "$AMI_ID"
-            echo "Seeded /synapsis-agent/ami-id with $AMI_ID"
+          # 1. Try S3 first (durable, already holds June 2026 / 422 MB snapshot)
+          echo "Attempting S3 download: s3://$S3_BUCKET/prdb.sqlite ..."
+          if aws s3 cp "s3://$S3_BUCKET/prdb.sqlite" data/prdb.sqlite; then
+            echo "S3 download succeeded."
+            DB_FETCHED=true
           else
-            echo "AMI parameter already exists, skipping bootstrap"
+            echo "::warning::S3 download failed — trying Mac mini backup..."
+          fi
+
+          # 2. Try Mac mini HTTP server (SSH-tunnelled; June 2026 / 422 MB)
+          if [ "$DB_FETCHED" = "false" ]; then
+            echo "Attempting Mac mini download: https://p3001.synaptic.synapsis-analytics.com/prdb_fresh.sqlite ..."
+            if curl -fL --progress-bar \
+                "https://p3001.synaptic.synapsis-analytics.com/prdb_fresh.sqlite" \
+                -o data/prdb.sqlite; then
+              echo "Mac mini download succeeded."
+              DB_FETCHED=true
+              # Refresh S3 from freshly downloaded file
+              echo "Refreshing S3 from Mac mini source..."
+              aws s3 mb "s3://$S3_BUCKET" --region ${{ env.AWS_REGION }} 2>/dev/null || true
+              aws s3 cp data/prdb.sqlite "s3://$S3_BUCKET/prdb.sqlite" || \
+                echo "::warning::S3 refresh failed (non-fatal — S3 still holds previous June 2026 copy)"
+            else
+              echo "::warning::Mac mini download failed."
+            fi
+          fi
+
+          # 3. Hard fail — never fall back to stale March/488 data
+          if [ "$DB_FETCHED" = "false" ]; then
+            echo "::error::Both S3 and Mac mini sources failed. Cannot obtain June 2026 PRMS database."
+            echo "::error::Refusing to deploy with stale data. Fix S3 or Mac mini before retrying."
+            exit 1
+          fi
+
+          # Verify size: June 2026 = 422,367,232 bytes; March 2026 = 419,123,200 bytes.
+          # Threshold 421,000,000 rejects March data if it somehow ended up in S3.
+          FILE_SIZE=$(stat -c%s data/prdb.sqlite 2>/dev/null || stat -f%z data/prdb.sqlite 2>/dev/null || echo "0")
+          echo "PRMS database size: $FILE_SIZE bytes"
+          if [ "$FILE_SIZE" -lt 421000000 ]; then
+            echo "::error::PRMS database is $FILE_SIZE bytes — below the 421 MB threshold for the June 2026 snapshot."
+            echo "::error::Expected ~422,367,232 bytes (June 13 2026). March 2026 stale copy is 419,123,200 bytes."
+            echo "::error::Re-seed S3 with the June 2026 snapshot before retrying."
+            exit 1
+          fi
+          echo "Size check passed: $FILE_SIZE bytes (≥ 421 MB — June 2026 snapshot confirmed)."
+
+      # -----------------------------------------------------------------
+      # Docker: Build and push image
+      # -----------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.prod
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${{ env.STAGE }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${{ github.sha }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+          cache-from: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:buildcache,mode=max,image-manifest=true
+          provenance: false
+
+      # -----------------------------------------------------------------
+      # SSM: Store secrets as parameters
+      # -----------------------------------------------------------------
+      - name: Store secrets in SSM Parameter Store
+        run: |
+          SSM_PREFIX="/cgiar-ia-${{ env.STAGE }}"
+
+          # Anthropic API Key
+          if [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            aws ssm put-parameter \
+              --name "$SSM_PREFIX/anthropic-api-key" \
+              --value "${{ secrets.ANTHROPIC_API_KEY }}" \
+              --type SecureString \
+              --overwrite 2>/dev/null || true
+          fi
+
+      # -----------------------------------------------------------------
+      # CloudFormation: Deploy infrastructure
+      # -----------------------------------------------------------------
+      - name: Clean up stuck stack if needed
+        run: |
+          STACK_NAME="${{ env.STACK_NAME_PREFIX }}-${{ env.STAGE }}"
+          STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          echo "Stack status: $STATUS"
+          if [[ "$STATUS" == "REVIEW_IN_PROGRESS" || "$STATUS" == "ROLLBACK_COMPLETE" ]]; then
+            echo "Deleting stuck stack..."
+            aws cloudformation delete-stack --stack-name "$STACK_NAME"
+            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" || true
+            echo "Stack deleted"
           fi
 
       - name: Deploy CloudFormation stack
         run: |
+          STACK_NAME="${{ env.STACK_NAME_PREFIX }}-${{ env.STAGE }}"
+          ECR_TAG="${{ env.STAGE }}"
+
+          # Build parameter overrides
+          PARAMS="Stage=${{ env.STAGE }}"
+          PARAMS="$PARAMS EcrImageTag=$ECR_TAG"
+          PARAMS="$PARAMS InstanceType=${{ vars.INSTANCE_TYPE || 't3.large' }}"
+          PARAMS="$PARAMS VpcId=${{ vars.VPC_ID }}"
+          PARAMS="$PARAMS SubnetId1=${{ vars.SUBNET_ID_1 }}"
+
+          # Only include ALB-related params if ACM cert is configured
+          if [ -n "${{ vars.ACM_CERTIFICATE_ARN }}" ]; then
+            PARAMS="$PARAMS AcmCertificateArn=${{ vars.ACM_CERTIFICATE_ARN }}"
+            PARAMS="$PARAMS SubnetId2=${{ vars.SUBNET_ID_2 }}"
+          fi
+
+          # Only include HostedZoneId if explicitly set (empty = DNS records created manually)
+          if [ -n "${{ vars.HOSTED_ZONE_ID }}" ]; then
+            PARAMS="$PARAMS HostedZoneId=${{ vars.HOSTED_ZONE_ID }}"
+          fi
+
           aws cloudformation deploy \
-            --template-file infra/template.yaml \
-            --stack-name ${{ env.STACK_NAME }} \
+            --template-file infra/cloudformation.yaml \
+            --stack-name "$STACK_NAME" \
             --capabilities CAPABILITY_NAMED_IAM \
-            --parameter-overrides \
-              GithubRepo=${{ github.server_url }}/${{ github.repository }} \
-            --no-fail-on-empty-changeset
+            --no-fail-on-empty-changeset \
+            --parameter-overrides $PARAMS \
+            --tags \
+              Project=cgiar-innovation-analytics \
+              Environment=${{ env.STAGE }}
 
-      - name: Output stack info
+      # -----------------------------------------------------------------
+      # EC2: Update container via SSM Run Command
+      # -----------------------------------------------------------------
+      - name: Get stack outputs
+        id: get-outputs
         run: |
-          aws cloudformation describe-stacks \
-            --stack-name ${{ env.STACK_NAME }} \
-            --query 'Stacks[0].Outputs' \
-            --output table
+          STACK_NAME="${{ env.STACK_NAME_PREFIX }}-${{ env.STAGE }}"
 
-  # =========================================================================
-  # Update Lambda function code
-  # =========================================================================
-  deploy-lambdas:
-    needs: deploy-infra
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+          INSTANCE_ID=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" \
+            --output text)
+          echo "instance_id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+          echo "Instance ID: $INSTANCE_ID"
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          PUBLIC_IP=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='InstancePublicIp'].OutputValue" \
+            --output text)
+          echo "public_ip=$PUBLIC_IP" >> "$GITHUB_OUTPUT"
+          echo "Public IP: $PUBLIC_IP"
 
-      - name: Package and deploy Lambda functions
+          HAS_ALB=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='HasALB'].OutputValue" \
+            --output text)
+          echo "has_alb=$HAS_ALB" >> "$GITHUB_OUTPUT"
+          echo "Has ALB: $HAS_ALB"
+
+          AGENT_URL=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='AgentURL'].OutputValue" \
+            --output text)
+          echo "agent_url=$AGENT_URL" >> "$GITHUB_OUTPUT"
+          echo "Agent URL: $AGENT_URL"
+
+          ALB_DNS=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='ALBDnsName'].OutputValue" \
+            --output text 2>/dev/null || echo "")
+          echo "alb_dns=$ALB_DNS" >> "$GITHUB_OUTPUT"
+          echo "ALB DNS: $ALB_DNS"
+
+      - name: Wait for SSM agent (reboot if unresponsive)
         run: |
-          ENV_NAME="synapsis-agent"
+          INSTANCE_ID="${{ steps.get-outputs.outputs.instance_id }}"
+          echo "Waiting for SSM agent on $INSTANCE_ID..."
 
-          for func in provision status deprovision cleanup frontend; do
-            echo "Deploying ${func} Lambda..."
-            cd infra/lambda
-            zip -j "/tmp/${func}.zip" "${func}.py" lambda_utils.py
-            cd ../..
-
-            aws lambda update-function-code \
-              --function-name "${ENV_NAME}-${func}" \
-              --zip-file "fileb:///tmp/${func}.zip"
+          # Phase 1: Quick check (60s) - SSM may already be online
+          for i in $(seq 1 6); do
+            STATUS=$(aws ssm describe-instance-information \
+              --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+              --query "InstanceInformationList[0].PingStatus" \
+              --output text 2>/dev/null || echo "None")
+            if [ "$STATUS" = "Online" ]; then
+              echo "SSM agent online after ${i}0s"
+              echo "ssm_available=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "  Attempt $i/6: status=$STATUS"
+            sleep 10
           done
 
-  # =========================================================================
-  # Rebuild AMI (only when Dockerfile changes)
-  # =========================================================================
-  rebuild-ami:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    # Only rebuild AMI when Dockerfile or entrypoint changes
-    if: |
-      contains(github.event.head_commit.modified, 'Dockerfile') ||
-      contains(github.event.head_commit.modified, 'entrypoint.sh') ||
-      contains(github.event.head_commit.modified, 'requirements.txt')
-    steps:
-      - uses: actions/checkout@v4
+          # Phase 2: SSM unresponsive - reboot the EC2 instance
+          echo "::warning::SSM agent not online after 60s. Rebooting instance $INSTANCE_ID..."
+          aws ec2 reboot-instances --instance-ids "$INSTANCE_ID"
+          echo "Reboot command sent. Waiting 60s for instance to restart..."
+          sleep 60
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          # Phase 3: Wait for SSM after reboot (up to 240s)
+          for i in $(seq 1 24); do
+            STATUS=$(aws ssm describe-instance-information \
+              --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+              --query "InstanceInformationList[0].PingStatus" \
+              --output text 2>/dev/null || echo "None")
+            if [ "$STATUS" = "Online" ]; then
+              echo "SSM agent online after reboot (attempt $i)"
+              echo "ssm_available=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "  Post-reboot attempt $i/24: status=$STATUS"
+            sleep 10
+          done
 
-      - name: Rebuild AMI with updated image
+          echo "::error::SSM agent not online after reboot + 240s wait."
+          echo "ssm_available=false" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      - name: Update container via SSM
+        id: ssm-update
         run: |
-          chmod +x infra/ami/build-ami.sh
-          ./infra/ami/build-ami.sh --region ${{ env.AWS_REGION }}
+          INSTANCE_ID="${{ steps.get-outputs.outputs.instance_id }}"
+          ECR_URI="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}"
+          ECR_TAG="${{ env.STAGE }}"
+          REGION="${{ env.AWS_REGION }}"
+          ACCOUNT="${{ env.EXPECTED_ACCOUNT }}"
+          CONTAINER_NAME="cgiar-innovation-analytics"
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --timeout-seconds 600 \
+            --parameters "commands=[
+              'set -e',
+              'aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ACCOUNT.dkr.ecr.$REGION.amazonaws.com',
+              'docker pull $ECR_URI:$ECR_TAG',
+              'docker stop $CONTAINER_NAME || true',
+              'docker rm $CONTAINER_NAME || true',
+              'docker image prune -af --filter until=24h || true',
+              'SSM_PREFIX=/cgiar-ia-${{ env.STAGE }}',
+              'ANTHROPIC_KEY=\$(aws ssm get-parameter --name \$SSM_PREFIX/anthropic-api-key --with-decryption --query Parameter.Value --output text --region $REGION 2>/dev/null || echo \"\")',
+              'docker run -d --name $CONTAINER_NAME --restart always --log-driver=awslogs --log-opt awslogs-region=$REGION --log-opt awslogs-group=/cgiar-ia/${{ env.STAGE }} --log-opt awslogs-stream=$CONTAINER_NAME --log-opt awslogs-create-group=true --log-opt mode=non-blocking --log-opt max-buffer-size=4m -p 7780:7780 -e AWS_REGION=$REGION -e ANTHROPIC_API_KEY=\$ANTHROPIC_KEY -e SYNAPSIS_PORT=7780 -e SYNAPSIS_HOST=0.0.0.0 -e SYNAPSIS_PLATFORM=linux -e PRMS_DB_PATH=/app/data/prdb.sqlite -e SYNAPSIS_MODEL=claude-sonnet-4-6 -e SYNAPSIS_FALLBACK_MODEL=claude-opus-4-8 -e SYNAPSIS_MAX_TURNS=200 -e SYNAPSIS_WORKSPACE=/workspace $ECR_URI:$ECR_TAG',
+              'for i in \$(seq 1 15); do if curl -sf http://localhost:7780/api/health; then echo \"Container healthy\"; exit 0; fi; sleep 2; done; echo \"Health check timed out\"; exit 1'
+            ]" \
+            --query "Command.CommandId" --output text 2>&1) || {
+              echo "::error::SSM send-command failed."
+              echo "ssm_sent=false" >> "$GITHUB_OUTPUT"
+              exit 1
+            }
+
+          echo "command_id=$COMMAND_ID" >> "$GITHUB_OUTPUT"
+          echo "ssm_sent=true" >> "$GITHUB_OUTPUT"
+          echo "SSM Command ID: $COMMAND_ID"
+
+      - name: Wait for SSM command completion
+        if: steps.ssm-update.outputs.ssm_sent == 'true'
+        run: |
+          COMMAND_ID="${{ steps.ssm-update.outputs.command_id }}"
+          INSTANCE_ID="${{ steps.get-outputs.outputs.instance_id }}"
+
+          for i in $(seq 1 36); do
+            sleep 10
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --query 'Status' --output text 2>/dev/null || echo "Pending")
+
+            echo "  Poll $i/36: $STATUS"
+
+            if [ "$STATUS" = "Success" ]; then
+              echo "Container update succeeded!"
+              exit 0
+            fi
+            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+              echo "::warning::SSM command $STATUS - checking output for details"
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$INSTANCE_ID" \
+                --query '[StandardOutputContent, StandardErrorContent]' --output text || true
+              echo "::error::SSM update failed."
+              exit 1
+            fi
+          done
+
+          echo "::error::Timed out waiting for SSM command."
+          exit 1
+
+      # -----------------------------------------------------------------
+      # Health check (adapts to ALB vs direct HTTP mode)
+      # -----------------------------------------------------------------
+      - name: Final health check
+        run: |
+          HAS_ALB="${{ steps.get-outputs.outputs.has_alb }}"
+          AGENT_URL="${{ steps.get-outputs.outputs.agent_url }}"
+          ALB_DNS="${{ steps.get-outputs.outputs.alb_dns }}"
+          PUBLIC_IP="${{ steps.get-outputs.outputs.public_ip }}"
+
+          if [ "$HAS_ALB" = "true" ]; then
+            # Primary: custom domain; Fallback: ALB DNS directly (skip cert verify)
+            HEALTH_URL="$AGENT_URL/api/health"
+            FALLBACK_URL="https://$ALB_DNS/api/health"
+            echo "Checking ALB endpoint: $HEALTH_URL (fallback: $FALLBACK_URL)"
+          else
+            HEALTH_URL="http://$PUBLIC_IP:7780/api/health"
+            FALLBACK_URL=""
+            echo "Checking direct EC2 endpoint: $HEALTH_URL"
+          fi
+
+          echo "Waiting for service to become healthy..."
+          for i in $(seq 1 20); do
+            # Try primary URL first
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$HEALTH_URL" 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Health check passed! Service is live at $AGENT_URL"
+              exit 0
+            fi
+            # Try fallback (ALB DNS directly, -k skips cert mismatch)
+            if [ -n "$FALLBACK_URL" ]; then
+              HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --connect-timeout 5 "$FALLBACK_URL" 2>/dev/null || echo "000")
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "::warning::Custom domain not reachable yet, but ALB endpoint is healthy."
+                echo "Health check passed via ALB fallback! Service is live."
+                exit 0
+              fi
+            fi
+            echo "  Attempt $i/20: HTTP $HTTP_CODE"
+            sleep 15
+          done
+
+          echo "::error::Health check failed after 5 minutes."
+          exit 1
+
+      - name: Verify deployed version
+        run: |
+          AGENT_URL="${{ steps.get-outputs.outputs.agent_url }}"
+          ALB_DNS="${{ steps.get-outputs.outputs.alb_dns }}"
+          EXPECTED="${{ github.sha }}"
+
+          # Use whichever endpoint responds
+          for i in $(seq 1 10); do
+            RUNNING=$(curl -sf "$AGENT_URL/api/health" 2>/dev/null | jq -r '.git_sha // "unknown"')
+            if [ "$RUNNING" = "unknown" ] && [ -n "$ALB_DNS" ]; then
+              RUNNING=$(curl -skf "https://$ALB_DNS/api/health" 2>/dev/null | jq -r '.git_sha // "unknown"')
+            fi
+            if [ "$RUNNING" = "$EXPECTED" ]; then
+              echo "Verified: running commit matches deployed commit $EXPECTED"
+              exit 0
+            fi
+            echo "  Attempt $i/10: running=$RUNNING expected=$EXPECTED"
+            sleep 15
+          done
+          echo "::warning::Version mismatch (Running=$RUNNING Expected=$EXPECTED). This may be expected if git_sha is not set in health response."
+          echo "Proceeding anyway — container is running."

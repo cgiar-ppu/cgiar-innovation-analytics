@@ -27,6 +27,7 @@ error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 
 export SYNAPSIS_PORT="${SYNAPSIS_PORT:-7780}"
 export SYNAPSIS_WORKSPACE="${SYNAPSIS_WORKSPACE:-$HOME/workspace/innovation-analytics-workspace}"
+export PRMS_DB_PATH="${PRMS_DB_PATH:-/Users/smithai/workspace/coding/PRMSDB/fresh_13June2026/prdb_fresh.sqlite}"
 
 info "CGIAR Innovation Analytics — Port: ${SYNAPSIS_PORT}, Workspace: ${SYNAPSIS_WORKSPACE}"
 

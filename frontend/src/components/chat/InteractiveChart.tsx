@@ -12,10 +12,18 @@ import { BarChart3, LineChart as LineChartIcon, PieChart as PieChartIcon, Chevro
 import { motion, AnimatePresence } from 'framer-motion'
 import type { ChartData } from './chartDetector'
 
-/** Colorblind-friendly palette from the data-visualization skill. */
+/** CGIAR brand palette -- optimized for chart readability and accessibility. */
 const CHART_COLORS = [
-  '#4C72B0', '#DD8452', '#55A868', '#C44E52',
-  '#8172B3', '#937860', '#DA8BC3', '#8C8C8C',
+  '#427730',   // CGIAR Forest Green (primary)
+  '#0065BD',   // CGIAR Blue
+  '#E37222',   // CGIAR Orange
+  '#7AB800',   // CGIAR Lime Green
+  '#8B1A4A',   // CGIAR Burgundy
+  '#00A5DB',   // CGIAR Sky Blue
+  '#F4B223',   // CGIAR Gold
+  '#5C3D8F',   // CGIAR Purple
+  '#009E73',   // CGIAR Teal
+  '#D32F2F',   // CGIAR Red
 ]
 
 const TOOLTIP_STYLE = {
@@ -251,7 +259,7 @@ export function InteractiveChart({ data, className = '' }: InteractiveChartProps
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      className={`bg-[var(--surface)]/50 backdrop-blur-sm rounded-xl border border-white/5 overflow-hidden ${className}`}
+      className={`bg-[var(--surface-solid)] rounded-xl border border-[var(--border)] shadow-sm transition-shadow hover:shadow-md overflow-hidden ${className}`}
     >
       {/* Title bar */}
       <button
@@ -259,7 +267,7 @@ export function InteractiveChart({ data, className = '' }: InteractiveChartProps
         className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-white/[0.02] transition-colors"
       >
         <Icon size={14} className="text-[var(--text-muted)] flex-shrink-0" />
-        <span className="text-sm font-medium text-[var(--text-secondary)] flex-1 truncate">
+        <span className="text-sm font-medium text-[var(--text-muted)] font-serif flex-1 truncate">
           {data.title || `${data.chartType.charAt(0).toUpperCase() + data.chartType.slice(1)} Chart`}
         </span>
         {collapsed ? <ChevronDown size={14} className="text-[var(--text-muted)]" /> : <ChevronUp size={14} className="text-[var(--text-muted)]" />}

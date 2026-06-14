@@ -163,3 +163,28 @@ export interface SettingsConfig {
   max_turns: number;
   memory_categories: string[];
 }
+
+// PRMS Dashboard
+export interface PRMSKPIs {
+  total_results: number;
+  total_innovations: number;
+  innovation_uses: number;
+  active_initiatives: number;
+  countries_covered: number;
+  innovation_packages: number;
+  // Per-year only (absent in all-years response):
+  total_innovations_w1w2?: number;
+  total_innovations_bilateral?: number;
+}
+
+export interface PRMSDashboardData {
+  kpis: PRMSKPIs;
+  charts: {
+    results_by_type: import('../components/chat/chartDetector').ChartData;
+    top_countries: import('../components/chat/chartDetector').ChartData;
+    irl_distribution: import('../components/chat/chartDetector').ChartData;
+    top_initiatives: import('../components/chat/chartDetector').ChartData;
+  };
+  year?: number | null;
+  last_updated: string;
+}

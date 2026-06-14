@@ -23,6 +23,42 @@ async def create_session(session_id: str, title: str = "") -> None:
     await db.commit()
 
 
+async def get_session_model(session_id: str) -> str:
+    """Get the model ID stored for a session.
+
+    Args:
+        session_id: The application-level session identifier.
+
+    Returns:
+        The model ID string, or an empty string if the session does not exist
+        or has no model recorded (callers should treat "" as "use the server
+        default").
+    """
+    db = await _get_shared_db()
+    cursor = await db.execute(
+        "SELECT model FROM sessions WHERE session_id = ?",
+        (session_id,),
+    )
+    row = await cursor.fetchone()
+    return row["model"] if row and row["model"] else ""
+
+
+async def update_session_model(session_id: str, model: str) -> None:
+    """Persist a new model ID for a session (used by mid-chat model switching).
+
+    Args:
+        session_id: The application-level session identifier.
+        model:      The new model ID (already validated against SELECTABLE_MODELS).
+    """
+    db = await _get_shared_db()
+    await db.execute(
+        "UPDATE sessions SET model = ?, updated_at = ? WHERE session_id = ?",
+        (model, time.time(), session_id),
+    )
+    await db.commit()
+    logger.info("Session %s model updated to %s", session_id, model)
+
+
 async def save_claude_session_id(app_session_id: str, claude_session_id: str) -> None:
     """Store the Claude SDK internal session UUID so we can resume later.
 

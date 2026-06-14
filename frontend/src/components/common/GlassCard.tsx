@@ -7,19 +7,24 @@ interface GlassCardProps {
   hover?: boolean;
   onClick?: () => void;
   padding?: string;
+  variant?: 'glass' | 'solid';
 }
 
-export default function GlassCard({ children, className = '', hover = false, onClick, padding = 'p-5' }: GlassCardProps) {
+export default function GlassCard({ children, className = '', hover = false, onClick, padding = 'p-5', variant = 'glass' }: GlassCardProps) {
   const Component = hover ? motion.div : 'div';
   const props = hover
     ? { whileHover: { scale: 1.02, y: -2 }, transition: { type: 'spring', stiffness: 300 } }
     : {};
 
+  const baseClass = variant === 'solid'
+    ? 'bg-[var(--surface-solid)] shadow-sm'
+    : 'glass';
+
   return (
     <Component
       {...props}
       onClick={onClick}
-      className={`glass rounded-xl border border-[var(--border)] ${padding} ${hover ? 'cursor-pointer glass-hover' : ''} ${className}`}
+      className={`${baseClass} rounded-xl border border-[var(--border)] ${padding} ${hover ? 'cursor-pointer glass-hover' : ''} ${className}`}
     >
       {children}
     </Component>

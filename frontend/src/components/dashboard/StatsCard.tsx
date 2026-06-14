@@ -7,9 +7,11 @@ interface StatsCardProps {
   icon: ReactNode;
   color?: string;
   suffix?: string;
+  sublabel?: string;   // small helper text under the number
+  tooltip?: string;    // optional title attribute on the card
 }
 
-export default function StatsCard({ label, value, icon, color = 'var(--accent)', suffix = '' }: StatsCardProps) {
+export default function StatsCard({ label, value, icon, color = 'var(--accent)', suffix = '', sublabel, tooltip }: StatsCardProps) {
   const [displayed, setDisplayed] = useState(0);
 
   useEffect(() => {
@@ -34,20 +36,22 @@ export default function StatsCard({ label, value, icon, color = 'var(--accent)',
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="glass rounded-xl border border-[var(--border)] p-5"
+      className="bg-[var(--surface-solid)] rounded-xl border border-[var(--border)] p-5 transition-shadow hover:shadow-lg"
+      style={{ borderLeftWidth: '4px', borderLeftColor: color }}
+      title={tooltip}
     >
       <div className="flex items-start justify-between">
         <div>
-          <p className="text-sm text-[var(--text-muted)] mb-1">{label}</p>
+          <div className="flex items-center gap-2 mb-2">
+            <div style={{ color }} className="opacity-70">{icon}</div>
+            <p className="text-sm font-medium text-[var(--text-muted)]">{label}</p>
+          </div>
           <p className="text-3xl font-bold text-[var(--text)]">
             {displayed.toLocaleString()}{suffix}
           </p>
-        </div>
-        <div
-          className="w-10 h-10 rounded-lg flex items-center justify-center"
-          style={{ backgroundColor: `${color}20` }}
-        >
-          <div style={{ color }}>{icon}</div>
+          {sublabel && (
+            <p className="text-xs text-[var(--text-muted)] mt-1 leading-tight">{sublabel}</p>
+          )}
         </div>
       </div>
     </motion.div>
