@@ -5,21 +5,23 @@ name: One-off Cold-Boot Restore Proof (dev)
 #   Prove the litestream S3 restore path on a genuinely COLD first boot of a
 #   brand-new EC2 instance (empty /opt/cgiar-ia/synapsis host bind-mount).
 #
-#   Sequence:
-#     1. Read current dev instance id from the cgiar-ia-dev stack output.
-#     2. Terminate it (DeleteOnTermination=true → root EBS volume is deleted,
-#        so the replacement boots with an EMPTY /opt/cgiar-ia/synapsis).
-#     3. Inject a unique replacement-trigger comment into the AgentInstance
-#        UserData and run `aws cloudformation deploy`. The UserData change
-#        forces CloudFormation to provision a NEW AWS::EC2::Instance.
-#     4. Wait for the new instance to be running + SSM Online.
-#     5. Run the same container-update SSM command deploy.yml uses (pull image,
-#        docker run with the bind-mount). On the new instance the host dir is
-#        empty, so the container's entrypoint.prod.sh runs litestream restore
-#        from S3 on its FIRST boot.
-#     6. Health-check and print the new instance id.
+#   The dev EC2 (AgentInstance) is a standalone AWS::EC2::Instance. To get a
+#   genuinely cold boot we force CloudFormation to REPLACE it (not stop/start):
+#   replacement gives a brand-new instance with a fresh EBS root volume, so
+#   /opt/cgiar-ia/synapsis is empty and litestream must restore chat.db from S3
+#   on the very first container start.
 #
-#   This only touches the DEV account (972793825893). It never targets prod.
+#   Replacement is forced by bumping the root EBS VolumeSize (30 -> 31 GiB);
+#   a root-device size change is a replacement-requiring property for
+#   AWS::EC2::Instance. (A UserData change is only stop/start — same volume —
+#   so it would NOT clear the host dir.)
+#
+#   The previous attempt of this workflow terminated the instance out-of-band
+#   first, which left the stack in UPDATE_ROLLBACK_FAILED (CFN tried to
+#   stop an already-gone instance). This version first recovers the stack via
+#   continue-update-rollback --resources-to-skip AgentInstance, then deploys.
+#
+#   DEV account (972793825893) only. Never targets prod.
 # ---------------------------------------------------------------------------
 
 on:
@@ -28,8 +30,6 @@ on:
     paths:
       - '.github/workflows/one-off-cold-boot-proof.yml'
 
-# Share deploy.yml's concurrency group so the auto-triggered deploy.yml run
-# and this one-off serialize instead of racing on the same instance.
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
@@ -71,46 +71,55 @@ jobs:
             exit 1
           fi
 
-      - name: Capture OLD instance id and terminate it
-        id: terminate
+      - name: Record S3 replica state before cold boot
+        run: |
+          echo "=== S3 litestream replica BEFORE cold boot ==="
+          aws s3 ls "s3://cgiar-ia-artifacts-${{ env.EXPECTED_ACCOUNT }}/litestream/chat.db/" --recursive || true
+
+      - name: Recover stack from UPDATE_ROLLBACK_FAILED if needed
+        run: |
+          STATUS=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" \
+            --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NONE")
+          echo "Stack status: $STATUS"
+          if [ "$STATUS" = "UPDATE_ROLLBACK_FAILED" ]; then
+            echo "Continuing rollback, skipping AgentInstance (its old physical instance was terminated)..."
+            aws cloudformation continue-update-rollback \
+              --stack-name "${{ env.STACK_NAME }}" \
+              --resources-to-skip AgentInstance
+            aws cloudformation wait stack-rollback-complete --stack-name "${{ env.STACK_NAME }}" || true
+            NEWSTATUS=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" \
+              --query 'Stacks[0].StackStatus' --output text)
+            echo "Post-recovery status: $NEWSTATUS"
+            if [ "$NEWSTATUS" != "UPDATE_ROLLBACK_COMPLETE" ] && [ "$NEWSTATUS" != "UPDATE_COMPLETE" ]; then
+              echo "::error::Stack did not recover (status=$NEWSTATUS)."
+              exit 1
+            fi
+          fi
+
+      - name: Capture pre-deploy instance id
+        id: pre
         run: |
           OLD_ID=$(aws cloudformation describe-stacks \
             --stack-name "${{ env.STACK_NAME }}" \
             --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" \
-            --output text)
-          echo "Old instance: $OLD_ID"
+            --output text 2>/dev/null || echo "none")
+          echo "CFN currently references instance: $OLD_ID (expected to be the terminated id)"
           echo "old_id=$OLD_ID" >> "$GITHUB_OUTPUT"
 
-          # Record S3 litestream replica state before the cold boot (for the report).
-          echo "=== S3 litestream replica BEFORE cold boot ==="
-          aws s3 ls "s3://cgiar-ia-artifacts-${{ env.EXPECTED_ACCOUNT }}/litestream/chat.db/" --recursive || true
-
-          echo "Terminating $OLD_ID (DeleteOnTermination=true → root volume deleted → empty host dir on replacement)"
-          aws ec2 terminate-instances --instance-ids "$OLD_ID" >/dev/null
-          aws ec2 wait instance-terminated --instance-ids "$OLD_ID"
-          echo "Old instance $OLD_ID is now terminated."
-
-      - name: Inject UserData replacement trigger
+      - name: Force replacement — bump root EBS VolumeSize 30 -> 31
         run: |
-          # Adding a unique comment to the AgentInstance UserData forces
-          # CloudFormation to provision a brand-new EC2 instance (UserData
-          # changes require replacement). This is done only on the runner's
-          # checkout — it is NOT committed back to the repo.
-          MARKER="            # cold-boot-proof trigger: ${{ github.sha }} run ${{ github.run_id }}"
-          # Insert the marker on the line immediately after the UserData shebang.
-          awk -v marker="$MARKER" '
-            { print }
-            /^            #!\/bin\/bash$/ && !done { print marker; done=1 }
-          ' infra/cloudformation.yaml > infra/cloudformation.yaml.tmp
-          mv infra/cloudformation.yaml.tmp infra/cloudformation.yaml
-          echo "=== UserData head after injection ==="
-          grep -n -A 3 "Fn::Base64" infra/cloudformation.yaml | head -12
+          # A change to the root-device VolumeSize forces CloudFormation to
+          # REPLACE the instance (brand-new instance, fresh empty EBS volume),
+          # which is exactly the cold-boot scenario we want to prove.
+          sed -i 's/^\(\s*VolumeSize:\s*\)30\s*$/\131/' infra/cloudformation.yaml
+          echo "=== BlockDeviceMappings after edit ==="
+          grep -n -A 6 "BlockDeviceMappings" infra/cloudformation.yaml | head -10
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Deploy CloudFormation stack (forces new instance)
+      - name: Deploy CloudFormation stack (replaces AgentInstance)
         run: |
           PARAMS="Stage=${{ env.STAGE }}"
           PARAMS="$PARAMS EcrImageTag=${{ env.STAGE }}"
@@ -142,13 +151,12 @@ jobs:
             --output text)
           echo "New instance: $NEW_ID"
           echo "new_id=$NEW_ID" >> "$GITHUB_OUTPUT"
-          if [ "$NEW_ID" = "${{ steps.terminate.outputs.old_id }}" ]; then
+          if [ "$NEW_ID" = "${{ steps.pre.outputs.old_id }}" ]; then
             echo "::error::Instance id did not change — replacement did not happen."
             exit 1
           fi
 
       - name: Wait for SSM agent online on new instance
-        id: ssmwait
         run: |
           NEW_ID="${{ steps.newinst.outputs.new_id }}"
           echo "Waiting for SSM agent on $NEW_ID..."
@@ -232,5 +240,5 @@ jobs:
 
       - name: Summary
         run: |
-          echo "OLD instance: ${{ steps.terminate.outputs.old_id }} (terminated)"
-          echo "NEW instance: ${{ steps.newinst.outputs.new_id }} (cold first boot)"
+          echo "PRE-deploy instance (CFN ref): ${{ steps.pre.outputs.old_id }}"
+          echo "NEW instance (cold first boot): ${{ steps.newinst.outputs.new_id }}"
