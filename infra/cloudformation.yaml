@@ -232,6 +232,7 @@ Resources:
                   - s3:PutObject
                   - s3:DeleteObject
                   - s3:ListBucket
+                  - s3:GetBucketLocation  # litestream resolves the bucket region on startup
                 Resource:
                   - !Sub arn:aws:s3:::cgiar-ia-artifacts-${AWS::AccountId}
                   - !Sub arn:aws:s3:::cgiar-ia-artifacts-${AWS::AccountId}/*
