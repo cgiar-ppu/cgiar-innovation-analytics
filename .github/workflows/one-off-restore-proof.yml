@@ -2,6 +2,10 @@ name: One-off — Delete host chat.db for restore proof
 
 on:
   workflow_dispatch:
+  push:
+    branches: [feature/innovation-platform-foundation]
+    paths:
+      - '.github/workflows/one-off-restore-proof.yml'
 
 permissions:
   id-token: write
