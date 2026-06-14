@@ -125,12 +125,44 @@ SELECT COUNT(DISTINCT result_code) FROM result
 WHERE is_active = 1 AND result_type_id = 10;
 """
 
+# All-years results-by-type chart: each bucket uses the same methodology as its
+# year-scoped counterpart (_SQL_YEAR_RESULTS_BY_TYPE):
+#   - All three types share the same dedup CTE (source='Result', is_active=1,
+#     status_id=2) so the candidate pool is consistent across types.
+#   - Innovation Development (type 7): deduped W1/W2 count (1,630) PLUS
+#     bilateral/W3 (source='API', status_id=6, is_active=1) (222) = 1,852.
+#     This makes the chart bucket equal the total_innovations KPI headline.
+#   - Innovation Use (type 2) and Innovation Package (type 10): deduped count
+#     from the same canon CTE, matching the methodology of _SQL_YEAR_USES and
+#     _SQL_YEAR_PACKAGES. Previously used naive is_active-only counts.
 _SQL_RESULTS_BY_TYPE = """
-SELECT rt.name AS type, COUNT(DISTINCT r.result_code) AS count
-FROM result r
-JOIN result_type rt ON r.result_type_id = rt.id
-WHERE r.is_active = 1 AND r.result_type_id IN (2, 7, 10)
-GROUP BY rt.name
+WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
+cand AS (
+    SELECT r.result_code, r.id, r.result_type_id, o.o AS phord
+    FROM result r JOIN ord o ON o.v = r.version_id
+    WHERE r.source = 'Result'
+      AND r.is_active = 1 AND r.status_id = 2
+),
+pick AS (SELECT result_code, MAX(phord) AS m FROM cand GROUP BY result_code),
+latest AS (
+    SELECT c.* FROM cand c
+    JOIN pick p ON p.result_code = c.result_code AND p.m = c.phord
+),
+canon AS (
+    SELECT l.* FROM latest l
+    WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
+)
+SELECT 'Innovation Development' AS type,
+    (SELECT COUNT(*) FROM canon WHERE result_type_id = 7) +
+    (SELECT COUNT(DISTINCT result_code) FROM result
+     WHERE result_type_id = 7 AND source = 'API'
+       AND status_id = 6 AND is_active = 1) AS count
+UNION ALL
+SELECT 'Innovation Use' AS type,
+    (SELECT COUNT(*) FROM canon WHERE result_type_id = 2) AS count
+UNION ALL
+SELECT 'Innovation Package' AS type,
+    (SELECT COUNT(*) FROM canon WHERE result_type_id = 10) AS count
 ORDER BY count DESC;
 """
 
