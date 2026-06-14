@@ -356,6 +356,8 @@ jobs:
             --timeout-seconds 600 \
             --parameters "commands=[
               'set -e',
+              'sudo systemctl enable --now docker || true',
+              'sleep 5',
               'aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ACCOUNT.dkr.ecr.$REGION.amazonaws.com',
               'docker pull $ECR_URI:$ECR_TAG',
               'docker stop $CONTAINER_NAME || true',
