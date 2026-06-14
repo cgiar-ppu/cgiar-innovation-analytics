@@ -43,7 +43,7 @@ _CACHE_TTL: float = 300.0  # 5 minutes
 # ---------------------------------------------------------------------------
 _PRMS_DB_PATH = os.getenv(
     "PRMS_DB_PATH",
-    "/Users/smithai/workspace/coding/PRMSDB/prdb.sqlite",
+    "/Users/smithai/workspace/coding/PRMSDB/fresh_13June2026/prdb_fresh.sqlite",
 )
 
 # ---------------------------------------------------------------------------
