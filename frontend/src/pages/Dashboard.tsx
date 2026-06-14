@@ -48,6 +48,22 @@ export default function Dashboard() {
 
   const kpis = prmsData.kpis;
 
+  // Derive the innovation card label + sublabel. The all-years view shows a
+  // deduplicated all-time total; per-year views show alive-in-year counts.
+  const innovLabel =
+    selectedYear === 'all'
+      ? 'Distinct innovations (latest data point)'
+      : `Innovations active in ${selectedYear}`;
+
+  const innovSublabel =
+    selectedYear === 'all'
+      ? 'All-time total — each innovation counted once'
+      : kpis.total_innovations_bilateral !== undefined && kpis.total_innovations_bilateral > 0
+      ? `${(kpis.total_innovations_w1w2 ?? 0).toLocaleString()} W1/W2 + ${kpis.total_innovations_bilateral.toLocaleString()} bilateral`
+      : kpis.total_innovations_bilateral === 0
+      ? 'W1/W2 pooled — all reporting in this year'
+      : 'Every innovation that reported in this year';
+
   return (
     <div className="max-w-screen-xl mx-auto p-6 space-y-8">
       {/* Offline banner */}
@@ -110,7 +126,8 @@ export default function Dashboard() {
           color="#0065BD"
         />
         <StatsCard
-          label="Innovations"
+          label={innovLabel}
+          sublabel={innovSublabel}
           value={kpis.total_innovations}
           icon={<Sprout className="w-5 h-5" />}
           color="#427730"

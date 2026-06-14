@@ -172,6 +172,9 @@ export interface PRMSKPIs {
   active_initiatives: number;
   countries_covered: number;
   innovation_packages: number;
+  // Per-year only (absent in all-years response):
+  total_innovations_w1w2?: number;
+  total_innovations_bilateral?: number;
 }
 
 export interface PRMSDashboardData {

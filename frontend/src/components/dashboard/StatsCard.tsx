@@ -7,9 +7,11 @@ interface StatsCardProps {
   icon: ReactNode;
   color?: string;
   suffix?: string;
+  sublabel?: string;   // small helper text under the number
+  tooltip?: string;    // optional title attribute on the card
 }
 
-export default function StatsCard({ label, value, icon, color = 'var(--accent)', suffix = '' }: StatsCardProps) {
+export default function StatsCard({ label, value, icon, color = 'var(--accent)', suffix = '', sublabel, tooltip }: StatsCardProps) {
   const [displayed, setDisplayed] = useState(0);
 
   useEffect(() => {
@@ -36,6 +38,7 @@ export default function StatsCard({ label, value, icon, color = 'var(--accent)',
       animate={{ opacity: 1, y: 0 }}
       className="bg-[var(--surface-solid)] rounded-xl border border-[var(--border)] p-5 transition-shadow hover:shadow-lg"
       style={{ borderLeftWidth: '4px', borderLeftColor: color }}
+      title={tooltip}
     >
       <div className="flex items-start justify-between">
         <div>
@@ -46,6 +49,9 @@ export default function StatsCard({ label, value, icon, color = 'var(--accent)',
           <p className="text-3xl font-bold text-[var(--text)]">
             {displayed.toLocaleString()}{suffix}
           </p>
+          {sublabel && (
+            <p className="text-xs text-[var(--text-muted)] mt-1 leading-tight">{sublabel}</p>
+          )}
         </div>
       </div>
     </motion.div>
