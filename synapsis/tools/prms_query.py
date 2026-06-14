@@ -32,7 +32,14 @@ PRMS_DB_PATH: str = os.getenv(
 )
 
 # Safety limits
-MAX_ROWS: int = 100
+# Default cap on rows returned when the query does not specify its own LIMIT
+# and the caller does not pass an explicit row_limit. Raised from the previous
+# value of 100 to 5000 so the agent can see full result sets; the cap still
+# exists to guard against accidental runaway queries.
+MAX_ROWS: int = 5000
+# Hard ceiling on an explicit row_limit, to keep the safety guarantee even when
+# the caller overrides the default.
+MAX_ROW_LIMIT: int = 100000
 QUERY_TIMEOUT_SECONDS: int = 30
 
 # SQL patterns that are NOT allowed (anything other than SELECT)
@@ -248,19 +255,28 @@ def _format_results_text(
     "policy changes, partners, and geographies). "
     "Use the PRMS schema reference in your system prompt to construct valid SQL. "
     "For innovations (result_type_id IN (2,7,10)): always filter is_active=1 AND (is_discontinued IS NULL OR is_discontinued=0). Count by result_code not id. "
-    "Returns structured results with row data, total count, and tables used.",
+    "Returns structured results with row data, total count, and tables used. "
+    "By default results are capped at 5000 rows; pass an integer 'row_limit' to "
+    "raise or lower that cap when you need the full result set (or fewer rows). "
+    "An explicit LIMIT clause in the SQL always takes precedence over row_limit.",
     {
         "sql": str,
         "question": str,
+        "row_limit": int,
     },
 )
 async def prms_query(args: dict[str, Any]) -> dict[str, Any]:
     """Execute a read-only SQL query against the PRMS database.
 
     Args (via tool schema):
-        sql:      The SQL SELECT query to execute against the PRMS database (required).
-        question: The original natural language question being answered (optional,
-                  for context/logging).
+        sql:       The SQL SELECT query to execute against the PRMS database (required).
+        question:  The original natural language question being answered (optional,
+                   for context/logging).
+        row_limit: Optional integer overriding the default row cap (MAX_ROWS = 5000).
+                   Use a larger value to retrieve full result sets, or a smaller value
+                   to retrieve fewer rows. Values are clamped to the range
+                   [1, MAX_ROW_LIMIT]. If the SQL already contains an explicit LIMIT
+                   clause, that clause takes precedence and row_limit is ignored.
 
     Returns:
         MCP-formatted response with query results, metadata, and attribution.
@@ -273,6 +289,23 @@ async def prms_query(args: dict[str, Any]) -> dict[str, Any]:
             "Error: 'sql' parameter is required. Provide a SELECT query to execute "
             "against the PRMS database."
         )
+
+    # Resolve the effective row cap: explicit row_limit overrides the default,
+    # clamped to a sane range to preserve the safety guarantee.
+    effective_limit = MAX_ROWS
+    raw_row_limit = args.get("row_limit")
+    if raw_row_limit is not None:
+        try:
+            requested = int(raw_row_limit)
+        except (TypeError, ValueError):
+            return error_response(
+                "Error: 'row_limit' must be an integer if provided."
+            )
+        if requested < 1:
+            return error_response(
+                "Error: 'row_limit' must be a positive integer."
+            )
+        effective_limit = min(requested, MAX_ROW_LIMIT)
 
     # Validate the SQL
     validation_error = _validate_sql(sql)
@@ -287,7 +320,7 @@ async def prms_query(args: dict[str, Any]) -> dict[str, Any]:
         )
 
     # Ensure LIMIT is present
-    limited_sql = _ensure_limit(sql, MAX_ROWS)
+    limited_sql = _ensure_limit(sql, effective_limit)
 
     # Extract tables for attribution
     tables_used = _extract_tables_used(limited_sql)
@@ -330,9 +363,9 @@ async def prms_query(args: dict[str, Any]) -> dict[str, Any]:
 
     elapsed = time.monotonic() - start_time
 
-    # Get total count if we limited the results
+    # Get total count if we may have limited the results
     total_count = None
-    if row_count >= MAX_ROWS:
+    if row_count >= effective_limit:
         total_count = _get_total_count(PRMS_DB_PATH, sql)
 
     # Format the response
