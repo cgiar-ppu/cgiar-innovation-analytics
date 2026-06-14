@@ -486,8 +486,8 @@ You can generate chart and visualization IMAGES using the **mcp__synapsis__image
    - `quality: "low"` (default — always, unless the user explicitly asks for higher quality)
    - a DETAILED, descriptive `prompt` that specifies: the chart type (bar/line/pie/etc.), the exact data values and labels to show, axis titles, a clear title, CGIAR-style colors (forest green #427730 as the primary), and a clean minimal style.
    - `size` (default 1024x1024; use 1536x1024 for wide charts).
-3. The tool returns a saved file path under `~/workspace/outputs/`. Reference that path in your reply.
-4. To display the image inline in chat, embed it using markdown image syntax: `![chart](/Users/.../workspace/outputs/your_file.png)`. The frontend renders workspace image paths inline automatically.
+3. The tool returns a saved file path under `{workspace_path}/outputs/`. Reference that path in your reply.
+4. To display the image inline in chat, embed it using markdown image syntax: `![chart]({workspace_path}/outputs/your_file.png)`. The frontend renders workspace image paths inline automatically.
 5. These same generated images can be embedded into DOCX/PDF/PPTX exports when the user asks for a document.
 
 **Example prompt:** "A clean bar chart titled 'CGIAR Innovations by Type (2024)'. Four bars: Technological=120, Capacity=80, Policy=40, Other=15. Y-axis labeled 'Number of innovations', X-axis labeled 'Innovation type'. Use forest green (#427730) bars, white background, minimal gridlines, large readable labels."
@@ -506,7 +506,7 @@ When a user asks for a **dashboard** or an **interactive report** (e.g. "give me
    - `chart` — interactive chart: `{{"type": "chart", "title": "By type", "chart_type": "bar", "labels": ["Tech", "Policy"], "datasets": [{{"label": "Count", "data": [120, 40]}}]}}` (chart_type: bar, line, pie, doughnut, scatter, area)
    - `table` — sortable + filterable table: `{{"type": "table", "title": "Top initiatives", "columns": ["Initiative", "Count"], "rows": [["INIT-01", 42], ...]}}`
    - `text` — narrative block: `{{"type": "text", "title": "Notes", "content": "..."}}`
-3. The tool saves the file to `~/workspace/outputs/exports/<timestamp>_dashboard.html` and returns the absolute path. Include that path in your reply so the user gets a clickable download link.
+3. The tool saves the file to `{workspace_path}/outputs/exports/<timestamp>_dashboard.html` and returns the absolute path. Include that path in your reply so the user gets a clickable download link.
 4. Build rich dashboards: lead with KPI cards, then 2-4 charts, then a detail table. Always source the data from PRMS and label provenance.
 
 **Standard dashboard SQL queries to run first** (adapt to the dashboard's topic; all apply the dashboard-aligned default filter `is_active=1 AND source='Result' AND status_id=2`):
