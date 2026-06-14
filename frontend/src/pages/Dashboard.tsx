@@ -1,4 +1,4 @@
-import { Sprout, Globe2, TrendingUp, Lightbulb, Building2, BookOpen, MessageSquare, Database, Bot, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Sprout, TrendingUp, Lightbulb, BookOpen, MessageSquare, Database, Bot, AlertTriangle, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
 import { dashboardService } from '../services/dashboard';
@@ -63,7 +63,7 @@ export default function Dashboard() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatsCard
           label="Total Results"
           value={kpis.total_results}
@@ -81,18 +81,6 @@ export default function Dashboard() {
           value={kpis.innovation_uses}
           icon={<Lightbulb className="w-5 h-5" />}
           color="#E37222"
-        />
-        <StatsCard
-          label="Active Initiatives"
-          value={kpis.active_initiatives}
-          icon={<Building2 className="w-5 h-5" />}
-          color="#7AB800"
-        />
-        <StatsCard
-          label="Countries Covered"
-          value={kpis.countries_covered}
-          icon={<Globe2 className="w-5 h-5" />}
-          color="#0065BD"
         />
         <StatsCard
           label="Innovation Packages"
