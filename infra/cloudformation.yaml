@@ -336,6 +336,7 @@ Resources:
               -e PRMS_DB_PATH="/app/data/prdb.sqlite" \
               -e SYNAPSIS_MODEL="claude-sonnet-4-6" \
               -e SYNAPSIS_FALLBACK_MODEL="claude-opus-4-8" \
+              -e SYNAPSIS_AVAILABLE_MODELS="claude-sonnet-4-6,claude-opus-4-8[1m]" \
               -e SYNAPSIS_MAX_TURNS="200" \
               -e GIT_SHA="$IMAGE_TAG" \
               "$ECR_REPO:$IMAGE_TAG"

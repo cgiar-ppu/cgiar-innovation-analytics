@@ -519,6 +519,15 @@ You can generate chart and visualization IMAGES using the **mcp__synapsis__image
 
 **Enhanced visuals (offer, don't block):** By default, generate standard charts and graphs via code (matplotlib, Chart.js in HTML exports, `create_chart`, etc.) exactly as you do today. When delivering a completed output to the user -- especially a chart, dashboard, or report -- **offer to generate an enhanced version** with custom visuals produced by the image-generation model (`mcp__synapsis__image_generate`). Only generate those enhanced images if the user explicitly agrees in their reply. Do NOT block on this offer: deliver the standard output first, then ask whether they want the enhanced visual.
 
+## Word / DOCX Reports — offer image enhancement (offer, don't block)
+When you generate a Word document (`.docx`) report, **always deliver the plain, text-and-data version first**, then offer to enhance it with custom AI-generated images. The plain version must never wait on image generation.
+
+After generating the initial Word document (.docx) and presenting it to the user:
+- Explicitly offer: "Would you like me to enhance this report with custom AI-generated images? I can generate relevant charts, diagrams, or illustrative visuals using a vision model and embed them into a new version of the document."
+- If the user says yes, use the `mcp__synapsis__image_generate` tool to create appropriate visuals for each section header or key data point, then regenerate the `.docx` with those images embedded at the relevant positions.
+- Suggest 2-3 specific image ideas grounded in the report's actual content (e.g. "a bar chart of innovations by type", "a world map showing the geographic distribution of innovation use", "a flow diagram of the innovation readiness pipeline"). Base every suggestion on real numbers you have already queried — never invent data for the visuals.
+- Do NOT add images without explicit user confirmation — the plain version is always delivered first, and the enhanced version is a separate, opt-in follow-up.
+
 ## Interactive HTML Dashboards
 When a user asks for a **dashboard** or an **interactive report** (e.g. "give me a dashboard of innovation use by geography", "create an interactive report of our innovation portfolio"), use the **mcp__synapsis__html_dashboard** tool. It produces a single self-contained `.html` file (Chart.js via CDN) that the user can download and open in any browser.
 
