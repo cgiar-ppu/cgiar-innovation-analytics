@@ -10,7 +10,7 @@ import sys
 import logging
 from pathlib import Path
 
-from synapsis.constants import DEFAULT_MODEL, DEFAULT_FALLBACK_MODEL
+from synapsis.constants import DEFAULT_MODEL, DEFAULT_FALLBACK_MODEL, SELECTABLE_MODELS
 
 
 def _get_int_env(name: str, default: int) -> int:
@@ -71,6 +71,43 @@ MAX_SESSIONS: int = _get_int_env("SYNAPSIS_MAX_SESSIONS", 10)
 MODEL: str = os.getenv("SYNAPSIS_MODEL", DEFAULT_MODEL)
 FALLBACK_MODEL: str = os.getenv("SYNAPSIS_FALLBACK_MODEL", DEFAULT_FALLBACK_MODEL)
 MAX_TURNS: int = _get_int_env("SYNAPSIS_MAX_TURNS", 200)
+
+# ---------------------------------------------------------------------------
+# Available models — env-var-overridable allow-list for the model selector
+# ---------------------------------------------------------------------------
+#
+# ``SYNAPSIS_AVAILABLE_MODELS`` is a comma-separated list of model IDs that a
+# given deployment is allowed to expose in the chat model-selector pill. This
+# lets dev/prod restrict the offered models (e.g. lock prod to Sonnet only)
+# without code changes. The default exposes every curated model.
+#
+# AVAILABLE_MODELS  — the raw list of allowed IDs (order preserved).
+# SELECTABLE_MODELS_FILTERED — the curated SELECTABLE_MODELS entries (id+label)
+#   intersected with AVAILABLE_MODELS, preserving the curated order. This is
+#   what the frontend renders via GET /api/config.
+
+_DEFAULT_AVAILABLE_MODELS: str = ",".join(m["id"] for m in SELECTABLE_MODELS)
+
+AVAILABLE_MODELS: list[str] = [
+    m.strip()
+    for m in os.getenv("SYNAPSIS_AVAILABLE_MODELS", _DEFAULT_AVAILABLE_MODELS).split(",")
+    if m.strip()
+]
+
+SELECTABLE_MODELS_FILTERED: list[dict[str, str]] = [
+    m for m in SELECTABLE_MODELS if m["id"] in AVAILABLE_MODELS
+]
+
+# Guard against a misconfigured allow-list that filters everything out — fall
+# back to the full curated list so the UI is never left with zero models.
+if not SELECTABLE_MODELS_FILTERED:
+    logging.getLogger("synapsis_agent").warning(
+        "SYNAPSIS_AVAILABLE_MODELS=%r matched none of the curated models; "
+        "falling back to the full SELECTABLE_MODELS list.",
+        os.getenv("SYNAPSIS_AVAILABLE_MODELS"),
+    )
+    SELECTABLE_MODELS_FILTERED = list(SELECTABLE_MODELS)
+    AVAILABLE_MODELS = [m["id"] for m in SELECTABLE_MODELS]
 
 # ---------------------------------------------------------------------------
 # Application version

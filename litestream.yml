@@ -1,0 +1,13 @@
+# Litestream configuration for durable chat history.
+#
+# Replicates the SQLite chat database to S3 with sub-second checkpoints so
+# chat history survives container removal (docker rm), instance replacement,
+# and AZ failure. AWS credentials are picked up automatically from the EC2
+# instance profile — no access keys are stored here.
+dbs:
+  - path: /workspace/.synapsis/chat.db
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_S3_BUCKET}
+        path: litestream/chat.db
+        region: ${AWS_REGION:-eu-central-1}

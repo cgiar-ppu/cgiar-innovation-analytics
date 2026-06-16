@@ -10,23 +10,22 @@ import Badge from '../components/common/Badge';
 import { InteractiveChart } from '../components/chat/InteractiveChart';
 import type { PRMSDashboardData, ActivityDataPoint } from '../lib/types-extended';
 
-// "all" = the all-years portfolio view; otherwise a specific reporting year.
-const YEAR_OPTIONS = ['all', '2025', '2024', '2023', '2022'] as const;
+// Specific reporting year. The all-years portfolio view has been retired —
+// the dashboard always shows a single reporting year (default: 2025).
+const YEAR_OPTIONS = ['2025', '2024', '2023', '2022'] as const;
 type YearFilter = (typeof YEAR_OPTIONS)[number];
+const DEFAULT_YEAR: YearFilter = '2025';
 
 export default function Dashboard() {
   const navigate = useNavigate();
 
-  const [selectedYear, setSelectedYear] = useState<YearFilter>('all');
+  const [selectedYear, setSelectedYear] = useState<YearFilter>(DEFAULT_YEAR);
   // Keep the latest selectedYear available to the (memoized) fetcher.
   const yearRef = useRef<YearFilter>(selectedYear);
   yearRef.current = selectedYear;
 
   const { data: prmsData, isLive, refetch, loading } = useApi<PRMSDashboardData>(
-    () =>
-      dashboardService.getPRMSStats(
-        yearRef.current === 'all' ? null : Number(yearRef.current)
-      ),
+    () => dashboardService.getPRMSStats(Number(yearRef.current)),
     mockPRMSDashboard,
     { interval: 60000 }
   );
@@ -48,17 +47,12 @@ export default function Dashboard() {
 
   const kpis = prmsData.kpis;
 
-  // Derive the innovation card label + sublabel. The all-years view shows a
-  // deduplicated all-time total; per-year views show alive-in-year counts.
-  const innovLabel =
-    selectedYear === 'all'
-      ? 'Distinct innovations (latest data point)'
-      : `Innovations active in ${selectedYear}`;
+  // Derive the innovation card label + sublabel. Per-year views show
+  // alive-in-year counts.
+  const innovLabel = `Innovations active in ${selectedYear}`;
 
   const innovSublabel =
-    selectedYear === 'all'
-      ? 'All-time total — each innovation counted once'
-      : kpis.total_innovations_bilateral !== undefined && kpis.total_innovations_bilateral > 0
+    kpis.total_innovations_bilateral !== undefined && kpis.total_innovations_bilateral > 0
       ? `${(kpis.total_innovations_w1w2 ?? 0).toLocaleString()} W1/W2 + ${kpis.total_innovations_bilateral.toLocaleString()} bilateral`
       : kpis.total_innovations_bilateral === 0
       ? 'W1/W2 pooled — all reporting in this year'
@@ -85,7 +79,7 @@ export default function Dashboard() {
         <div>
           <h1 className="text-2xl font-bold text-[var(--text)] font-serif">Innovation Analytics</h1>
           <p className="text-sm text-[var(--text-muted)] mt-1">
-            CGIAR innovation portfolio{selectedYear !== 'all' ? ` · ${selectedYear}` : ''} — {kpis.total_results.toLocaleString()} innovations across {kpis.countries_covered} countries
+            CGIAR innovation portfolio · {selectedYear} — {kpis.total_results.toLocaleString()} innovations across {kpis.countries_covered} countries
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -100,7 +94,7 @@ export default function Dashboard() {
             >
               {YEAR_OPTIONS.map((y) => (
                 <option key={y} value={y}>
-                  {y === 'all' ? 'All years' : y}
+                  {y}
                 </option>
               ))}
             </select>

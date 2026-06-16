@@ -80,6 +80,12 @@ export interface AppConfig {
   fallback_model: string
   /** Models the user can pick from in the chat model-selector pill. */
   selectable_models?: SelectableModel[]
+  /**
+   * Allow-list of model IDs this deployment exposes, driven by the
+   * SYNAPSIS_AVAILABLE_MODELS env var. `selectable_models` is already
+   * filtered to this list server-side; exposed for diagnostics/visibility.
+   */
+  available_models?: string[]
   /** Maximum number of agentic turns per run. */
   max_turns: number
   /** Billing / authentication method in use. */

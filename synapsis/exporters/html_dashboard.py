@@ -290,13 +290,20 @@ def generate_html_dashboard(
         title:      Dashboard title shown in the header and browser tab.
         sections:   Ordered list of section dicts (see module docstring).
         output_dir: Directory to write into. Defaults to
-                    ``~/workspace/outputs/exports``.
+                    ``WORKSPACE/outputs/exports`` (i.e. ``/workspace/outputs/exports``
+                    in the container, matching the /api/files/ serve path).
 
     Returns:
         The absolute path (str) to the written ``.html`` file.
     """
     if output_dir is None:
-        output_dir = Path.home() / "workspace" / "outputs" / "exports"
+        # Derive from WORKSPACE (env-configurable) so the default matches the
+        # path the /api/files/ route serves from. Using Path.home() here breaks
+        # downloads in the container, where home (/home/synapsis) != WORKSPACE
+        # (/workspace) and the file-serving route only looks under WORKSPACE.
+        from synapsis.config import WORKSPACE
+
+        output_dir = WORKSPACE / "outputs" / "exports"
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 

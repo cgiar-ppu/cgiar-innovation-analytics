@@ -285,7 +285,7 @@ def _start_container(instance_id, user_id, app_port, vnc_port=None):
         f"docker run -d --name {container_name} "
         f"--restart unless-stopped "
         f"-e ANTHROPIC_API_KEY=$(cat /root/.synapsis-api-key) "
-        f"-e SYNAPSIS_MODEL=claude-opus-4-6 "
+        f"-e SYNAPSIS_MODEL=claude-sonnet-4-6 "
         f"-e SYNAPSIS_MAX_TURNS=100 "
         f"-e SYNAPSIS_PORT=7777 "
         f"-e SYNAPSIS_HOST=0.0.0.0 "

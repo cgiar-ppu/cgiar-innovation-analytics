@@ -20,10 +20,17 @@ FROM python:3.12-slim
 # Build arg for version tracking
 ARG GIT_SHA=unknown
 
-# System dependencies (minimal -- only curl for health checks)
+# System dependencies (minimal -- curl for health checks, sqlite3 for ops)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && apt-get install -y --no-install-recommends curl ca-certificates sqlite3 \
     && rm -rf /var/lib/apt/lists/*
+
+# ---- Litestream (continuous SQLite replication to S3) ----
+# EC2 hosts are x86_64 (al2023 default AMI), so use the linux-amd64 build.
+RUN LITESTREAM_VERSION=v0.3.13 && \
+    curl -fsSL "https://github.com/benbjohnson/litestream/releases/download/${LITESTREAM_VERSION}/litestream-${LITESTREAM_VERSION}-linux-amd64.tar.gz" \
+      | tar -xz -C /usr/local/bin litestream && \
+    chmod +x /usr/local/bin/litestream
 
 WORKDIR /app
 
@@ -39,6 +46,11 @@ COPY seed_knowledge.py ./
 
 # Frontend static assets from the build stage
 COPY --from=frontend /static ./static
+
+# Litestream config + production entrypoint (wraps uvicorn with replication)
+COPY litestream.yml /etc/litestream.yml
+COPY entrypoint.prod.sh /entrypoint.prod.sh
+RUN chmod +x /entrypoint.prod.sh
 
 # PRMS database (must be present in build context at data/prdb.sqlite)
 COPY data/prdb.sqlite /app/data/prdb.sqlite
@@ -56,7 +68,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Non-root user
 RUN useradd -m -s /bin/bash appuser \
-    && mkdir -p /workspace \
+    && mkdir -p /workspace/.synapsis \
     && chown -R appuser:appuser /app /workspace
 
 # Health check
@@ -67,4 +79,6 @@ EXPOSE 7780
 
 USER appuser
 
-CMD ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7780"]
+# entrypoint.prod.sh restores chat.db from S3 (if a replica exists) then runs
+# uvicorn under `litestream replicate -exec` for continuous S3 replication.
+CMD ["/entrypoint.prod.sh"]

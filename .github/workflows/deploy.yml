@@ -101,16 +101,22 @@ jobs:
             --image-scanning-configuration scanOnPush=true
 
       # -----------------------------------------------------------------
-      # Download PRMS database (S3 primary → Mac mini secondary → hard fail)
+      # Download PRMS database (S3 sole source → size guard → hard fail)
       # -----------------------------------------------------------------
-      # Canonical source: June 2026 snapshot (prdb_fresh.sqlite, 422,367,232 bytes).
+      # Canonical source: June 2026 snapshot (422,367,232 bytes).
       # Dedup CTE yields 2024=445 innovations (naive GROUP BY inflates to 1,016).
-      # S3 was seeded on 2026-06-14 from this same snapshot.
+      # Both account buckets were seeded on 2026-06-14 from this snapshot.
       #
-      # Fallback chain (both must be June 2026; NO March/488 fallback):
-      #   1. S3 bucket (eu-central-1) — durable, fast, cost-negligible
-      #   2. Mac mini HTTP server (p3001.synaptic.synapsis-analytics.com) — backup
-      #   3. Hard fail — deploy stops rather than baking in wrong data
+      # S3 is now the SOLE source. The former Mac-mini HTTP fallback
+      # (p3001.synaptic.synapsis-analytics.com) was a manually-launched
+      # process with no supervisor — it does not survive a reboot, so relying
+      # on it made deploys silently non-deterministic. S3 is durable, fast,
+      # and cost-negligible; if it is ever empty the deploy hard-fails rather
+      # than silently baking in stale data.
+      #
+      #   1. S3 bucket (eu-central-1) — durable June 2026 / 422 MB snapshot
+      #   2. Size guard — rejects anything below the 421 MB threshold
+      #   3. Hard fail — deploy stops rather than baking in wrong/missing data
       # -----------------------------------------------------------------
       - name: Download PRMS database
         env:
@@ -118,41 +124,16 @@ jobs:
         run: |
           mkdir -p data
 
-          DB_FETCHED=false
-
-          # 1. Try S3 first (durable, already holds June 2026 / 422 MB snapshot)
-          echo "Attempting S3 download: s3://$S3_BUCKET/prdb.sqlite ..."
-          if aws s3 cp "s3://$S3_BUCKET/prdb.sqlite" data/prdb.sqlite; then
-            echo "S3 download succeeded."
-            DB_FETCHED=true
-          else
-            echo "::warning::S3 download failed — trying Mac mini backup..."
-          fi
-
-          # 2. Try Mac mini HTTP server (SSH-tunnelled; June 2026 / 422 MB)
-          if [ "$DB_FETCHED" = "false" ]; then
-            echo "Attempting Mac mini download: https://p3001.synaptic.synapsis-analytics.com/prdb_fresh.sqlite ..."
-            if curl -fL --progress-bar \
-                "https://p3001.synaptic.synapsis-analytics.com/prdb_fresh.sqlite" \
-                -o data/prdb.sqlite; then
-              echo "Mac mini download succeeded."
-              DB_FETCHED=true
-              # Refresh S3 from freshly downloaded file
-              echo "Refreshing S3 from Mac mini source..."
-              aws s3 mb "s3://$S3_BUCKET" --region ${{ env.AWS_REGION }} 2>/dev/null || true
-              aws s3 cp data/prdb.sqlite "s3://$S3_BUCKET/prdb.sqlite" || \
-                echo "::warning::S3 refresh failed (non-fatal — S3 still holds previous June 2026 copy)"
-            else
-              echo "::warning::Mac mini download failed."
-            fi
-          fi
-
-          # 3. Hard fail — never fall back to stale March/488 data
-          if [ "$DB_FETCHED" = "false" ]; then
-            echo "::error::Both S3 and Mac mini sources failed. Cannot obtain June 2026 PRMS database."
-            echo "::error::Refusing to deploy with stale data. Fix S3 or Mac mini before retrying."
+          # S3 is the sole source. Fail hard if it cannot be fetched — never
+          # silently continue with stale or missing data.
+          echo "Downloading PRMS database: s3://$S3_BUCKET/prdb.sqlite ..."
+          if ! aws s3 cp "s3://$S3_BUCKET/prdb.sqlite" data/prdb.sqlite; then
+            echo "::error::S3 download failed for s3://$S3_BUCKET/prdb.sqlite."
+            echo "::error::S3 is the sole DB source. Re-seed the bucket with the June 2026"
+            echo "::error::snapshot (422,367,232 bytes) before retrying. Refusing to deploy."
             exit 1
           fi
+          echo "S3 download succeeded."
 
           # Verify size: June 2026 = 422,367,232 bytes; March 2026 = 419,123,200 bytes.
           # Threshold 421,000,000 rejects March data if it somehow ended up in S3.
@@ -170,10 +151,10 @@ jobs:
       # Docker: Build and push image
       # -----------------------------------------------------------------
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.prod
@@ -365,7 +346,9 @@ jobs:
               'docker image prune -af --filter until=24h || true',
               'SSM_PREFIX=/cgiar-ia-${{ env.STAGE }}',
               'ANTHROPIC_KEY=\$(aws ssm get-parameter --name \$SSM_PREFIX/anthropic-api-key --with-decryption --query Parameter.Value --output text --region $REGION 2>/dev/null || echo \"\")',
-              'docker run -d --name $CONTAINER_NAME --restart always --log-driver=awslogs --log-opt awslogs-region=$REGION --log-opt awslogs-group=/cgiar-ia/${{ env.STAGE }} --log-opt awslogs-stream=$CONTAINER_NAME --log-opt awslogs-create-group=true --log-opt mode=non-blocking --log-opt max-buffer-size=4m -p 7780:7780 -e AWS_REGION=$REGION -e ANTHROPIC_API_KEY=\$ANTHROPIC_KEY -e SYNAPSIS_PORT=7780 -e SYNAPSIS_HOST=0.0.0.0 -e SYNAPSIS_PLATFORM=linux -e PRMS_DB_PATH=/app/data/prdb.sqlite -e SYNAPSIS_MODEL=claude-sonnet-4-6 -e SYNAPSIS_FALLBACK_MODEL=claude-opus-4-8 -e SYNAPSIS_MAX_TURNS=200 -e SYNAPSIS_WORKSPACE=/workspace $ECR_URI:$ECR_TAG',
+              'mkdir -p /opt/cgiar-ia/synapsis',
+              'chown 1000:1000 /opt/cgiar-ia/synapsis 2>/dev/null || true',
+              'docker run -d --name $CONTAINER_NAME --restart always --log-driver=awslogs --log-opt awslogs-region=$REGION --log-opt awslogs-group=/cgiar-ia/${{ env.STAGE }} --log-opt awslogs-stream=$CONTAINER_NAME --log-opt awslogs-create-group=true --log-opt mode=non-blocking --log-opt max-buffer-size=4m -p 7780:7780 -v /opt/cgiar-ia/synapsis:/workspace/.synapsis -e AWS_REGION=$REGION -e LITESTREAM_S3_BUCKET=cgiar-ia-artifacts-$ACCOUNT -e ANTHROPIC_API_KEY=\$ANTHROPIC_KEY -e SYNAPSIS_PORT=7780 -e SYNAPSIS_HOST=0.0.0.0 -e SYNAPSIS_PLATFORM=linux -e PRMS_DB_PATH=/app/data/prdb.sqlite -e SYNAPSIS_MODEL=claude-sonnet-4-6 -e SYNAPSIS_FALLBACK_MODEL=claude-opus-4-8 -e SYNAPSIS_AVAILABLE_MODELS=\"claude-sonnet-4-6,claude-opus-4-8[1m]\" -e SYNAPSIS_MAX_TURNS=200 -e SYNAPSIS_WORKSPACE=/workspace $ECR_URI:$ECR_TAG',
               'for i in \$(seq 1 15); do if curl -sf http://localhost:7780/api/health; then echo \"Container healthy\"; exit 0; fi; sleep 2; done; echo \"Health check timed out\"; exit 1'
             ]" \
             --query "Command.CommandId" --output text 2>&1) || {

@@ -219,6 +219,23 @@ Resources:
                   - logs:PutLogEvents
                   - cloudwatch:PutMetricData
                 Resource: '*'
+        # Litestream replicates chat.db to the project artifacts bucket so chat
+        # history survives instance replacement / AZ failure. Scoped to the
+        # same-account cgiar-ia-* buckets the deploy pipeline already uses.
+        - PolicyName: LitestreamS3
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation  # litestream resolves the bucket region on startup
+                Resource:
+                  - !Sub arn:aws:s3:::cgiar-ia-artifacts-${AWS::AccountId}
+                  - !Sub arn:aws:s3:::cgiar-ia-artifacts-${AWS::AccountId}/*
 
   AgentInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -247,7 +264,7 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
-            VolumeSize: 30
+            VolumeSize: 32
             VolumeType: gp3
             Encrypted: true
       Tags:
@@ -291,6 +308,11 @@ Resources:
             docker rm "$CONTAINER_NAME" 2>/dev/null || true
             docker image prune -af --filter "until=24h" || true
 
+            # --- Durable host dir for chat history (bind-mounted into container) ---
+            # UID 1000 matches the container's appuser (useradd -m in Dockerfile.prod).
+            mkdir -p /opt/cgiar-ia/synapsis
+            chown 1000:1000 /opt/cgiar-ia/synapsis 2>/dev/null || true
+
             # --- Run container ---
             docker run -d \
               --name "$CONTAINER_NAME" \
@@ -303,15 +325,18 @@ Resources:
               --log-opt mode=non-blocking \
               --log-opt max-buffer-size=4m \
               -p 7780:7780 \
+              -v /opt/cgiar-ia/synapsis:/workspace/.synapsis \
               -e AWS_REGION="$REGION" \
+              -e LITESTREAM_S3_BUCKET="cgiar-ia-artifacts-${AWS::AccountId}" \
               -e ANTHROPIC_API_KEY="$ANTHROPIC_KEY" \
               -e SYNAPSIS_PORT="7780" \
               -e SYNAPSIS_HOST="0.0.0.0" \
               -e SYNAPSIS_PLATFORM="linux" \
               -e SYNAPSIS_WORKSPACE="/workspace" \
               -e PRMS_DB_PATH="/app/data/prdb.sqlite" \
-              -e SYNAPSIS_MODEL="claude-opus-4-6" \
-              -e SYNAPSIS_FALLBACK_MODEL="claude-sonnet-4-5-20250929" \
+              -e SYNAPSIS_MODEL="claude-sonnet-4-6" \
+              -e SYNAPSIS_FALLBACK_MODEL="claude-opus-4-8" \
+              -e SYNAPSIS_AVAILABLE_MODELS="claude-sonnet-4-6,claude-opus-4-8[1m]" \
               -e SYNAPSIS_MAX_TURNS="200" \
               -e GIT_SHA="$IMAGE_TAG" \
               "$ECR_REPO:$IMAGE_TAG"

@@ -19,7 +19,7 @@ from typing import Optional
 
 from claude_agent_sdk import ClaudeSDKClient
 
-from synapsis.config import logger, FALLBACK_MODEL
+from synapsis.config import logger, FALLBACK_MODEL, AVAILABLE_MODELS
 from synapsis.constants import SELECTABLE_MODEL_IDS
 from synapsis.agent_options import build_agent_options
 from synapsis.database import (
@@ -235,7 +235,9 @@ async def handle_switch_model(
     from synapsis.session_manager import cleanup_session_client
 
     new_model = payload.get("model", "").strip()
-    if new_model not in SELECTABLE_MODEL_IDS:
+    # Must be a curated model AND allowed by this deployment's
+    # SYNAPSIS_AVAILABLE_MODELS allow-list (defaults to all curated models).
+    if new_model not in SELECTABLE_MODEL_IDS or new_model not in AVAILABLE_MODELS:
         await send_json(
             {"type": "error", "message": f"Invalid model '{new_model}'"},
             sid=session_id,

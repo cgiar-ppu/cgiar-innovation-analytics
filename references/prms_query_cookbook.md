@@ -5,6 +5,29 @@
 
 ---
 
+## ⛔ YEAR-SCOPE PRE-FLIGHT — read before writing ANY query
+
+Run this 4-point check on every PRMS query. Most data errors come from skipping it.
+
+1. **Did the user name a year — now or in an earlier turn?** ("in 2024", "the 2025 cycle", "last year", "current"). A year stated in turn 1 **carries forward** to every follow-up until the user changes it. → If a year is in scope, your SQL **MUST** contain `reported_year_id = <year>`. No exceptions.
+
+2. **Is this a per-year list / subset / breakdown?** (e.g. "results under initiative X in 2024", "scaling-ready innovations in Africa in 2024", "IRL 7+ innovations by country in 2023"). → Use **alive-in-year** scope:
+   `WHERE result_type_id=7 AND source='Result' AND is_active=1 AND status_id=2 AND reported_year_id=:year`.
+   → **DO NOT** use the all-years latest-phase `canon` dedup CTE for a single-year question. That CTE keeps each code's *latest* phase and silently returns an **all-years / 2025-flavored snapshot** — not the year you asked for. (See Recipe 8 and the era-mixing anti-pattern.)
+
+3. **Era tripwire.** A single-year answer can only contain codes from ONE portfolio era:
+   - **2022–2024** → `INIT-##` / `SGP-##` codes (`portfolio_id=2`)
+   - **2025+** → `SP01–SP13` codes (`portfolio_id=3`)
+   If your result set mixes `SP##` with `INIT-##`, **or shows any `SP##` / "Breeding for Tomorrow" code in a pre-2025 answer, your query is WRONG — you forgot the year filter.** `SP01–SP13` have ZERO records before 2025. Stop and re-query.
+
+4. **Geography is a UNION.** "Africa" (or any region) = results tagged to an African **country** OR an African **region** — combine `result_country` and `result_region`, never one alone. See Recipe 9. (`clarisa_countries_regions` is empty — use the ISO-3 list.)
+
+5. **Show interpretation, then state the year(s).** Before running the main query, post a short interpretation block (type · year · funding · geography definition · filters · how counted) and pause for confirmation if any dimension is ambiguous. Open every answer by naming the reporting year(s) and geography definition it covers.
+
+> **Incident reference (2026-06-15):** "all results … in 2024" was answered with the all-years `canon` CTE and no `reported_year_id` filter. It returned 176 Africa IRL7+ innovations led by "SP01 Breeding for Tomorrow" — but the correct 2024 figure is **111**, led by **INIT-01 Accelerated Breeding**. SP01 does not exist in 2024. See `docs/incident-2026-06-15-year-scope-regression.md`.
+
+---
+
 ## Quick Reference: Canonical Numbers (June 13 DB)
 
 | Metric | All-years | 2022 | 2023 | 2024 | 2025 |
@@ -297,7 +320,100 @@ SELECT COUNT(*) FROM canon WHERE result_type_id = 2 AND reported_year_id = :year
 
 ---
 
+## Recipe 8: Year-Scoped Subset / List / Breakdown ✅ (lists & filtered counts within a year)
+
+**When to use:** Any request for a *list* or *filtered breakdown* tied to a specific year — "show all results under initiative X **in 2024**", "scaling-ready (IRL 7+) innovations in Africa **in 2024**", "innovations by country **in 2023**". This is the most common shape and the one most often gotten wrong.
+
+**Design rule:** Start from the **alive-in-year** population (Recipe 3) and add your subset filters (initiative, region, IRL, country) to it. **Never** start from the all-years `canon` dedup CTE — that CTE answers an all-years question and returns each code's latest (often 2025) phase regardless of the year you asked for.
+
+### SQL (template — 2024 Africa IRL 7+ scaling-ready innovations)
+```sql
+WITH africa_ids AS (
+  SELECT DISTINCT rr.result_id FROM result_region rr
+  WHERE rr.is_active = 1 AND rr.region_id IN (11,14,15,17,18,202,2)
+)
+SELECT cirl.level AS irl, cirl.name AS irl_name,
+       COUNT(DISTINCT r.result_code) AS innovations
+FROM result r
+JOIN results_innovations_dev rid ON rid.results_id = r.id AND rid.is_active = 1
+JOIN clarisa_innovation_readiness_level cirl ON cirl.id = rid.innovation_readiness_level_id
+WHERE r.result_type_id = 7
+  AND r.source = 'Result' AND r.is_active = 1 AND r.status_id = 2
+  AND r.reported_year_id = 2024            -- ← the year filter that makes it 2024
+  AND r.id IN (SELECT result_id FROM africa_ids)
+  AND cirl.level >= 7
+GROUP BY cirl.level ORDER BY cirl.level;
+```
+
+**Expected output (verified, June 13 DB):** IRL7=40, IRL8=25, IRL9=46 → **total 111** unique innovations.
+**Top 2024 programmes:** INIT-01 Accelerated Breeding (46), INIT-13 Plant Health (12), INIT-11 Excellence in Agronomy (11), INIT-21 (10) — **all `INIT-##`, zero `SP##`** (correct for 2024).
+
+> **Regression check:** if this query ever returns ~176 or shows `SP01`/"Breeding for Tomorrow", the `reported_year_id` filter has been dropped or an all-years dedup CTE has crept back in.
+
+For breakdowns by another dimension (initiative, country, type), keep the same `WHERE` block and swap the join/`GROUP BY` — the alive-in-year + `reported_year_id=:year` rows are always the base population (per Recipe 3's scope routing rule).
+
+---
+
+## Recipe 9: Geography — "Africa" (and any region) = country-tagged OR region-tagged ✅
+
+**When to use:** Any geographic filter — "in Africa", "in East Africa", "in Asia", a specific country, etc.
+
+### The model (two tag systems + a hierarchy)
+A result carries geography in **two** independent places:
+- **`result_region`** → tagged to a **region** (`region_id` = UN-M49 code in `clarisa_regions`).
+- **`result_country`** → tagged to specific **countries** (`country_id` → `clarisa_countries`).
+
+A result may have a region tag, country tags, both, or neither (global-only). **A geographic filter must capture BOTH** — a result tagged "Sub-Saharan Africa" with no country still belongs to Africa, and a result listing Kenya with no region tag also does.
+
+**Region hierarchy.** `clarisa_regions` nests via `parent_regions_code`: `Africa(2)` → `Sub-Saharan Africa(202)` → `Western(11)/Eastern(14)/Middle(17)/Southern(18) Africa`, plus `Northern Africa(15)` → `Africa(2)`. The **dashboard** slicer ("Geographic location (Region/Country)") instead uses **CGIAR regions** (`clarisa_regions_cgiar`): East & Southern Africa, West & Central Africa, and the North-Africa part of Central & West Asia & North Africa — with countries nested under each. Selecting a CGIAR region in the dashboard cascades to its countries, so the dashboard behaves like the country-OR-region UNION below.
+
+> ⚠️ **Gotcha:** `clarisa_countries_regions` (the country→region mapping table) is **EMPTY** in this DB. You cannot derive the African country set from it — use the explicit ISO-3 list below.
+
+### Canonical Africa filter (copy-paste)
+```sql
+-- African UN-M49 region codes: 2=Africa, 202=Sub-Saharan, 11=Western, 14=Eastern,
+-- 15=Northern, 17=Middle, 18=Southern Africa
+WITH africa_results AS (
+  SELECT rr.result_id FROM result_region rr
+    WHERE rr.is_active=1 AND rr.region_id IN (2,202,11,14,15,17,18)
+  UNION
+  SELECT rc.result_id FROM result_country rc
+    JOIN clarisa_countries cc ON cc.id = rc.country_id
+    WHERE rc.is_active=1 AND cc.iso_alpha_3 IN (
+      'DZA','AGO','BEN','BWA','BFA','BDI','CPV','CMR','CAF','TCD','COM','COG','COD',
+      'DJI','EGY','GNQ','ERI','SWZ','ETH','GAB','GMB','GHA','GIN','GNB','CIV','KEN',
+      'LSO','LBR','LBY','MDG','MWI','MLI','MRT','MUS','MAR','MOZ','NAM','NER','NGA',
+      'RWA','STP','SEN','SLE','SOM','ZAF','SSD','SDN','TZA','TGO','TUN','UGA','ZMB','ZWE')
+)
+-- then: ... AND r.id IN (SELECT result_id FROM africa_results)
+```
+
+### Verified deltas (2024, IRL 7+, Innovation Developments)
+| Definition | Count | Use |
+|---|---|---|
+| Region-tagged only | 111 | Incomplete — misses country-only results |
+| Country-tagged only | 203 | Incomplete — misses region-only results |
+| **Country OR region (UNION)** | **264** | ✅ **The correct "Africa"** (IRL7=105, IRL8=67, IRL9=92) |
+
+For a **CGIAR sub-region** (e.g. "East & Southern Africa") map via `clarisa_regions_cgiar` (UN 14/17/18 → CGIAR 4) for the region tags, plus that region's countries. For a **single country**, just filter `result_country`. Always state which geographic definition you used.
+
+---
+
 ## Anti-Patterns ❌
+
+### DO NOT answer a single-year question with the all-years dedup CTE (the 2026-06-15 incident)
+```sql
+-- ❌ WRONG — "all results … in 2024" answered with the all-years latest-phase canon CTE
+-- and NO reported_year_id filter. Returns each code's LATEST phase (2025 for any
+-- continuing code), so it mixes 2025 Science Programs (SP01-SP13) into a "2024" answer
+-- and inflates the count (176 vs the correct 111).
+WITH ord(v,o) AS (VALUES (1,0),(3,1),(4,2),(6,3)),
+cand_all AS (SELECT r.result_code, r.id, ... FROM result r JOIN ord o ON o.v=r.version_id
+             WHERE r.source='Result' AND r.is_active=1 AND r.status_id=2),
+... canon AS (... latest phase per result_code ...)
+SELECT ... FROM canon WHERE ... cirl.level>=7;   -- ← no reported_year_id anywhere
+```
+✅ **Correct:** use Recipe 8 — alive-in-year + `reported_year_id = :year`. A 2024 answer must contain only `INIT-##`/`SGP-##` codes; an `SP##` code appearing means the year filter is missing.
 
 ### DO NOT use the naive all-years count for type 7
 ```sql

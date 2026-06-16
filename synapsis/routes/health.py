@@ -10,9 +10,20 @@ import os
 
 from fastapi import APIRouter
 
-from synapsis.config import MODEL, FALLBACK_MODEL, MAX_TURNS, WORKSPACE, AUTH_METHOD, IS_MACOS, SYNAPSIS_PLATFORM, APP_VERSION
+from synapsis.config import (
+    MODEL,
+    FALLBACK_MODEL,
+    MAX_TURNS,
+    WORKSPACE,
+    AUTH_METHOD,
+    IS_MACOS,
+    SYNAPSIS_PLATFORM,
+    APP_VERSION,
+    AVAILABLE_MODELS,
+    SELECTABLE_MODELS_FILTERED,
+)
 from synapsis.agents import SUBAGENTS
-from synapsis.constants import MEMORY_CATEGORIES, SELECTABLE_MODELS
+from synapsis.constants import MEMORY_CATEGORIES
 
 router = APIRouter(prefix="/api", tags=["health"])
 
@@ -26,6 +37,7 @@ async def health():
         "workspace": str(WORKSPACE),
         "auth_method": AUTH_METHOD,
         "version": APP_VERSION,
+        "available_models": AVAILABLE_MODELS,
     }
 
 
@@ -47,7 +59,8 @@ async def get_config():
     return {
         "model": MODEL,
         "fallback_model": FALLBACK_MODEL,
-        "selectable_models": SELECTABLE_MODELS,
+        "selectable_models": SELECTABLE_MODELS_FILTERED,
+        "available_models": AVAILABLE_MODELS,
         "max_turns": MAX_TURNS,
         "auth_method": AUTH_METHOD,
         "version": APP_VERSION,
