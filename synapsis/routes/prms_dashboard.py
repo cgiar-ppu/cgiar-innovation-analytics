@@ -50,9 +50,16 @@ _PRMS_DB_PATH = os.getenv(
 # SQL Queries
 # ---------------------------------------------------------------------------
 
+# All-years total results KPI.
+# FIX (wave 2, F-3): added `source='Result' AND status_id=2` so the all-years
+# card uses the same QAed definition as its per-year twin
+# (_SQL_YEAR_TOTAL_RESULTS). Previously is_active=1-only returned 2,759, which
+# counted unQAed + bilateral rows the per-year cards exclude; the aligned
+# QAed-only count is 2,274.
 _SQL_TOTAL_RESULTS = """
 SELECT COUNT(DISTINCT result_code) FROM result
-WHERE is_active = 1 AND result_type_id IN (2, 7, 10);
+WHERE is_active = 1 AND source = 'Result' AND status_id = 2
+  AND result_type_id IN (2, 7, 10);
 """
 
 # Canonical all-years Innovation Development count: latest-phase dedup across
@@ -105,19 +112,34 @@ SELECT COUNT(DISTINCT result_code) FROM result
 WHERE is_active = 1 AND result_type_id = 2;
 """
 
+# All-years active initiatives KPI.
+# FIX (wave 2, F-3): added `source='Result' AND status_id=2` to match the
+# per-year _SQL_YEAR_INITIATIVES definition. (Count is unchanged at 54 in this
+# DB, but the filter is now consistent with the per-year card.)
 _SQL_ACTIVE_INITIATIVES = """
 SELECT COUNT(DISTINCT i.id)
 FROM clarisa_initiatives i
 JOIN results_by_inititiative rbi ON rbi.inititiative_id = i.id
 JOIN result r ON r.id = rbi.result_id
-WHERE r.is_active = 1 AND r.result_type_id IN (2, 7, 10);
+WHERE r.is_active = 1 AND r.source = 'Result' AND r.status_id = 2
+  AND r.result_type_id IN (2, 7, 10);
 """
 
+# All-years countries-covered KPI.
+# FIX (wave 2, F-3): added `source='Result' AND status_id=2` to match the
+# per-year _SQL_YEAR_COUNTRIES definition. Previously is_active=1-only returned
+# 124; the aligned QAed-only count is 117.
+# Geography note (Cheatsheet rule 5): this is a distinct-country count on
+# result_country and is correct as a country metric. There is no region/"Africa"
+# slicer in this endpoint, so the country-OR-region UNION rule is not in play
+# here; if such a slicer is ever added, it MUST implement that UNION.
 _SQL_COUNTRIES_COVERED = """
 SELECT COUNT(DISTINCT rc.country_id)
 FROM result_country rc
 JOIN result r ON r.id = rc.result_id
-WHERE r.is_active = 1 AND rc.is_active = 1 AND r.result_type_id IN (2, 7, 10);
+WHERE r.is_active = 1 AND rc.is_active = 1
+  AND r.source = 'Result' AND r.status_id = 2
+  AND r.result_type_id IN (2, 7, 10);
 """
 
 _SQL_INNOVATION_PACKAGES = """
@@ -143,10 +165,24 @@ WHERE is_active = 1 AND result_type_id = 10;
 #
 # - Innovation Package (type 10): naive is_active=1 count, matching
 #   _SQL_INNOVATION_PACKAGES. Chart bucket = 96 = innovation_packages KPI.
-#   The canonical (dedup + status_id=2) count is 0 because no type-10 rows
-#   satisfy source='Result' AND status_id=2 in this DB — a known open item
-#   (see prms_data_guide.md § Open Items). Using naive here keeps chart and
-#   KPI in sync until the data characteristic is understood.
+#   CORRECTION (wave 2, F-4): the previous comment here claimed "the canonical
+#   (dedup + status_id=2) count is 0 because no type-10 rows satisfy
+#   source='Result' AND status_id=2." That is FACTUALLY WRONG. In this DB there
+#   are 164 type-10 rows / 74 distinct codes with source='Result' AND
+#   status_id=2 AND is_active=1. The dedup CTE returns 0 for type 10 only
+#   because its phase-ordering map `ord(v, o) AS (VALUES (1,0),(3,1),(4,2),(6,3))`
+#   covers version_id ∈ {1,3,4,6}, while these type-10 QAed rows live on
+#   version_id ∈ {2,5,7} (v2=47, v5=64, v7=53 rows). The inner
+#   `JOIN ord o ON o.v = r.version_id` therefore silently drops every type-10
+#   row → canon = 0. This is a version-coverage gap in the phase map, NOT an
+#   absence of data. The same gap likely explains part of the type-2 naive(675)
+#   vs canon(550) divergence, since type-2 QAed rows also span versions outside
+#   {1,3,4,6}.
+#   # OPEN ITEM (OI-3 / OI-4): the correct canonical per-year/all-years type-10
+#   (and type-2) figure is genuinely undecided — either extend `ord` to cover
+#   versions {2,5,7} (which would also move the type-2 canon count) or use a
+#   non-phase dedup for these types. Do NOT invent a number; the naive
+#   is_active=1 counts are used here intentionally to keep chart == KPI.
 _SQL_RESULTS_BY_TYPE = """
 WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
 cand AS (
@@ -180,33 +216,80 @@ SELECT 'Innovation Package' AS type,
 ORDER BY count DESC;
 """
 
+# All-years top countries.
+# FIX (wave 2, F-2): added `source='Result' AND status_id=2` so the ranking is
+# scoped to the QAed dashboard population (matching the per-year branch and the
+# KPI cards). Without it the chart counted unQAed + bilateral rows (Kenya 357 →
+# 316, etc.). Geography note (Cheatsheet rule 5): this is a country breakdown
+# keyed on result_country only and is correct as-is. If a region/"Africa"
+# geography slicer is ever added here, it MUST use the country-ISO-3 OR
+# region-UN-M49 UNION rule — never one side alone.
 _SQL_TOP_COUNTRIES = """
 SELECT c.name AS country, COUNT(DISTINCT r.result_code) AS count
 FROM result_country rc
 JOIN clarisa_countries c ON rc.country_id = c.id
 JOIN result r ON r.id = rc.result_id
-WHERE r.is_active = 1 AND rc.is_active = 1 AND r.result_type_id IN (2, 7, 10)
+WHERE r.is_active = 1 AND rc.is_active = 1
+  AND r.source = 'Result' AND r.status_id = 2
+  AND r.result_type_id IN (2, 7, 10)
 GROUP BY c.name
 ORDER BY count DESC
 LIMIT 10;
 """
 
+# All-years IRL distribution.
+#
+# FIX (wave 2, F-1): the previous query joined results_innovations_dev to
+# result with ONLY is_active=1 on both — no result_type / source / status /
+# latest-phase dedup. It returned 1,963 distinct codes (unQAed + bilateral +
+# every reporting phase of every code), which does NOT reconcile with the
+# total_innovations card (1,852 = 1,630 W1/W2 + 222 bilateral) on the same page.
+#
+# Corrected to the canonical type-7 W1/W2 latest-phase set (the same dedup CTE
+# as _SQL_TOTAL_INNOVATIONS), so the IRL bars sit under the 1,630 W1/W2
+# component of the headline. Bilateral (source='API') has no IRL semantics in
+# results_innovations_dev, so W1/W2-only is the correct denominator for this
+# chart. The canon set is 1,630 codes; 1,628 of them carry an IRL row in
+# results_innovations_dev (2 canonical codes have no readiness level recorded),
+# so the bars sum to 1,628 — the small gap is missing IRL data, not a scope bug.
 _SQL_IRL_DISTRIBUTION = """
-SELECT cirl.name AS level, COUNT(DISTINCT r.result_code) AS count
-FROM results_innovations_dev rid
-JOIN result r ON r.id = rid.results_id
+WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
+cand AS (
+    SELECT r.result_code, r.id, r.result_type_id, o.o AS phord
+    FROM result r JOIN ord o ON o.v = r.version_id
+    WHERE r.source = 'Result' AND r.is_active = 1 AND r.status_id = 2
+),
+pick AS (SELECT result_code, MAX(phord) AS m FROM cand GROUP BY result_code),
+latest AS (
+    SELECT c.* FROM cand c
+    JOIN pick p ON p.result_code = c.result_code AND p.m = c.phord
+),
+canon AS (
+    SELECT l.* FROM latest l
+    WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
+)
+SELECT cirl.name AS level, COUNT(DISTINCT cn.result_code) AS count
+FROM canon cn
+JOIN results_innovations_dev rid ON rid.results_id = cn.id AND rid.is_active = 1
 JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
-WHERE rid.is_active = 1 AND r.is_active = 1
+WHERE cn.result_type_id = 7
 GROUP BY cirl.name, cirl.id
 ORDER BY cirl.id;
 """
 
+# All-years top initiatives.
+# FIX (wave 2, F-2): added `source='Result' AND status_id=2` so the ranking
+# matches the QAed dashboard population (Scaling for Impact 438 → 270, etc.).
+# SP##/INIT-## era mixing is acceptable here because this is an all-years view
+# (the era tripwire only applies to single-year slices).
 _SQL_TOP_INITIATIVES = """
 SELECT i.short_name AS initiative, COUNT(DISTINCT r.result_code) AS count
 FROM results_by_inititiative rbi
 JOIN clarisa_initiatives i ON rbi.inititiative_id = i.id
 JOIN result r ON r.id = rbi.result_id
-WHERE r.is_active = 1 AND rbi.initiative_role_id = 1 AND r.result_type_id IN (2, 7, 10)
+WHERE r.is_active = 1 AND rbi.initiative_role_id = 1
+  AND r.source = 'Result' AND r.status_id = 2
+  AND r.result_type_id IN (2, 7, 10)
 GROUP BY i.short_name
 ORDER BY count DESC
 LIMIT 10;
@@ -550,6 +633,18 @@ def _fetch_prms_data(year: Optional[int] = None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
+# GEOGRAPHY NOTE (wave 2, F-5): this endpoint exposes NO region/"Africa" geo
+# slicer — the only geography dimension is the country breakdown, keyed on
+# result_country, which is correct for a per-country metric. So the Cheatsheet
+# rule-5 country-OR-region UNION is not in play here (it is absent, not
+# violated). If a region/geography filter (e.g. an "Africa" toggle) is ever
+# added to this route, it MUST implement the UNION of:
+#   - result_region   (UN-M49 region_id IN (2,202,11,14,15,17,18)), AND
+#   - result_country  (the 54 African ISO-3 codes via clarisa_countries)
+# and MUST NOT rely on clarisa_countries_regions (empty in this DB). Counting
+# only one side silently undercounts (2024 Africa IRL7+: region-only=111,
+# country-only=203, comprehensive UNION=264). Add a regression test pinning
+# those numbers if such a slicer is introduced.
 
 @router.get("/dashboard/prms-stats")
 async def prms_dashboard_stats(

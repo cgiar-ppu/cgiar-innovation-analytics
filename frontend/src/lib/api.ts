@@ -13,6 +13,7 @@
  */
 
 import type { Session, FileInfo, Memory, NewMemory, AppConfig, HealthStatus, ChatMessage, SearchResult, GitStatus, GitDiffResponse, GitLogResponse, GitShowResponse, TTSVoice, TTSSettings } from './types'
+import { isSuppressedSystemMessage } from '../stores/chat/systemMessageFilter'
 import type { SkillInfo } from './types-extended'
 
 const BASE = ''
@@ -163,8 +164,13 @@ function mapHistoryMessage(msg: HistoryMessage, index: number): ChatMessage[] {
       messages.push({ ...base, role: 'result', content: '', estimatedCost: msg.estimated_cost, turns: msg.turns, durationMs: msg.duration_ms, authMethod: msg.auth_method, resultText: msg.result_text })
       return messages
     }
-    default:
-      return [{ ...base, role: 'system', content: typeof msg.data === 'string' ? msg.data : JSON.stringify(msg.data ?? msg.content ?? ''), subtype: msg.subtype }]
+    default: {
+      const content = typeof msg.data === 'string' ? msg.data : JSON.stringify(msg.data ?? msg.content ?? '')
+      // Drop SDK per-turn token/usage telemetry ("thinking_tokens" pills) on
+      // reload so history doesn't resurrect them. flatMap drops the empty array.
+      if (isSuppressedSystemMessage(msg.subtype, content)) return []
+      return [{ ...base, role: 'system', content, subtype: msg.subtype }]
+    }
   }
 }
 

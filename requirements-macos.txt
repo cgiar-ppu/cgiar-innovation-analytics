@@ -18,6 +18,15 @@ openpyxl>=3.1.0
 xlrd>=2.0.0
 xlsxwriter>=3.2.0
 
+# Semantic search (prms_search hybrid index — Qwen3-Embedding-0.6B on MPS).
+# Lazy-loaded at first search; the MCP tool degrades gracefully if absent.
+# FTS5 BM25 uses the stdlib sqlite3; rank_bm25 is listed as an explicit
+# fallback per the hybrid-search design.
+sentence-transformers>=5.5.0
+torch>=2.2.0
+scikit-learn>=1.4.0
+rank_bm25>=0.2.2
+
 # Visualization
 matplotlib>=3.8.0
 seaborn>=0.13.0

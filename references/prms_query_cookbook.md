@@ -11,8 +11,8 @@ Run this 4-point check on every PRMS query. Most data errors come from skipping 
 
 1. **Did the user name a year — now or in an earlier turn?** ("in 2024", "the 2025 cycle", "last year", "current"). A year stated in turn 1 **carries forward** to every follow-up until the user changes it. → If a year is in scope, your SQL **MUST** contain `reported_year_id = <year>`. No exceptions.
 
-2. **Is this a per-year list / subset / breakdown?** (e.g. "results under initiative X in 2024", "scaling-ready innovations in Africa in 2024", "IRL 7+ innovations by country in 2023"). → Use **alive-in-year** scope:
-   `WHERE result_type_id=7 AND source='Result' AND is_active=1 AND status_id=2 AND reported_year_id=:year`.
+2. **Is this a per-year list / subset / breakdown?** (e.g. "results under initiative X in 2024", "scaling-ready innovations in Africa in 2024", "IRL 7+ innovations by country in 2023"). → Use **alive-in-year** scope, including **both** funding windows by default:
+   `WHERE result_type_id=7 AND is_active=1 AND reported_year_id=:year AND ((source='Result' AND status_id=2) OR (source='API' AND status_id=6))` — present W1/W2 and W3/bilateral broken out. (For the pooled-only / public-dashboard view, keep only the `source='Result' AND status_id=2` arm.)
    → **DO NOT** use the all-years latest-phase `canon` dedup CTE for a single-year question. That CTE keeps each code's *latest* phase and silently returns an **all-years / 2025-flavored snapshot** — not the year you asked for. (See Recipe 8 and the era-mixing anti-pattern.)
 
 3. **Era tripwire.** A single-year answer can only contain codes from ONE portfolio era:
@@ -127,7 +127,7 @@ GROUP BY reported_year_id ORDER BY reported_year_id;
 **When to use:** User asks "how many innovations in [year X]" without an explicit "latest" qualifier. This is the default per-year interpretation.
 
 ### What / Why
-An innovation counts for year X if it has AT LEAST ONE active, Quality-Assessed result row with `reported_year_id = X`. A result_code that reported in 2022, 2023, and 2025 counts for all three years separately.
+An innovation counts for year X if it has AT LEAST ONE active result row with `reported_year_id = X` that passes its funding-window QA gate — W1/W2 pooled (`source='Result' AND status_id=2`, "Quality Assessed") **or** W3/bilateral (`source='API' AND status_id=6`, "Approved"). The DEFAULT count includes both windows, broken out. A result_code that reported in 2022, 2023, and 2025 counts for all three years separately.
 
 **Why this is the correct default:**
 - "Innovations in 2023" = innovations that were actively reporting in 2023, regardless of whether they continued into later years
@@ -169,17 +169,17 @@ WHERE result_type_id = 7
 
 **Breakdown query pattern (alive-in-year scope → per dimension):**
 ```sql
--- Example: innovations by country for year X (alive-in-year)
+-- Example: innovations by country for year X (alive-in-year, both funding windows)
 SELECT c.name AS country, COUNT(DISTINCT r.result_code) AS count
 FROM result r
 JOIN result_country rc ON rc.result_id = r.id AND rc.is_active = 1
 JOIN clarisa_countries c ON rc.country_id = c.id
 WHERE r.result_type_id = 7
-  AND r.source = 'Result'
   AND r.is_active = 1
-  AND r.status_id = 2
   AND r.reported_year_id = :year
+  AND ((r.source='Result' AND r.status_id=2) OR (r.source='API' AND r.status_id=6))
 GROUP BY c.name ORDER BY count DESC LIMIT 10;
+-- (Pooled-only / public-dashboard view: keep only `r.source='Result' AND r.status_id=2`.)
 -- Same pattern for IRL (JOIN results_innovations_dev) and initiatives (JOIN results_by_inititiative)
 ```
 
@@ -202,7 +202,7 @@ GROUP BY c.name ORDER BY count DESC LIMIT 10;
 ### What / Why
 - Type 7 (Innovation Development): uses canonical all-years count = 1,852 (Recipe 1). Chart bucket = total_innovations KPI.
 - Type 2 (Innovation Use): uses naive is_active=1 count = 675. Matches innovation_uses KPI. Canonical count differs (known open item).
-- Type 10 (Innovation Package): uses naive is_active=1 count = 96. Matches innovation_packages KPI. No type-10 rows satisfy source='Result'/status_id=2 in this DB (known open item).
+- Type 10 (Innovation Package): uses naive is_active=1 count = 96. Matches innovation_packages KPI. The all-years dedup CTE returns 0 for type 10 — NOT because no QAed rows exist (164 type-10 rows / 74 codes satisfy source='Result' AND status_id=2), but because the `ord(v,o)` phase map covers version_id {1,3,4,6} while type-10 QAed rows live on {2,5,7}, so the `JOIN ord` drops them (known open item OI-3).
 
 ### SQL
 ```sql
@@ -310,7 +310,7 @@ SELECT COUNT(*) FROM canon WHERE result_type_id = 2 AND reported_year_id = :year
 ## Recipe 7: Innovation Package — Per-Year Count
 
 **When to use:** User asks how many Innovation Package (type 10) results in year X.  
-**Status:** Open item. No type-10 rows satisfy source='Result'/status_id=2 in all-years view.
+**Status:** Open item (OI-3). 164 type-10 QAed rows / 74 codes DO satisfy source='Result'/status_id=2, but the all-years dedup CTE returns 0 for type 10 because its phase-ordering map excludes the version_ids {2,5,7} that type-10 rows use. The per-year naive count does not use that CTE and returns non-zero (e.g. 2024=64).
 
 ### SQL
 ```sql
@@ -397,6 +397,25 @@ WITH africa_results AS (
 
 For a **CGIAR sub-region** (e.g. "East & Southern Africa") map via `clarisa_regions_cgiar` (UN 14/17/18 → CGIAR 4) for the region tags, plus that region's countries. For a **single country**, just filter `result_country`. Always state which geographic definition you used.
 
+### Internal-consistency rule (one definition per session/answer)
+Pick ONE geography definition and reuse it for EVERY query in the same answer — the headline count, each breakdown, the example/detail list, and the chart data must all draw from the identical `africa_results` (or equivalent) CTE. Define it once and reference it; do not switch from a region-tag filter for the headline to an ad-hoc country-ISO list for the detail rows. If two queries in one response use different geography filters, their counts are not comparable and the example rows are not a subset of the headline — a reader will (reasonably) assume they are.
+
+> Real failure (2026-06-15): the headline/type/programme counts used region-only tags (`region_id IN (2,202,11,14,15,17,18)`) while the top-countries and IRL-9 example queries used country ISO-3 lists — and the two ISO lists were not even identical to each other. Three different "Africa" populations appeared in one answer.
+
+---
+
+## Recipe 10: Innovations ↔ Innovation Packages (IPSR, type 10) — link without double-counting
+
+**When to use:** "which of these innovations have an innovation package / IPSR?", "packaged vs unpackaged", package-coverage rates.
+
+**Design rules:**
+1. **Respect year scope.** If a year is in play (incl. carried-forward), the component population is the alive-in-year set (Recipe 8), NOT the all-years `canon` CTE. The package side must be filtered to the same era — do not let a 2025 package attach to a 2024 component answer.
+2. **Link on the canonical component, then DISTINCT.** Map component↔package via `result_by_innovation_package` (`result_id` = a component phase row, `result_innovation_package_id` = the package). Because one innovation can sit in several packages and membership can repeat across phases, the join FANS OUT. Always reduce with `COUNT(DISTINCT c.result_code)` (innovations) and `COUNT(DISTINCT package_code)` (packages) — never read raw fan-out rows to tally by hand.
+3. **Type-10 gate is an OPEN ITEM — caveat it.** 164 type-10 QAed rows / 74 codes DO satisfy `source='Result' AND status_id=2`, but the all-years dedup CTE returns 0 for type 10 because its `ord(v,o)` phase map covers `version_id` ∈ {1,3,4,6} while type-10 QAed rows live on {2,5,7} (see OI-3 / `prms_data_guide` §11.3). `is_active=1` alone yields 96 (vs 223 raw), an un-canonicalized count. Any "X% of innovations are packaged" figure inherits this uncertainty — state it explicitly as a caveat, do not present the rate as exact.
+4. **Phase-matching caveat.** Matching component membership across `all phases of a result_code` can attribute a package to a phase/era that did not carry it. Prefer linking on the canonical (latest in-scope) component id; if you must span phases, note that package attribution is approximate.
+
+> Real failure (2026-06-15): the "16 of 176 (9%) packaged" answer used the all-years `canon` CTE as the component base (year-scope regression), spanned `all_phases` of each result_code (fan-out — 54 raw rows read by hand), and gated type 10 with `is_active=1` only despite the documented source/status anomaly. Denominator, numerator, and rate were all built on unvalidated bases.
+
 ---
 
 ## Anti-Patterns ❌
@@ -443,7 +462,7 @@ SQL confirmed in `analysis/task-alive-in-year-sql-result.md`. Filter: `result_ty
 Naive=675, canon CTE=550, export=~624. Root cause unknown. See prms_data_guide.md § 11.2.
 
 ### OI-3: Innovation Package source/status anomaly  
-Zero type-10 rows satisfy source='Result'/status_id=2. See prms_data_guide.md § 11.3.
+**Re-characterized (2026-06-16):** 164 type-10 QAed rows / 74 codes DO satisfy source='Result' AND status_id=2 — the earlier "zero rows satisfy the filter" claim was WRONG. The all-years dedup CTE returns 0 for type 10 only because its `ord(v,o)` phase-ordering VALUES set covers `version_id` ∈ {1,3,4,6}, while type-10 QAed rows live on `version_id` ∈ {2,5,7}, so the inner `JOIN ord o ON o.v=r.version_id` drops every type-10 row. This is a version-coverage gap in the dedup map, not an inherent "no data" condition (the same gap partly explains the type-2 naive 675 vs canon 550 divergence, OI-2). Follow-up: decide whether `ord` should extend to versions 2/5/7 (which would also change the type-2 canon count) or whether types 10/2 need a non-phase dedup. Do NOT invent a corrected canonical type-10 number — it remains open. See prms_data_guide.md § 11.3.
 
 ### OI-4: Alive-in-year for types 2 and 10
 Once OI-1 is resolved for type 7, same treatment needed for types 2 and 10.
