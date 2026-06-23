@@ -1,0 +1,148 @@
+name: Deploy Frontend (Amplify)
+
+# Auto-deploys the PRODUCTION frontend to AWS Amplify on every push to main.
+#
+# Why this exists: the prod site (https://innovation-analytics.synapsis-analytics.com/)
+# is an AWS Amplify app ("cgiar-innovation-analytics", app d4cblnel6pzqz) in the
+# mgmt account (919959486181). That app is NOT connected to GitHub (no webhook,
+# enableBranchAutoBuild=false) — it was originally a one-off manual ZIP deploy via
+# setup-amplify.yml. The backend CI/CD (deploy.yml) only builds/ships the backend
+# container and never touches the frontend, so the Amplify bundle never refreshed
+# on push. This workflow closes that gap: it builds the frontend and ZIP-deploys it
+# to Amplify via OIDC, automatically, on every push to main (plus manual dispatch).
+#
+# It reuses the exact, proven build + create-deployment/start-deployment steps from
+# setup-amplify.yml. The frontend is built with VITE_BACKEND_URL baked in so the
+# SPA + Amplify /api/* proxy reach the backend.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-frontend-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-central-1
+  APP_NAME: cgiar-innovation-analytics
+  BRANCH_NAME: main
+  BACKEND_URL: https://api-innovation.synapsis-analytics.com
+
+jobs:
+  deploy-frontend:
+    name: Build + deploy frontend to Amplify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # OIDC into the mgmt/sandbox account where the Amplify app lives.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_MGMT }}
+          aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+
+      - name: Verify mgmt account
+        run: |
+          ACTUAL=$(aws sts get-caller-identity --query Account --output text)
+          echo "Account: $ACTUAL"
+          if [[ "$ACTUAL" != "919959486181" ]]; then
+            echo "::error::Expected mgmt account 919959486181, got $ACTUAL"
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        env:
+          VITE_BACKEND_URL: ${{ env.BACKEND_URL }}
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+          echo "Frontend built. Output in static/"
+          ls -la ../static/
+
+      - name: Create deployment ZIP
+        run: |
+          cd static
+          zip -r ../frontend-deploy.zip .
+          echo "ZIP size: $(du -h ../frontend-deploy.zip | cut -f1)"
+
+      - name: Resolve Amplify app ID
+        id: app
+        run: |
+          APP_ID=$(aws amplify list-apps \
+            --query "apps[?name=='${{ env.APP_NAME }}'].appId" --output text)
+          if [ -z "$APP_ID" ] || [ "$APP_ID" = "None" ]; then
+            echo "::error::Amplify app '${{ env.APP_NAME }}' not found in account/region"
+            exit 1
+          fi
+          echo "app_id=$APP_ID" >> "$GITHUB_OUTPUT"
+          echo "Amplify app: $APP_ID"
+
+      # Ensure the branch exists + carries the backend URL env var (idempotent).
+      - name: Ensure Amplify branch
+        run: |
+          APP_ID="${{ steps.app.outputs.app_id }}"
+          BRANCH="${{ env.BRANCH_NAME }}"
+          EXISTS=$(aws amplify get-branch --app-id "$APP_ID" --branch-name "$BRANCH" \
+            --query 'branch.branchName' --output text 2>/dev/null || echo "")
+          if [ -z "$EXISTS" ]; then
+            aws amplify create-branch --app-id "$APP_ID" --branch-name "$BRANCH" \
+              --environment-variables "VITE_BACKEND_URL=${{ env.BACKEND_URL }}"
+            echo "Branch '$BRANCH' created"
+          else
+            aws amplify update-branch --app-id "$APP_ID" --branch-name "$BRANCH" \
+              --environment-variables "VITE_BACKEND_URL=${{ env.BACKEND_URL }}"
+            echo "Branch '$BRANCH' updated"
+          fi
+
+      - name: Deploy frontend to Amplify (ZIP)
+        run: |
+          APP_ID="${{ steps.app.outputs.app_id }}"
+          BRANCH="${{ env.BRANCH_NAME }}"
+
+          DEPLOY_RESULT=$(aws amplify create-deployment --app-id "$APP_ID" --branch-name "$BRANCH")
+          JOB_ID=$(echo "$DEPLOY_RESULT" | jq -r '.jobId')
+          UPLOAD_URL=$(echo "$DEPLOY_RESULT" | jq -r '.zipUploadUrl')
+          echo "Job ID: $JOB_ID"
+
+          echo "Uploading frontend ZIP..."
+          curl -T frontend-deploy.zip "$UPLOAD_URL" --fail --silent --show-error
+
+          echo "Starting deployment..."
+          aws amplify start-deployment --app-id "$APP_ID" --branch-name "$BRANCH" --job-id "$JOB_ID"
+
+          echo "Polling for completion (max 5 min)..."
+          for i in $(seq 1 30); do
+            STATUS=$(aws amplify get-job --app-id "$APP_ID" --branch-name "$BRANCH" --job-id "$JOB_ID" \
+              --query 'job.summary.status' --output text 2>/dev/null || echo "PENDING")
+            echo "  poll $i/30: $STATUS"
+            if [ "$STATUS" = "SUCCEED" ]; then echo "Deployment succeeded"; break; fi
+            if [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "CANCELLED" ]; then
+              echo "::error::Deployment $STATUS"; exit 1
+            fi
+            sleep 10
+          done
+
+          FINAL=$(aws amplify get-job --app-id "$APP_ID" --branch-name "$BRANCH" --job-id "$JOB_ID" \
+            --query 'job.summary.status' --output text)
+          if [ "$FINAL" != "SUCCEED" ]; then echo "::error::Final status $FINAL (timeout?)"; exit 1; fi
+
+      - name: Summary
+        run: |
+          echo "Production frontend deployed to Amplify app ${{ steps.app.outputs.app_id }} (branch ${{ env.BRANCH_NAME }})."
+          echo "Live URL: https://innovation-analytics.synapsis-analytics.com/"
