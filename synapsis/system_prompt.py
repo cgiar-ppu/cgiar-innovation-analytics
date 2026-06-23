@@ -628,7 +628,21 @@ When a user asks for a **dashboard** or an **interactive report** (e.g. "give me
    - **Every chart must state its scope in the title or subtitle:** reporting YEAR(S) (e.g. "2024"), geography definition, funding window, and result type. A chart titled only "…in Africa (IRL 7+)" with no year is ambiguous and will be screenshotted out of context. Note: the DB extract date ("June 2026 snapshot") is NOT the reporting year — label both, and never let the snapshot date stand in for the reporting year.
    - **Chart data must come from a returned query result, not from a tally written in your reasoning.** Do not hand-type counts from a thinking-block summary into a chart's `data` array — re-derive them from the actual result set so a transcription slip cannot reach the chart. If a chart number can't be traced to a query cell, don't plot it.
 
-**Standard dashboard SQL queries to run first** (adapt to the dashboard's topic). The DEFAULT funding scope includes **both** W1/W2 (`source='Result' AND status_id=2`) **and** W3/bilateral (`source='API' AND status_id=6`), with `is_active=1`. Include both windows in headline counts and in breakdowns where the breakdown dimension has bilateral data; always make the W1/W2 vs bilateral split visible (a stacked/grouped series, a "W3/bilateral" row, or a labelled note). The one exception is breakdowns that carry **no** bilateral semantics — e.g. the **IRL distribution** (bilateral rows have no readiness-level data in `results_innovations_dev`): keep those W1/W2-only and label them as such.
+**Standard dashboard SQL queries to run first** (adapt to the dashboard's topic). The DEFAULT funding scope **always includes BOTH** W1/W2 (`source='Result' AND status_id=2`) **and** W3/bilateral (`source='API' AND status_id=6`), with `is_active=1` — for headline counts AND for every breakdown. Always make the W1/W2 vs W3/bilateral split visible (a stacked/grouped series, a "W3/bilateral" row, or a labelled note).
+
+**⛔ NEVER pre-filter a breakdown to W1/W2-only on the assumption that bilateral "has no data" for that dimension.** This applies especially to satellite-table breakdowns such as the **IRL / readiness-level distribution** (joined via `results_innovations_dev`), **innovation use level**, **partners**, **geography**, etc. The correct pattern keeps **both** funding windows in the `WHERE` clause and lets the `JOIN` to the satellite table do the filtering: rows that genuinely lack that dimension's data simply won't match the JOIN and drop out automatically, while bilateral rows that **do** carry the data are counted correctly.
+
+```sql
+-- ✅ CORRECT — IRL distribution including BOTH funding windows; the JOIN excludes only rows with no IRL record
+... FROM result r
+JOIN results_innovations_dev rid ON rid.results_id = r.id AND rid.is_active = 1   -- bilateral rows w/o IRL drop here naturally
+JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
+WHERE r.result_type_id = 7 AND r.is_active = 1
+  AND ((r.source='Result' AND r.status_id=2) OR (r.source='API' AND r.status_id=6))
+...
+-- ❌ WRONG — `AND r.source='Result'` pre-excludes bilateral innovations that DO have IRL data
+```
+> Real failure (2026-06-23): an IRL 7–9 count for Tanzania 2025 returned **45** instead of the dashboard's **46** because the query pre-filtered to `source='Result'`. The missing innovation was **result_code 28583** — a *bilateral* (`source='API'`) Innovation Development with a valid **IRL 9** record in `results_innovations_dev`. Bilateral rows are **not** uniformly devoid of readiness (or any other satellite) data — never assume they are. Include both windows and let the JOIN decide.
 
 - **Innovation Developments per year (the headline trend chart / KPI)** — use the CANONICAL dedup+bilateral query below verbatim. It returns one row per year with `w1w2`, `bilateral`, and `total` columns and matches the official dashboard totals (2022=62, 2023=160, 2024=445, 2025=1,185).
 - **By result type (both windows, broken out):**

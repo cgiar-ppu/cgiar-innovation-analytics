@@ -237,21 +237,22 @@ ORDER BY count DESC
 LIMIT 10;
 """
 
-# All-years IRL distribution.
+# All-years IRL distribution — BOTH funding windows (W1/W2 + W3/bilateral).
 #
 # FIX (wave 2, F-1): the previous query joined results_innovations_dev to
 # result with ONLY is_active=1 on both — no result_type / source / status /
-# latest-phase dedup. It returned 1,963 distinct codes (unQAed + bilateral +
-# every reporting phase of every code), which does NOT reconcile with the
-# total_innovations card (1,852 = 1,630 W1/W2 + 222 bilateral) on the same page.
+# latest-phase dedup. It returned 1,963 distinct codes (unQAed + every
+# reporting phase of every code).
 #
-# Corrected to the canonical type-7 W1/W2 latest-phase set (the same dedup CTE
-# as _SQL_TOTAL_INNOVATIONS), so the IRL bars sit under the 1,630 W1/W2
-# component of the headline. Bilateral (source='API') has no IRL semantics in
-# results_innovations_dev, so W1/W2-only is the correct denominator for this
-# chart. The canon set is 1,630 codes; 1,628 of them carry an IRL row in
-# results_innovations_dev (2 canonical codes have no readiness level recorded),
-# so the bars sum to 1,628 — the small gap is missing IRL data, not a scope bug.
+# FIX (2026-06-23): include BOTH funding windows. The candidate set is the
+# W1/W2 latest-phase canon (source='Result', status_id=2) UNION the W3/bilateral
+# Approved set (source='API', status_id=6; 2025-only, one row per code). We then
+# JOIN results_innovations_dev — which NATURALLY drops any code (W1/W2 or
+# bilateral) that has no IRL record — and count distinct codes per level.
+# Earlier this chart was W1/W2-only on the FALSE assumption that "bilateral has
+# no IRL data": that is wrong (e.g. result_code 28583 is a bilateral Innovation
+# Development with a valid IRL 9), and it under-counted scaling-ready innovations.
+# Letting the JOIN filter is the correct, self-maintaining pattern.
 _SQL_IRL_DISTRIBUTION = """
 WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
 cand AS (
@@ -264,9 +265,20 @@ latest AS (
     SELECT c.* FROM cand c
     JOIN pick p ON p.result_code = c.result_code AND p.m = c.phord
 ),
-canon AS (
-    SELECT l.* FROM latest l
+canon_w12 AS (
+    SELECT l.result_code, l.id, l.result_type_id FROM latest l
     WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
+),
+canon_bilateral AS (
+    SELECT r.result_code, MAX(r.id) AS id, 7 AS result_type_id
+    FROM result r
+    WHERE r.source = 'API' AND r.status_id = 6 AND r.is_active = 1 AND r.result_type_id = 7
+    GROUP BY r.result_code
+),
+canon AS (
+    SELECT result_code, id, result_type_id FROM canon_w12
+    UNION ALL
+    SELECT result_code, id, result_type_id FROM canon_bilateral
 )
 SELECT cirl.name AS level, COUNT(DISTINCT cn.result_code) AS count
 FROM canon cn
@@ -402,15 +414,18 @@ ORDER BY count DESC
 LIMIT 10;
 """
 
+# Per-year IRL distribution — BOTH funding windows. The JOIN to
+# results_innovations_dev drops any code (W1/W2 or bilateral) with no IRL
+# record, so bilateral innovations that DO carry IRL (e.g. code 28583, IRL 9)
+# are counted; never pre-filter to source='Result'.
 _SQL_YEAR_IRL_DISTRIBUTION = """
 SELECT cirl.name AS level, COUNT(DISTINCT r.result_code) AS count
 FROM result r
 JOIN results_innovations_dev rid ON rid.results_id = r.id AND rid.is_active = 1
 JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
 WHERE r.result_type_id = 7
-  AND r.source = 'Result'
   AND r.is_active = 1
-  AND r.status_id = 2
+  AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
   AND r.reported_year_id = :year
 GROUP BY cirl.name, cirl.id
 ORDER BY cirl.id;
