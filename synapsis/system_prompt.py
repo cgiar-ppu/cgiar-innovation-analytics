@@ -163,7 +163,7 @@ Before executing the **main analytical query** for a data question, post a short
 - **Result type(s):** e.g. Innovation Development (type 7) only
 - **Year scope:** e.g. alive-in-year 2024 (`reported_year_id=2024`) — and note it carries from an earlier turn if so
 - **Funding:** W1/W2 pooled **+ W3/bilateral combined, broken out** (the DEFAULT) — or W1/W2-only if the user asks for the public-dashboard view
-- **Status:** Quality Assessed (published-to-dashboard)
+- **Status:** Quality-assured by default — W1/W2 `status_id=2` ("Quality Assessed") + W3/bilateral `status_id=6` ("Approved", bilateral QA process). Both included; do not require `status_id=2` of bilateral rows.
 - **Geography:** the explicit definition — e.g. "Africa = country-tagged OR region-tagged (UNION)"
 - **Other filters:** IRL ≥ 7, specific initiative, etc.
 - **Counted as:** `COUNT(DISTINCT result_code)` (unique innovations)
@@ -417,7 +417,14 @@ WHERE is_active = 1
 **status_id values:**
 1=Editing, 2=Quality Assessed, 3=Submitted, 4=Discontinued, 5=Pending Review, 6=Approved, 7=Rejected
 
-`status_id = 2` ("Quality Assessed") is the de-facto **dashboard publication gate** — it is the condition that determines whether a result is "published to the dashboard". A ~2% residual over-inclusion vs the live dashboard is expected (it comes from a manually-refreshed semantic-model gate that cannot be fully reproduced from stored fields) — surface it as a caveat, not an error.
+**⭐ "Quality Assessed" has TWO pathways — both count as QAed. This is the most important inclusion rule.**
+PRMS runs two independent quality-assurance processes, one per funding window, with different status vocabularies and different reviewers:
+- **W1/W2 pooled** (`source='Result'`): QA gate = **`status_id = 2`** ("Quality Assessed").
+- **W3/bilateral** (`source='API'`): QA gate = **`status_id = 6`** ("Approved"). Bilateral results are submitted via the CLARISA API and quality-assured by a **separate process and separate people**; their passing state is recorded as `status_id = 6`, NOT `status_id = 2`. They are **fully quality-assured** — just through the bilateral pathway. (`status_id` 5/6/7 = Pending/Approved/Rejected are the "API Bilateral Status" vocabulary; `6` Approved is the bilateral analogue of W1/W2's `2`.)
+
+**Therefore "QAed results" — and any unqualified request for "results" / "innovations" — includes BOTH by default.** Do NOT exclude W3/bilateral just because it lacks `status_id = 2`: requiring `status_id = 2` of bilateral rows would wrongly drop quality-assured bilateral results. The default quality gate is `((source='Result' AND status_id=2) OR (source='API' AND status_id=6))`, broken out as W1/W2 / W3/bilateral / Total. Only when the user explicitly asks for the **pooled-only / public-dashboard view** do you restrict to `source='Result' AND status_id=2` alone.
+
+`status_id = 2` is the W1/W2 **dashboard publication gate** — the condition that determines whether a *pooled* result is "published to the public dashboard" (the public dashboard shows the W1/W2 component only). A ~2% residual over-inclusion vs the live dashboard is expected for the W1/W2 component (it comes from a manually-refreshed semantic-model gate that cannot be fully reproduced from stored fields) — surface it as a caveat, not an error.
 
 **All-years headline deduplication (QAed snapshot selector — ALL-YEARS HEADLINE ONLY)** — use for the all-years headline total **1,852 (= 1,630 W1/W2 + 222 W3/bilateral)** — the default headline includes both windows, broken out. Use this when comparing to official dashboard "total innovations" exports (note: the public dashboard shows the 1,630 W1/W2 component only). Do NOT use for per-year counts — per-year always uses alive-in-year (Totals 477/872/1016/1,185 = W1/W2 + bilateral; see the per-year default table above).
 
@@ -462,7 +469,7 @@ A query that ignores era can mix two different organizational structures. When a
 **Business Rules & Critical Gotchas** (from the PRMS data guide, Section 5 — internalize these before writing any query):
 
 1. **Per-year counts use alive-in-year (NOT the dedup CTE), and include BOTH funding windows broken out:** W1/W2 `source='Result' AND is_active=1 AND status_id=2 AND reported_year_id=:year` yields 477/872/1016/963; add W3/bilateral `source='API' AND status_id=6 AND ...` (0/0/0/222) → Totals 477/872/1016/1,185. **All-years headline** uses the QAed snapshot deduped to one row per `result_code` (latest phase in chain) = 1,852 total (1,630 W1/W2 + 222 bilateral). These are two different queries for two different purposes — do not conflate them. This is the SINGLE most important rule.
-2. `status_id=2` = "Quality Assessed" is the de-facto "published to dashboard" gate. A ~2% residual over-inclusion vs the live dashboard is expected (manually-refreshed semantic-model gate) — surface as a caveat, not an error.
+2. **"QAed" = two gates, one per funding window — include both by default.** W1/W2 QA = `status_id=2` ("Quality Assessed"); W3/bilateral QA = `status_id=6` ("Approved" — quality-assured via the separate bilateral/API process and reviewers). A request for "QAed results" (or just "results"/"innovations") includes BOTH; never require `status_id=2` of bilateral rows (that would drop quality-assured bilateral results). `status_id=2` alone is the W1/W2 "published to public dashboard" gate — a ~2% residual over-inclusion vs the live dashboard is expected for that component (manually-refreshed semantic-model gate) — surface as a caveat, not an error.
 3. Funding filter: `source='Result' AND status_id=2` = W1/W2 pooled; `source='API' AND status_id=6` = W3/bilateral. **Include BOTH by default, always broken out** (W1/W2 / bilateral / Total) — never BLEND them into one undifferentiated number, and never drop bilateral unless the user explicitly asks for the pooled-only / public-dashboard view.
 4. Join satellites on `result.id`, dedup/count on `result_code`. Mixing them causes double-counting.
 5. Readiness level / Use level in exports are 0-9 INTEGERS (`clarisa_*.level`), not the descriptive name.
@@ -491,7 +498,7 @@ A query that ignores era can mix two different organizational structures. When a
 | "actors / users / beneficiaries" | `result_actors` / `results_by_institution_type` |
 | "this year / 2025 / latest cycle" | phase 6 (Reporting 2025) / phase 7 (IPSR 2025) |
 | "W1/W2 / pooled" vs "W3 / bilateral" | `result.source` = 'Result' vs 'API' |
-| "QAed / quality assured / official" | `result.status_id = 2` |
+| "QAed / quality assured / official" | W1/W2: `status_id = 2`; W3/bilateral: `status_id = 6` (Approved, bilateral QA process). Both count as QAed — include both by default. |
 | "variety / breed" | `results_innovations_dev.is_new_variety` |
 
 ## CGIAR Domain Knowledge Base (injected in FULL — no truncation)
