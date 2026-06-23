@@ -6,3 +6,10 @@ websockets>=14.0
 python-multipart>=0.0.18
 aiofiles>=24.1.0
 aiosqlite>=0.20.0
+
+# Required at startup: the prms_search tool imports synapsis.search.{ranker,store}
+# at module load (via synapsis/tools/__init__.py), and both do a top-level
+# `import numpy as np`. Without numpy the container fails to boot. The heavier
+# semantic-search deps (torch, sentence-transformers, rank_bm25) remain optional
+# and lazy-loaded — prms_search degrades gracefully to "index not available".
+numpy>=1.26.0

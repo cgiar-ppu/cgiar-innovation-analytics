@@ -131,6 +131,8 @@ ALLOWED_TOOLS: list[str] = [
     "mcp__synapsis__slack_notify",
     # MCP PRMS database query tool
     "mcp__synapsis__prms_query",
+    # MCP PRMS hybrid (BM25 + semantic) theme/topic search tool
+    "mcp__synapsis__prms_search",
     # MCP image generation / editing tools (OpenAI gpt-image-2)
     "mcp__synapsis__image_generate",
     "mcp__synapsis__image_edit",

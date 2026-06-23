@@ -10,19 +10,33 @@
 
 These are **locked**. They were reproduced exactly from `prdb_fresh.sqlite` using the corrected dedup CTE (Section 4) and verified 1:1 against the dashboard's Innovation Developments Excel export (1,630 rows; one row per logical innovation).
 
-### Innovation Developments — W1/W2 pooled, ALIVE-IN-YEAR (the default per-year count)
+### Innovation Developments — ALIVE-IN-YEAR, W1/W2 + W3/bilateral combined (the default per-year count)
 
-| Year | W1/W2 alive-in-year | W3/bilateral | **Total** |
-|------|---------------------|--------------|-----------|
+The default per-year answer is the **Total** (W1/W2 pooled + W3/bilateral), always presented with the breakdown:
+
+| Year | W1/W2 alive-in-year | W3/bilateral | **Total (default)** |
+|------|---------------------|--------------|---------------------|
 | 2022 | **477** | 0 | **477** |
 | 2023 | **872** | 0 | **872** |
 | 2024 | **1,016** | 0 | **1,016** |
 | 2025 | **963** | **222** | **1,185** |
 
-**Alive-in-year** counts an innovation in year X if it has at least one active, Quality-Assessed (`status_id=2`) W1/W2 (`source='Result'`) row with `reported_year_id = X`. A result_code that reported in 2022, 2023, and 2025 counts in all three years. These are the correct default answers for "how many innovations in year X?"
+**Alive-in-year** counts an innovation in year X if it has at least one active row with `reported_year_id = X` that passes its funding-window QA gate: W1/W2 pooled (`source='Result' AND status_id=2`, "Quality Assessed") **or** W3/bilateral (`source='API' AND status_id=6`, "Approved"). A result_code that reported in 2022, 2023, and 2025 counts in all three years. These Totals are the correct default answers for "how many innovations in year X?" — show the W1/W2 vs W3/bilateral split, and note bilateral follows a separate QA pathway / is not on the public dashboard. W3/bilateral exists only from 2025, so 2022–2024 Total = W1/W2.
 
 Verified SQL (June 13 DB):
 ```sql
+-- DEFAULT: both funding windows, broken out
+SELECT reported_year_id,
+       COUNT(DISTINCT CASE WHEN source='Result' AND status_id=2 THEN result_code END) AS w1w2,
+       COUNT(DISTINCT CASE WHEN source='API'    AND status_id=6 THEN result_code END) AS bilateral,
+       COUNT(DISTINCT result_code) AS total
+FROM result
+WHERE result_type_id=7 AND is_active=1
+  AND ((source='Result' AND status_id=2) OR (source='API' AND status_id=6))
+GROUP BY reported_year_id ORDER BY reported_year_id;
+-- Totals: 2022=477, 2023=872, 2024=1016, 2025=1185 (963 W1/W2 + 222 bilateral) ✓
+
+-- Pooled-only / public-dashboard view (on request): W1/W2 alone
 SELECT reported_year_id, COUNT(DISTINCT result_code) AS alive_count
 FROM result WHERE result_type_id=7 AND source='Result' AND is_active=1 AND status_id=2
 GROUP BY reported_year_id ORDER BY reported_year_id;
@@ -145,7 +159,7 @@ ORDER BY reported_year_id;
 ### Why each constraint is load-bearing
 - **`status_id = 2` (Quality Assessed)** — the de-facto "published to dashboard" gate for W1/W2 results. Without it the candidate set includes Editing/Submitted drafts.
 - **`is_active = 1`** — excludes soft-deleted rows. Two export-included codes (3241, 5938) have a *later* non-type-7 phase that is **not** QAed/active; restricting the latest-phase search to `status_id=2 AND is_active=1` correctly keeps them while dropping the 33 reclassified codes. This constraint is what makes the count exact.
-- **`source = 'Result'`** — W1/W2 pooled only. Bilateral (`source='API'`) follows a different status vocabulary and is counted separately (Section 5).
+- **`source = 'Result'`** — this dedup CTE computes the **W1/W2 component**. Bilateral (`source='API' AND status_id=6`) follows a different status vocabulary and is added on top via its own arm to form the default Total (Section 5 / §6.2), not dropped.
 
 ### ⚠️ The deprecated pattern — DO NOT USE
 The wrong pattern puts `result_type_id = 7` **inside** the candidate set (`cand`), before resolving the latest phase:
@@ -168,7 +182,7 @@ This freezes a reclassified code at its early type-7 phase and over-counts 2022/
 
 ## 5. W1/W2 vs W3/Bilateral Funding Sources
 
-PRMS carries two funding-window pipelines with **different status vocabularies** and **different inclusion gates**. Never silently mix them.
+PRMS carries two funding-window pipelines with **different status vocabularies** and **different inclusion gates**. **The default is to include BOTH and present them broken out** (W1/W2 / W3/bilateral / Total). Never *silently blend* them into one undifferentiated number, and never drop bilateral unless the user asks for the pooled-only / public-dashboard view.
 
 | Window | `source` | Inclusion gate | Status meaning |
 |--------|----------|----------------|----------------|
@@ -192,7 +206,7 @@ ORDER BY reported_year_id;
 -- OUTPUT: 2025 = 222 (2022/2023/2024 = 0)
 ```
 
-**Presentation rule:** When reporting a 2025 total, always show the funding breakdown as a callout: *"1,185 total = 963 W1/W2 pooled + 222 W3/bilateral (Approved). Bilateral results carry a dashboard disclaimer."*
+**Presentation rule (default):** Report the combined **Total** as the headline and always show the funding breakdown as a callout, e.g.: *"1,185 total = 963 W1/W2 pooled + 222 W3/bilateral (Approved). The W3/bilateral component follows a separate QA pathway and is not on the public dashboard."* Apply this to any year/scope, not just 2025 (for 2022–2024 bilateral = 0, so Total = W1/W2 — state that). Only when the user explicitly asks for the pooled-only / public-dashboard view, report W1/W2 alone and say so.
 
 ---
 
@@ -200,7 +214,8 @@ ORDER BY reported_year_id;
 
 > All templates are SQLite, validated against `prdb_fresh.sqlite`. Join satellites on `result.id`; dedup/count on `result_code`. Filter `is_active = 1` everywhere.
 
-### 6.1 Count by year — W1/W2 only (the default — ALIVE-IN-YEAR)
+### 6.1 Count by year — W1/W2 pooled component only (ALIVE-IN-YEAR; the pooled-only / public-dashboard view)
+*This is the W1/W2 component, used on request for the public-dashboard view. For the DEFAULT, include W3/bilateral too — see §6.1b (alive-in-year, both windows) and §6.2 (latest-phase dedup grand total).*
 ```sql
 SELECT reported_year_id, COUNT(DISTINCT result_code) AS alive_count
 FROM result WHERE result_type_id=7 AND source='Result' AND is_active=1 AND status_id=2
@@ -208,7 +223,20 @@ GROUP BY reported_year_id ORDER BY reported_year_id;
 ```
 **Output: 2022=477, 2023=872, 2024=1016, 2025=963.**
 
-For the latest-phase dedup alternative (62/160/445/963), use the corrected dedup CTE from Section 4.
+### 6.1b Count by year — DEFAULT (ALIVE-IN-YEAR, W1/W2 + W3/bilateral, broken out)
+```sql
+SELECT reported_year_id,
+       COUNT(DISTINCT CASE WHEN source='Result' AND status_id=2 THEN result_code END) AS w1w2,
+       COUNT(DISTINCT CASE WHEN source='API'    AND status_id=6 THEN result_code END) AS bilateral,
+       COUNT(DISTINCT result_code) AS total
+FROM result
+WHERE result_type_id=7 AND is_active=1
+  AND ((source='Result' AND status_id=2) OR (source='API' AND status_id=6))
+GROUP BY reported_year_id ORDER BY reported_year_id;
+```
+**Output Totals: 2022=477, 2023=872, 2024=1016, 2025=1185** (2025 = 963 W1/W2 + 222 bilateral).
+
+For the latest-phase dedup alternative (62/160/445/963 W1/W2), use the corrected dedup CTE from Section 4.
 
 ### 6.2 Count by year — including bilateral (dashboard grand total)
 ```sql
@@ -537,23 +565,33 @@ agreed-upon figure.
 | Source | Count | Filter |
 |--------|-------|--------|
 | Dashboard KPI (`_SQL_INNOVATION_PACKAGES`) | **96** | `is_active=1, result_type_id=10` (naive) |
-| Canon CTE (dedup + status_id=2) | **0** | `source='Result', is_active=1, status_id=2, result_type_id=10` |
+| Raw QAed (`source='Result' AND status_id=2`) | **164 rows / 74 codes** | `source='Result', is_active=1, status_id=2, result_type_id=10` |
+| Canon CTE (dedup + status_id=2) | **0** | same filter, then the all-years latest-phase dedup CTE |
 
-The canon CTE returns zero because **no type-10 rows in the current DB snapshot
-satisfy `source='Result' AND status_id=2`**. This means Innovation Packages
-are either submitted under a different source (e.g. 'API', or 'Initiative
-bilateral result') or carry a different status_id than the W1/W2 gate (2 =
-Quality Assessed).
+**Re-characterized (2026-06-16):** the earlier claim that *"no type-10 rows
+satisfy `source='Result' AND status_id=2`"* was **WRONG**. 164 such rows (74
+distinct codes) DO exist. The canon CTE returns 0 for type 10 only because its
+phase-ordering map `ord(v,o) AS (VALUES (1,0),(3,1),(4,2),(6,3))` covers
+`version_id` ∈ {1,3,4,6}, while type-10 QAed rows live on `version_id` ∈
+{2,5,7} (split v2=47, v5=64, v7=53). The inner `JOIN ord o ON o.v=r.version_id`
+therefore drops every type-10 row → canon = 0. This is a version-coverage gap
+in the dedup map, **not** an inherent "no data" condition, and not (as
+previously assumed) packages being submitted under a different source/status.
 
-This is a data characteristic of the DB snapshot, not a query bug. The 96
-figure used by the KPI and chart bucket may be correct, or it may be
+The per-year type-10 query does NOT use this CTE, so it correctly returns
+non-zero values (2023=47, 2024=64, 2025=53). The same version-set exclusion
+also partly explains the type-2 naive(675) vs canon(550) divergence (OI-2).
+
+The 96 figure used by the KPI and chart bucket may be correct, or it may be
 over-counting active-but-not-QAed packages.
 
-**Action required:** Check `SELECT DISTINCT source, status_id, COUNT(*) FROM
-result WHERE result_type_id=10 AND is_active=1 GROUP BY source, status_id;`
-to understand the source/status landscape for type-10 results. Compare against
-the live PRMS dashboard package count. Define and document the canonical
-methodology before any further changes to the Innovation Package count.
+**Action required:** Decide whether the `ord` VALUES set should be extended to
+cover versions 2/5/7 (which would also change the type-2 canon count) or whether
+types 10/2 need a non-phase dedup. Run `SELECT DISTINCT source, status_id, COUNT(*)
+FROM result WHERE result_type_id=10 AND is_active=1 GROUP BY source, status_id;`
+and compare against the live PRMS dashboard package count. Do NOT invent a
+corrected canonical type-10 number — it remains open. Define and document the
+canonical methodology before any further changes to the Innovation Package count.
 
 ### 11.4 Dashboard chart — current state (Phase 2 close)
 

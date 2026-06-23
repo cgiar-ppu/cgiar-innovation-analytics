@@ -46,6 +46,7 @@
 4. **Avoid 3D charts** — they distort perception
 5. **Start y-axis at zero** for bar charts
 6. **Use accessible color palettes** (colorblind-safe)
+7. **Label provenance on the figure itself:** reporting year(s), geography definition, funding window (W1/W2 vs bilateral), and result type belong in the title or subtitle of every PRMS chart — not only in the surrounding prose. Distinguish the DB snapshot/extract date from the reporting year; they are different things.
 
 ## Reporting Standards
 1. Report **confidence intervals**, not just p-values
@@ -55,3 +56,4 @@
 5. Use **reproducible methods** (save code, note package versions)
 6. Distinguish **correlation from causation**
 7. Acknowledge **limitations explicitly**
+8. **No un-sourced specifics.** Partner names, beneficiary counts, innovation→country pairings, and dollar allocations in any table or recommendation must trace to a retrieved query result. Inferences and extrapolations must be labelled as such, never mixed into a data table as if queried.

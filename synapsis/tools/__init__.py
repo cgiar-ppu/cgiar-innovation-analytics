@@ -13,6 +13,7 @@ from synapsis.tools.fleet import fleet_create, fleet_spawn, fleet_resume, fleet_
 from synapsis.tools.tts import tts_set_voice, tts_get_voices
 from synapsis.tools.history import history_search, history_retrieve, history_index, history_list
 from synapsis.tools.prms_query import prms_query
+from synapsis.tools.prms_search import prms_search
 from synapsis.tools.create_chart import create_chart
 from synapsis.tools.scenario_analysis import scenario_analysis
 from synapsis.tools.partner_identification import partner_identification
@@ -49,6 +50,7 @@ synapsis_mcp = create_sdk_mcp_server(
         history_index,
         history_list,
         prms_query,
+        prms_search,
         create_chart,
         scenario_analysis,
         partner_identification,

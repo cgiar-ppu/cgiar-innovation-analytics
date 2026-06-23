@@ -12,6 +12,7 @@ import type { ServerMessage } from '../../lib/types'
 import type { ChatState } from './types'
 import { generateId } from '../../lib/utils'
 import { finalizeThinking, finalizeAll } from './streamingHelpers'
+import { isSuppressedSystemMessage } from './systemMessageFilter'
 
 type Get = StoreApi<ChatState>['getState']
 type Set = StoreApi<ChatState>['setState']
@@ -256,6 +257,9 @@ export function createHandleServerMessage(set: Set, get: Get) {
         const data = msg.data
         const content = typeof data === 'string' ? data : JSON.stringify(data)
         if (!content || content === '{}' || content === 'null') break
+        // Drop SDK per-turn token/usage telemetry ("thinking_tokens" pills);
+        // the thinking content block (role: 'thinking') is unaffected.
+        if (isSuppressedSystemMessage(msg.subtype, content)) break
         set((prev) => ({
           messages: [
             ...prev.messages,
