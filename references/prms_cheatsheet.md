@@ -18,6 +18,8 @@ AND (
 ```
 Always split W1/W2 vs W3/bilateral in the output (a labelled row/series), never blend into one number. For the **pooled-only / public-dashboard view** (on request), keep only the `source='Result' AND status_id=2` arm.
 
+**"QAed" = two gates, one per window.** Quality assurance runs separately for each funding window: W1/W2 → `status_id=2` ("Quality Assessed"); W3/bilateral → `status_id=6` ("Approved", a separate process + reviewers via the CLARISA API). Bilateral results are fully quality-assured — they just don't carry `status_id=2`. So "QAed results" and any unqualified "results"/"innovations" request includes BOTH; **never require `status_id=2` of bilateral rows.**
+
 ### 3. Year: if a year is in play, FILTER by it
 If the user names a year — now or in an earlier turn (it **carries forward**) — your SQL **must** contain `reported_year_id = <year>`. A per-year list/breakdown uses **alive-in-year** scope (rule 2 + `reported_year_id`). **Do NOT use the all-years latest-phase dedup CTE for a single-year question** — it collapses years and returns each code's latest (often 2025) phase.
 
