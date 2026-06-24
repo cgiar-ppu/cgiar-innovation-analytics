@@ -358,22 +358,30 @@ WHERE result_type_id = 7
 # dashboard filter scoped by reported_year_id. These types do not carry the same
 # multi-year phase-chain dedup concern at the dashboard's granularity, so a
 # direct reported_year_id slice is acceptable and clearly year-labelled in the UI.
+# All per-year KPI/breakdown queries include BOTH funding windows by default:
+#   W1/W2 pooled  -> source='Result' AND status_id=2  ("Quality Assessed")
+#   W3/bilateral  -> source='API'    AND status_id=6  ("Approved", separate QA gate)
+# Bilateral is fully quality-assured via its own gate; never require status_id=2
+# of bilateral rows and never pre-filter a breakdown to W1/W2-only.
 _SQL_YEAR_USES = """
 SELECT COUNT(DISTINCT result_code) FROM result
-WHERE is_active = 1 AND source = 'Result' AND status_id = 2
+WHERE is_active = 1
+  AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))
   AND result_type_id = 2 AND reported_year_id = :year;
 """
 
 _SQL_YEAR_PACKAGES = """
 SELECT COUNT(DISTINCT result_code) FROM result
-WHERE is_active = 1 AND source = 'Result' AND status_id = 2
+WHERE is_active = 1
+  AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))
   AND result_type_id = 10 AND reported_year_id = :year;
 """
 
-# Total results KPI for the year (all three innovation types, dashboard filter).
+# Total results KPI for the year (all three innovation types, both windows).
 _SQL_YEAR_TOTAL_RESULTS = """
 SELECT COUNT(DISTINCT result_code) FROM result
-WHERE is_active = 1 AND source = 'Result' AND status_id = 2
+WHERE is_active = 1
+  AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))
   AND result_type_id IN (2, 7, 10) AND reported_year_id = :year;
 """
 
@@ -382,7 +390,8 @@ SELECT COUNT(DISTINCT i.id)
 FROM clarisa_initiatives i
 JOIN results_by_inititiative rbi ON rbi.inititiative_id = i.id
 JOIN result r ON r.id = rbi.result_id
-WHERE r.is_active = 1 AND r.source = 'Result' AND r.status_id = 2
+WHERE r.is_active = 1
+  AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
   AND r.result_type_id IN (2, 7, 10) AND r.reported_year_id = :year;
 """
 
@@ -390,8 +399,9 @@ _SQL_YEAR_COUNTRIES = """
 SELECT COUNT(DISTINCT rc.country_id)
 FROM result_country rc
 JOIN result r ON r.id = rc.result_id
-WHERE r.is_active = 1 AND rc.is_active = 1 AND r.source = 'Result'
-  AND r.status_id = 2 AND r.result_type_id IN (2, 7, 10)
+WHERE r.is_active = 1 AND rc.is_active = 1
+  AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
+  AND r.result_type_id IN (2, 7, 10)
   AND r.reported_year_id = :year;
 """
 
@@ -405,9 +415,8 @@ FROM result r
 JOIN result_country rc ON rc.result_id = r.id AND rc.is_active = 1
 JOIN clarisa_countries c ON rc.country_id = c.id
 WHERE r.result_type_id = 7
-  AND r.source = 'Result'
   AND r.is_active = 1
-  AND r.status_id = 2
+  AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
   AND r.reported_year_id = :year
 GROUP BY c.name
 ORDER BY count DESC
@@ -437,9 +446,8 @@ FROM result r
 JOIN results_by_inititiative rbi ON rbi.result_id = r.id AND rbi.initiative_role_id = 1
 JOIN clarisa_initiatives i ON rbi.inititiative_id = i.id
 WHERE r.result_type_id = 7
-  AND r.source = 'Result'
   AND r.is_active = 1
-  AND r.status_id = 2
+  AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
   AND r.reported_year_id = :year
 GROUP BY i.short_name
 ORDER BY count DESC
@@ -462,12 +470,14 @@ SELECT 'Innovation Development' AS type,
 UNION ALL
 SELECT 'Innovation Use' AS type, (
     SELECT COUNT(DISTINCT result_code) FROM result
-    WHERE is_active = 1 AND source = 'Result' AND status_id = 2
+    WHERE is_active = 1
+      AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))
       AND result_type_id = 2 AND reported_year_id = :year)
 UNION ALL
 SELECT 'Innovation Package' AS type, (
     SELECT COUNT(DISTINCT result_code) FROM result
-    WHERE is_active = 1 AND source = 'Result' AND status_id = 2
+    WHERE is_active = 1
+      AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))
       AND result_type_id = 10 AND reported_year_id = :year);
 """
 
