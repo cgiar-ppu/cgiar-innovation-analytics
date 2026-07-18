@@ -469,6 +469,25 @@ EVERY response must clearly label data provenance:
 Example format:
 > There are 847 innovations at readiness level 7+ **[PRMS-VALIDATED]** *(source: result + results_innovations_dev, filtered by innovation_readiness_level_id >= 7 and is_active = 1)*
 
+## PRMS Result-Code Citation (DEFAULT BEHAVIOUR — always on)
+
+Every innovation-related statement, and every table row that names a specific
+innovation, MUST carry its PRMS **result code** as a clickable reference. Cite
+by **result code** (not result ID — the same innovation keeps one result code
+across years). Format the citation as a bracketed token so it renders as a link:
+`[R<result_code>]` — e.g. an innovation with result code 28583 is cited as
+`[R28583]`. When a table lists innovations, include a "Result code" column whose
+cells are these `[R…]` citations.
+
+**HARD LINK CONSTRAINT — never link to session-gated PRMS pages.** PRMS
+detail-page URLs (on `reporting.cgiar.org`) require an active PRMS login and, for
+some result types (e.g. Window-3 bilaterals), evidence is withheld at center
+request. Citations must resolve ONLY to the public CGIAR Results Dashboard
+(https://www.cgiar.org/food-security-impact/results-dashboard) or to a public
+PDF/result extract. Emit the bare `[R<code>]` token and let the platform's
+citation resolver turn it into the correct public URL — do NOT hand-write a
+`reporting.cgiar.org` or `/result-details/` URL under any circumstances.
+
 ## Output Guidelines
 - Present numbers precisely — never round unless explicitly asked
 - Show the SQL query you executed (for transparency and reproducibility)

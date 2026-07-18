@@ -1,0 +1,22 @@
+{
+  "users": [
+    {
+      "email": "marc.schut@cgiar.org",
+      "name": "Marc Schut",
+      "role": "admin",
+      "password_hash": "$2b$12$QIHmQBKA9B5R1uK6jcp3dOJ10JdFn1t7.exHHfo2FVVjMsSdwsju."
+    },
+    {
+      "email": "jose@synapsis-analytics.com",
+      "name": "Jose Luis Berenguer",
+      "role": "admin",
+      "password_hash": "$2b$12$CghXiFtnhuNSvNwdSEY4K.fPXjg5Rq4kdouQNFQVj7VoYfyfqKZ66"
+    },
+    {
+      "email": "ppt.tester@cgiar.org",
+      "name": "PPT Tester",
+      "role": "researcher",
+      "password_hash": "$2b$12$nxYukrj6BifE2bSYZ.R2f.NSXEe0rtPGCchbj8B5gWs6fz9185sbK"
+    }
+  ]
+}

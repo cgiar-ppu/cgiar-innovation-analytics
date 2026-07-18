@@ -18,6 +18,7 @@ import type { ClientMessage } from '../lib/types'
 import { useChatStore } from '../stores/chat'
 import { useSessionsStore } from '../stores/sessions'
 import { routeWebSocketMessage, type RouterContext } from './wsMessageRouter'
+import { getAuthToken } from '../stores/auth'
 
 /** Maximum delay (ms) between reconnection attempts. */
 const MAX_BACKOFF = 30_000
@@ -93,6 +94,13 @@ export function useWebSocket(): UseWebSocketReturn {
     } else {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       url = `${proto}//${window.location.host}/ws/chat`
+    }
+
+    // Attach the JWT so the backend can resolve the per-user identity that
+    // scopes chat sessions (Step 3/4). Omitted in dev-bypass mode (no token).
+    const token = getAuthToken()
+    if (token) {
+      url += `${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
     }
 
     setConnectionStatus('connecting')

@@ -89,7 +89,13 @@ async def handle_assistant_block(
         # Only send full text if it wasn't already delivered as streaming deltas
         if not streamed_text:
             await send_json({"type": "text", "content": block.text}, sid=session_id)
-        await save_message(session_id, "text", {"content": block.text})
+        # Post-process PRMS result-code citations: rewrite bare/bracketed
+        # [R<code>] tokens into public-URL markdown links before persisting, so
+        # exports and reloaded history carry clickable, public-only citations
+        # (July-7 Step 2). Streamed deltas are left untouched; this only affects
+        # the persisted copy. Never emits a session-gated PRMS URL.
+        from synapsis.tools.result_code_citation import linkify_result_codes
+        await save_message(session_id, "text", {"content": linkify_result_codes(block.text)})
 
     elif isinstance(block, ThinkingBlock):
         # Same streaming-guard logic as text

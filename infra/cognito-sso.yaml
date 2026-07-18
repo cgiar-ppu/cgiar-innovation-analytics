@@ -1,0 +1,122 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  CGIAR Innovation Analytics — Cognito user pool + (optional) CGIAR Entra ID
+  OIDC federation. SCAFFOLDING, DISABLED BY DEFAULT. This is the target
+  end-state for Step 3 SSO; the app ships app-level password login first
+  (see docs/AZURE-SSO-SETUP.md). This template is intentionally NOT wired into
+  deploy.yml yet — deploy it manually / enable it during the July 21–22 SSO
+  federation window once the Entra App Registration exists.
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  EnableEntraFederation:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      When 'true', wires the CGIAR Entra ID OIDC identity provider into the user
+      pool. Requires the three Entra values below (from the Azure App
+      Registration — see docs/AZURE-SSO-SETUP.md). Leave 'false' until those
+      exist; the username/password pool works without them.
+
+  EntraTenantId:
+    Type: String
+    Default: ''
+    Description: CGIAR Entra ID Directory (tenant) ID. Only used when EnableEntraFederation=true.
+
+  EntraClientId:
+    Type: String
+    Default: ''
+    Description: Entra App Registration Application (client) ID.
+
+  EntraClientSecretArn:
+    Type: String
+    Default: ''
+    Description: >-
+      ARN of the Secrets Manager secret holding the Entra client secret. NEVER
+      pass the secret value as a plaintext parameter.
+
+  CallbackUrl:
+    Type: String
+    Default: https://innovation-analytics-dev.synapsis-analytics.com
+    Description: App origin that is a valid OAuth login-return target.
+
+Conditions:
+  DoEntraFederation: !Equals [!Ref EnableEntraFederation, 'true']
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub 'cgiar-ia-${Stage}'
+      # External (non-SSO) users authenticate by email + password.
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      # A Pre-Sign-Up Lambda (email-domain allow-list) would attach here,
+      # ported from meliaf-study-stocktake/.../cognito_triggers/pre_signup.py.
+      # Left out of this scaffold to keep it deploy-safe until enabled.
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub 'cgiar-ia-${Stage}'
+      UserPoolId: !Ref UserPool
+
+  # CGIAR Entra ID OIDC identity provider — created ONLY when enabled.
+  EntraIdProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Condition: DoEntraFederation
+    Properties:
+      UserPoolId: !Ref UserPool
+      ProviderName: CGIAR-EntraID
+      ProviderType: OIDC
+      ProviderDetails:
+        client_id: !Ref EntraClientId
+        # The secret is referenced from Secrets Manager by the deploy tooling;
+        # do not inline it. This dynamic reference resolves at deploy time.
+        client_secret: !Sub '{{resolve:secretsmanager:${EntraClientSecretArn}}}'
+        attributes_request_method: GET
+        oidc_issuer: !Sub 'https://login.microsoftonline.com/${EntraTenantId}/v2.0'
+        authorize_scopes: 'openid profile email'
+      AttributeMapping:
+        email: email
+        name: name
+        username: sub
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub 'cgiar-ia-${Stage}-web'
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, profile, email]
+      CallbackURLs: [!Ref CallbackUrl]
+      LogoutURLs: [!Ref CallbackUrl]
+      SupportedIdentityProviders: !If
+        - DoEntraFederation
+        - [COGNITO, CGIAR-EntraID]
+        - [COGNITO]
+
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  HostedUiDomain:
+    Value: !Sub 'https://cgiar-ia-${Stage}.auth.${AWS::Region}.amazoncognito.com'
+  IdpResponseRedirectUri:
+    Description: Paste THIS into the Entra App Registration redirect URI.
+    Value: !Sub 'https://cgiar-ia-${Stage}.auth.${AWS::Region}.amazoncognito.com/oauth2/idpresponse'

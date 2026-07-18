@@ -116,7 +116,12 @@ describe('agentsService', () => {
 
     await agentsService.deleteAgent('agent-99')
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/agents/agent-99', { method: 'DELETE' })
+    // The api.del helper now attaches auth headers (empty object when no token
+    // is present) alongside the method — assert on the method + path.
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/agents/agent-99',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
   })
 
   it('test_deleteAgent_throws_on_error', async () => {

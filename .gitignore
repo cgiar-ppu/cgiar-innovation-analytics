@@ -49,6 +49,7 @@ venv/
 
 # Frontend
 frontend/dist/
+frontend/tsconfig.tsbuildinfo
 node_modules/
 
 # PRMS database (too large for git, bundled in Docker at build time)
