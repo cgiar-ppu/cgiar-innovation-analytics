@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 
 from .common import parse_row
+from .watermark import watermark_markdown
 
 
 def export_markdown(title: str, session_id: str, rows, detail: str) -> tuple[str, str]:
@@ -22,7 +23,9 @@ def export_markdown(title: str, session_id: str, rows, detail: str) -> tuple[str
         (content, media_type) where content is the rendered Markdown string.
     """
     lines = [f"# {title}\n"]
-    lines.append(f"*Exported on {datetime.now().strftime('%Y-%m-%d %H:%M')}*\n")
+    # AI-content watermark / disclaimer — required at the top of every export.
+    lines.append(watermark_markdown())
+    lines.append(f"\n*Exported on {datetime.now().strftime('%Y-%m-%d %H:%M')}*\n")
     lines.append(f"*Session: {session_id}*\n\n---\n")
 
     for row in rows:

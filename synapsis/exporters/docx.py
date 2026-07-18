@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from .common import parse_row, safe_filename
+from .watermark import apply_ai_watermark
 
 
 def export_docx(title: str, session_id: str, rows, detail: str, export_dir: Path) -> tuple[str, str]:
@@ -130,6 +131,11 @@ def export_docx(title: str, session_id: str, rows, detail: str, export_dir: Path
             run = p.add_run(f"— {turns} turns · {duration/1000:.1f}s —")
             run.font.size = Pt(9)
             run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+
+    # AI-content watermark / disclaimer — required on every export. Applied
+    # last so the notice box lands at the very top of the document body and
+    # the banner is added to the page footer (every page).
+    apply_ai_watermark(doc)
 
     export_dir.mkdir(parents=True, exist_ok=True)
     filename = safe_filename(title, session_id, "docx")

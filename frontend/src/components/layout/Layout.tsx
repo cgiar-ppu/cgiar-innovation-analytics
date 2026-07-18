@@ -5,6 +5,7 @@ import { ToastProvider } from '../common/Toast';
 import { WebSocketProvider } from '../../contexts/WebSocketContext';
 import { DesktopViewer } from '../desktop/DesktopViewer';
 import { GitPanel } from '../git/GitPanel';
+import DisclaimerFooter from '../guardrails/DisclaimerFooter';
 import { useUIStore } from '../../stores/ui';
 import { api } from '../../lib/api';
 import type { AppConfig } from '../../lib/types';
@@ -36,6 +37,9 @@ export default function Layout() {
           {/* Global DesktopViewer — accessible from any page */}
           {desktopPanelOpen && <DesktopViewer config={config} />}
         </div>
+
+        {/* Persistent AI-content disclaimer — visible on every view */}
+        <DisclaimerFooter />
 
         <ToastProvider />
       </div>

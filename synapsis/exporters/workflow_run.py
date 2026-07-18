@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 
 from .common import safe_filename
+from .watermark import watermark_markdown, watermark_html, WATERMARK_HTML_CSS
 
 
 def export_workflow_run_markdown(run_log: dict) -> tuple[str, str]:
@@ -21,6 +22,9 @@ def export_workflow_run_markdown(run_log: dict) -> tuple[str, str]:
 
     lines = []
     lines.append(f"# Workflow Run: {name}")
+    lines.append("")
+    # AI-content watermark / disclaimer — required at the top of every export.
+    lines.append(watermark_markdown())
     lines.append("")
     lines.append(f"- **Run ID**: `{run_id[:8] if run_id else 'N/A'}`")
     lines.append(f"- **Status**: {status}")
@@ -234,10 +238,12 @@ def export_workflow_run_html(run_log: dict) -> tuple[str, str]:
     .prompt {{ background: #1e293b; padding: 16px; border-radius: 8px; border-left: 3px solid #3b82f6; margin: 16px 0; white-space: pre-wrap; }}
     .msg {{ margin-bottom: 8px; }}
     pre {{ margin: 4px 0; }}
+{WATERMARK_HTML_CSS}
 </style>
 </head>
 <body>
 <h1>Workflow Run: {html_lib.escape(name)}</h1>
+{watermark_html()}
 
 <div class="meta">
     <div class="meta-item">
