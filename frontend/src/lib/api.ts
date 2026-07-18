@@ -15,8 +15,21 @@
 import type { Session, FileInfo, Memory, NewMemory, AppConfig, HealthStatus, ChatMessage, SearchResult, GitStatus, GitDiffResponse, GitLogResponse, GitShowResponse, TTSVoice, TTSSettings } from './types'
 import { isSuppressedSystemMessage } from '../stores/chat/systemMessageFilter'
 import type { SkillInfo } from './types-extended'
+import { getAuthToken } from '../stores/auth'
 
 const BASE = ''
+
+/**
+ * Builds request headers with the JWT bearer token attached when present.
+ * The token is read from the auth store at call time so it always reflects the
+ * current session (login/logout without a reload).
+ */
+function authHeaders(extra?: HeadersInit): HeadersInit {
+  const token = getAuthToken()
+  const headers: Record<string, string> = { ...(extra as Record<string, string>) }
+  if (token) headers.Authorization = `Bearer ${token}`
+  return headers
+}
 
 /**
  * Performs a GET request and returns the parsed JSON response.
@@ -27,7 +40,7 @@ const BASE = ''
  * @throws {Error} When the response status is not OK.
  */
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, signal ? { signal } : undefined)
+  const res = await fetch(`${BASE}${path}`, { headers: authHeaders(), ...(signal ? { signal } : {}) })
   if (!res.ok) throw new Error(`GET ${path}: ${res.status}`)
   return res.json() as Promise<T>
 }
@@ -43,7 +56,7 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
   })
   if (!res.ok) throw new Error(`POST ${path}: ${res.status}`)
@@ -61,7 +74,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 async function patch<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
   })
   if (!res.ok) throw new Error(`PATCH ${path}: ${res.status}`)
@@ -76,7 +89,7 @@ async function patch<T>(path: string, body: unknown): Promise<T> {
  * @throws {Error} When the response status is not OK.
  */
 async function del<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { method: 'DELETE' })
+  const res = await fetch(`${BASE}${path}`, { method: 'DELETE', headers: authHeaders() })
   if (!res.ok) throw new Error(`DELETE ${path}: ${res.status}`)
   return res.json() as Promise<T>
 }
@@ -93,7 +106,7 @@ async function del<T>(path: string): Promise<T> {
 async function postForm<T>(path: string, file: File): Promise<T> {
   const fd = new FormData()
   fd.append('file', file)
-  const res = await fetch(`${BASE}${path}`, { method: 'POST', body: fd })
+  const res = await fetch(`${BASE}${path}`, { method: 'POST', body: fd, headers: authHeaders() })
   if (!res.ok) throw new Error(`POST ${path}: ${res.status}`)
   return res.json() as Promise<T>
 }
@@ -301,9 +314,14 @@ export const api = {
   searchConversations: (q: string, limit?: number) =>
     get<{ results: SearchResult[]; query: string }>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit ?? 50}`),
 
-  /** Generate a URL for exporting a conversation. */
-  exportUrl: (sessionId: string, format: string, detail: string = 'standard') =>
-    `${BASE}/api/export/${sessionId}?format=${format}&detail=${detail}`,
+  /** Generate a URL for exporting a conversation.
+   *  The JWT is appended as a query param because the download is triggered via
+   *  window.open, which cannot attach an Authorization header. */
+  exportUrl: (sessionId: string, format: string, detail: string = 'standard') => {
+    const token = getAuthToken()
+    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
+    return `${BASE}/api/export/${sessionId}?format=${format}&detail=${detail}${tokenParam}`
+  },
 
   /** Auto-generate a title for a session. */
   autoTitle: (sessionId: string) =>

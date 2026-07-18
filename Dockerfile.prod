@@ -44,6 +44,11 @@ COPY app.py ./
 COPY references/ ./references/
 COPY seed_knowledge.py ./
 
+# Auth allow-list (issued-password users; bcrypt hashes only — no plaintext).
+# Baked into the image so the dev deploy has working login. IA_USERS_FILE can
+# override this path to mount a different list from a secret store.
+COPY config/ ./config/
+
 # Frontend static assets from the build stage
 COPY --from=frontend /static ./static
 

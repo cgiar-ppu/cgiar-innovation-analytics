@@ -1,0 +1,11 @@
+{
+  "_comment": "Issued-password allow-list for app-level login (Step 3, Option A). Only bcrypt HASHES are stored here (irreversible) — never plaintext passwords. Add a user by generating a hash with `python -c \"import bcrypt; print(bcrypt.hashpw(b'THEPASSWORD', bcrypt.gensalt()).decode())\"` and adding an entry. The real file (allowed_users.json) is baked into the deploy image; distribute plaintext passwords to users out-of-band.",
+  "users": [
+    {
+      "email": "user@cgiar.org",
+      "name": "Full Name",
+      "role": "researcher",
+      "password_hash": "$2b$12$REPLACE_WITH_A_REAL_BCRYPT_HASH_000000000000000000000000"
+    }
+  ]
+}

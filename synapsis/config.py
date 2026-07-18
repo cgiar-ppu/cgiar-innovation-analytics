@@ -145,6 +145,34 @@ AUDIT_LOG: Path = SYNAPSIS_DIR / "audit.log"
 SYNAPSIS_DB_TIMEOUT: int = int(os.getenv("SYNAPSIS_DB_TIMEOUT", "30"))
 
 # ---------------------------------------------------------------------------
+# Authentication (Step 3 — app-level password login; identity abstraction that
+# swaps cleanly to Cognito/Entra ID JWT `sub` later; see docs/AZURE-SSO-SETUP.md)
+# ---------------------------------------------------------------------------
+
+# JWT signing. The secret MUST be overridden in every deployed environment via
+# IA_JWT_SECRET (wired as an SSM SecureString in deploy.yml). The default is for
+# local dev only.
+JWT_SECRET: str = os.getenv("IA_JWT_SECRET", "dev-secret-change-in-production")
+JWT_ALGORITHM: str = "HS256"
+JWT_EXPIRY_HOURS: int = _get_int_env("IA_JWT_EXPIRY_HOURS", 24)
+
+# Allow-list of issued-password users (email + bcrypt hash + role). Editing this
+# JSON file adds/removes users with no code change. Path is env-overridable so
+# the deployed container can mount it read-only from a secret store.
+USERS_FILE: Path = Path(os.getenv("IA_USERS_FILE", str(PROJECT_DIR / "config" / "allowed_users.json")))
+
+# Dev bypass: when true, auth is skipped and a dummy admin identity is returned.
+# Defaults ON for local macOS runs (frictionless dev) and OFF everywhere else.
+# The deployed dev URL sets IA_AUTH_DISABLED=false so login is actually enforced.
+AUTH_DISABLED: bool = os.getenv(
+    "IA_AUTH_DISABLED", "true" if IS_MACOS else "false"
+).lower() in ("true", "1", "yes")
+
+# Sentinel identity assigned to legacy (pre-auth) chat sessions during the
+# idempotent user_id migration, and returned by the dev bypass.
+LEGACY_USER_ID: str = "legacy@innovation-analytics"
+
+# ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 

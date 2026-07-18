@@ -13,3 +13,8 @@ aiosqlite>=0.20.0
 # semantic-search deps (torch, sentence-transformers, rank_bm25) remain optional
 # and lazy-loaded — prms_search degrades gracefully to "index not available".
 numpy>=1.26.0
+
+# Authentication (Step 3 — app-level password login, JWT/bcrypt).
+# python-jose signs/verifies the session JWT; bcrypt hashes issued passwords.
+python-jose[cryptography]>=3.3.0
+bcrypt>=4.0.0

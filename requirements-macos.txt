@@ -10,6 +10,10 @@ python-multipart>=0.0.18
 aiofiles>=24.1.0
 aiosqlite>=0.20.0
 
+# Authentication (app-level password login, JWT/bcrypt)
+python-jose[cryptography]>=3.3.0
+bcrypt>=4.0.0
+
 # Data science
 pandas>=2.2.0
 numpy>=1.26.0

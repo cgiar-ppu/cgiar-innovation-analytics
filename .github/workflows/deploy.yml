@@ -184,6 +184,21 @@ jobs:
               --overwrite 2>/dev/null || true
           fi
 
+          # JWT signing secret for app-level login (Step 3). Generated once per
+          # environment on first deploy and reused thereafter so existing tokens
+          # stay valid across redeploys. Never printed.
+          if ! aws ssm get-parameter --name "$SSM_PREFIX/jwt-secret" >/dev/null 2>&1; then
+            GEN_SECRET=$(openssl rand -hex 32)
+            aws ssm put-parameter \
+              --name "$SSM_PREFIX/jwt-secret" \
+              --value "$GEN_SECRET" \
+              --type SecureString \
+              --overwrite 2>/dev/null || true
+            echo "Generated a new JWT secret for $SSM_PREFIX."
+          else
+            echo "Reusing existing JWT secret for $SSM_PREFIX."
+          fi
+
       # -----------------------------------------------------------------
       # CloudFormation: Deploy infrastructure
       # -----------------------------------------------------------------
@@ -346,9 +361,10 @@ jobs:
               'docker image prune -af --filter until=24h || true',
               'SSM_PREFIX=/cgiar-ia-${{ env.STAGE }}',
               'ANTHROPIC_KEY=\$(aws ssm get-parameter --name \$SSM_PREFIX/anthropic-api-key --with-decryption --query Parameter.Value --output text --region $REGION 2>/dev/null || echo \"\")',
+              'JWT_SECRET=\$(aws ssm get-parameter --name \$SSM_PREFIX/jwt-secret --with-decryption --query Parameter.Value --output text --region $REGION 2>/dev/null || echo \"\")',
               'mkdir -p /opt/cgiar-ia/synapsis',
               'chown 1000:1000 /opt/cgiar-ia/synapsis 2>/dev/null || true',
-              'docker run -d --name $CONTAINER_NAME --restart always --log-driver=awslogs --log-opt awslogs-region=$REGION --log-opt awslogs-group=/cgiar-ia/${{ env.STAGE }} --log-opt awslogs-stream=$CONTAINER_NAME --log-opt awslogs-create-group=true --log-opt mode=non-blocking --log-opt max-buffer-size=4m -p 7780:7780 -v /opt/cgiar-ia/synapsis:/workspace/.synapsis -e AWS_REGION=$REGION -e LITESTREAM_S3_BUCKET=cgiar-ia-artifacts-$ACCOUNT -e ANTHROPIC_API_KEY=\$ANTHROPIC_KEY -e SYNAPSIS_PORT=7780 -e SYNAPSIS_HOST=0.0.0.0 -e SYNAPSIS_PLATFORM=linux -e PRMS_DB_PATH=/app/data/prdb.sqlite -e SYNAPSIS_MODEL=claude-sonnet-4-6 -e SYNAPSIS_FALLBACK_MODEL=claude-opus-4-8 -e SYNAPSIS_AVAILABLE_MODELS=\"claude-sonnet-4-6,claude-opus-4-8[1m]\" -e SYNAPSIS_MAX_TURNS=200 -e SYNAPSIS_WORKSPACE=/workspace $ECR_URI:$ECR_TAG',
+              'docker run -d --name $CONTAINER_NAME --restart always --log-driver=awslogs --log-opt awslogs-region=$REGION --log-opt awslogs-group=/cgiar-ia/${{ env.STAGE }} --log-opt awslogs-stream=$CONTAINER_NAME --log-opt awslogs-create-group=true --log-opt mode=non-blocking --log-opt max-buffer-size=4m -p 7780:7780 -v /opt/cgiar-ia/synapsis:/workspace/.synapsis -e AWS_REGION=$REGION -e LITESTREAM_S3_BUCKET=cgiar-ia-artifacts-$ACCOUNT -e ANTHROPIC_API_KEY=\$ANTHROPIC_KEY -e IA_AUTH_DISABLED=false -e IA_JWT_SECRET=\$JWT_SECRET -e SYNAPSIS_PORT=7780 -e SYNAPSIS_HOST=0.0.0.0 -e SYNAPSIS_PLATFORM=linux -e PRMS_DB_PATH=/app/data/prdb.sqlite -e SYNAPSIS_MODEL=claude-sonnet-4-6 -e SYNAPSIS_FALLBACK_MODEL=claude-opus-4-8 -e SYNAPSIS_AVAILABLE_MODELS=\"claude-sonnet-4-6,claude-opus-4-8[1m]\" -e SYNAPSIS_MAX_TURNS=200 -e SYNAPSIS_WORKSPACE=/workspace $ECR_URI:$ECR_TAG',
               'for i in \$(seq 1 15); do if curl -sf http://localhost:7780/api/health; then echo \"Container healthy\"; exit 0; fi; sleep 2; done; echo \"Health check timed out\"; exit 1'
             ]" \
             --query "Command.CommandId" --output text 2>&1) || {
