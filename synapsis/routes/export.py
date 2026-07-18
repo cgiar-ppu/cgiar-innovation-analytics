@@ -22,6 +22,7 @@ from synapsis.database import get_db
 from synapsis.utils.db_helpers import fetch_one_or_404
 from synapsis.exporters import export_markdown, export_html, export_docx
 from synapsis.exporters.common import safe_filename
+from synapsis.auth.middleware import resolve_user_id
 
 router = APIRouter(prefix="/api", tags=["export"])
 
@@ -32,13 +33,13 @@ EXPORT_DIR = WORKSPACE / "exports"
 # Database helpers
 # ---------------------------------------------------------------------------
 
-async def _get_session_data(session_id: str):
-    """Fetch session info and messages from the database."""
+async def _get_session_data(session_id: str, user_id: str):
+    """Fetch session info and messages, scoped to the owning user (404 otherwise)."""
     async with get_db() as db:
         session_row = await fetch_one_or_404(
             db,
-            "SELECT * FROM sessions WHERE session_id = ?",
-            (session_id,),
+            "SELECT * FROM sessions WHERE session_id = ? AND user_id = ?",
+            (session_id, user_id),
             "Session",
         )
 
@@ -106,9 +107,30 @@ def _html_to_pdf(html_content: str, title: str, session_id: str) -> tuple[bool, 
 # ---------------------------------------------------------------------------
 
 @router.get("/export/{session_id}")
-async def export_conversation(session_id: str, format: str = "md", detail: str = "standard"):
-    """Export a conversation session. Supported formats: md, html, docx, pdf."""
-    title, rows = await _get_session_data(session_id)
+async def export_conversation(
+    session_id: str,
+    format: str = "md",
+    detail: str = "standard",
+    token: str | None = None,
+):
+    """Export a conversation session (owner-only). Supported formats: md, html, docx, pdf.
+
+    Because the browser triggers this via ``window.open`` (which cannot attach an
+    Authorization header), the JWT is accepted as a ``?token=`` query param and
+    resolved to the owning user here. In dev-bypass mode the token is ignored.
+    """
+    from synapsis.config import AUTH_DISABLED, LEGACY_USER_ID
+    from synapsis.auth.tokens import verify_token
+
+    if AUTH_DISABLED:
+        user_id = LEGACY_USER_ID
+    else:
+        user = verify_token(token) if token else None
+        if user is None:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        user_id = resolve_user_id(user)
+
+    title, rows = await _get_session_data(session_id, user_id)
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
     if format == "md":

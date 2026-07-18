@@ -161,6 +161,29 @@ async def init_db() -> None:
         except aiosqlite.OperationalError:
             logger.debug("task_status column already exists — skipping migration")
 
+        # Migration: add user_id column for per-user chat scoping (July-7 Step 4).
+        # Idempotent: existing (pre-auth) sessions default to the legacy sentinel
+        # so they are never silently attributed to a real user. New sessions are
+        # created with the authenticated identity (see database/sessions.py).
+        from synapsis.config import LEGACY_USER_ID
+        try:
+            await db.execute(
+                f"ALTER TABLE sessions ADD COLUMN user_id TEXT DEFAULT '{LEGACY_USER_ID}'"
+            )
+            # Backfill any pre-existing NULLs from before the column had a default.
+            await db.execute(
+                "UPDATE sessions SET user_id = ? WHERE user_id IS NULL OR user_id = ''",
+                (LEGACY_USER_ID,),
+            )
+            logger.info("Migrated sessions.user_id (legacy rows -> %s)", LEGACY_USER_ID)
+        except aiosqlite.OperationalError:
+            logger.debug("user_id column already exists — skipping migration")
+
+        # Index to keep per-user chat-list queries fast.
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id, updated_at)"
+        )
+
         await db.commit()
 
     # -- History index tables (separate function to keep init_db focused) --

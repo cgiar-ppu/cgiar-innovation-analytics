@@ -6,21 +6,47 @@ from synapsis.config import logger
 from synapsis.database.connection import _get_shared_db
 
 
-async def create_session(session_id: str, title: str = "") -> None:
+async def create_session(session_id: str, title: str = "", user_id: str | None = None) -> None:
     """Insert a new session row (no-op if it already exists).
 
     Args:
         session_id: Unique identifier for the session.
         title:      Optional human-readable title; defaults to empty string.
+        user_id:    Owning user's stable identity claim (July-7 Step 4). When
+                    None, the legacy sentinel is used so the row is never
+                    silently attributed to a real user.
     """
     from synapsis.config import MODEL
+    from synapsis.auth.context import get_current_user_id
     now = time.time()
+    # Explicit user_id wins; otherwise fall back to the per-connection identity
+    # context (set by the WebSocket handler at connect time), which itself
+    # defaults to the legacy sentinel.
+    owner = user_id or get_current_user_id()
     db = await _get_shared_db()
     await db.execute(
-        "INSERT OR IGNORE INTO sessions (session_id, title, created_at, updated_at, model) VALUES (?, ?, ?, ?, ?)",
-        (session_id, title, now, now, MODEL),
+        "INSERT OR IGNORE INTO sessions (session_id, title, created_at, updated_at, model, user_id) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (session_id, title, now, now, MODEL, owner),
     )
     await db.commit()
+
+
+async def get_session_owner(session_id: str) -> str | None:
+    """Return the ``user_id`` that owns a session, or None if it doesn't exist.
+
+    Used to enforce per-user access on history/delete/rename so a user can only
+    reach their own conversations.
+    """
+    db = await _get_shared_db()
+    cursor = await db.execute(
+        "SELECT user_id FROM sessions WHERE session_id = ?",
+        (session_id,),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return row["user_id"] if row["user_id"] else None
 
 
 async def get_session_model(session_id: str) -> str:

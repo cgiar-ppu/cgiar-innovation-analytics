@@ -22,6 +22,7 @@ from synapsis.database.messages import save_message  # noqa: F401
 # -- Session CRUD ------------------------------------------------------------
 from synapsis.database.sessions import (  # noqa: F401
     create_session,
+    get_session_owner,
     save_claude_session_id,
     get_claude_session_id,
     save_initial_context,

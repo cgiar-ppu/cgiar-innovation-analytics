@@ -14,13 +14,28 @@ import time
 from datetime import datetime
 
 import aiosqlite
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 
 from synapsis.database import get_db
 from synapsis.models import SessionUpdate
 from synapsis.session_manager import broadcast_to_all, broadcast_to_session
+from synapsis.auth.middleware import get_current_user, resolve_user_id
 
 router = APIRouter(prefix="/api", tags=["sessions"])
+
+
+async def _require_session_owner(db, session_id: str, user_id: str) -> None:
+    """Raise 404 unless *session_id* is owned by *user_id*.
+
+    Uses 404 (not 403) so the endpoint does not leak the existence of another
+    user's session — a user simply cannot see conversations that are not theirs.
+    """
+    cursor = await db.execute(
+        "SELECT user_id FROM sessions WHERE session_id = ?", (session_id,)
+    )
+    row = await cursor.fetchone()
+    if row is None or (row["user_id"] and row["user_id"] != user_id):
+        raise HTTPException(status_code=404, detail="Session not found")
 
 
 async def _fetch_messages(db: aiosqlite.Connection, session_id: str) -> list[dict]:
@@ -38,12 +53,14 @@ async def _fetch_messages(db: aiosqlite.Connection, session_id: str) -> list[dic
 
 
 @router.get("/sessions")
-async def list_sessions():
-    """List all sessions with metadata, ordered by most recently updated.
+async def list_sessions(user: dict = Depends(get_current_user)):
+    """List the current user's sessions, ordered by most recently updated.
 
-    Uses a single SQL query with a subquery to fetch the first user message
-    preview in one round-trip instead of N+1 queries.
+    Scoped to the authenticated identity (July-7 Step 4): each user only ever
+    sees their own conversations. Uses a single SQL query with a subquery to
+    fetch the first user message preview in one round-trip.
     """
+    user_id = resolve_user_id(user)
     async with get_db() as db:
         cursor = await db.execute("""
             SELECT
@@ -63,8 +80,9 @@ async def list_sessions():
                     LIMIT 1
                 ) AS first_user_data
             FROM sessions s
+            WHERE s.user_id = ?
             ORDER BY COALESCE(s.pinned, 0) DESC, s.updated_at DESC
-        """)
+        """, (user_id,))
         results = []
         for row in await cursor.fetchall():
             title = row["title"]
@@ -86,19 +104,27 @@ async def list_sessions():
 
 
 @router.get("/history/{session_id}")
-async def get_session_history(session_id: str):
-    """Return all messages for a specific session, ordered by timestamp."""
+async def get_session_history(session_id: str, user: dict = Depends(get_current_user)):
+    """Return all messages for a specific session, ordered by timestamp.
+
+    Scoped: 404 unless the session belongs to the authenticated user.
+    """
+    user_id = resolve_user_id(user)
     async with get_db() as db:
+        await _require_session_owner(db, session_id, user_id)
         messages = await _fetch_messages(db, session_id)
         return {"messages": messages, "session_id": session_id}
 
 
 @router.get("/history")
-async def get_history():
-    """Return messages from the most recent session (backward compatibility)."""
+async def get_history(user: dict = Depends(get_current_user)):
+    """Return messages from the current user's most recent session."""
+    user_id = resolve_user_id(user)
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT DISTINCT session_id FROM messages ORDER BY ts DESC LIMIT 1"
+            "SELECT session_id FROM sessions WHERE user_id = ? "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (user_id,),
         )
         row = await cursor.fetchone()
         if not row:
@@ -110,9 +136,11 @@ async def get_history():
 
 
 @router.patch("/sessions/{session_id}")
-async def update_session(session_id: str, payload: SessionUpdate):
-    """Rename a session."""
+async def update_session(session_id: str, payload: SessionUpdate, user: dict = Depends(get_current_user)):
+    """Rename a session (owner-only)."""
+    user_id = resolve_user_id(user)
     async with get_db() as db:
+        await _require_session_owner(db, session_id, user_id)
         await db.execute(
             "UPDATE sessions SET title = ?, updated_at = ? WHERE session_id = ?",
             (payload.title, time.time(), session_id),
@@ -124,10 +152,12 @@ async def update_session(session_id: str, payload: SessionUpdate):
 
 
 @router.post("/sessions/{session_id}/pin")
-async def pin_session(session_id: str, payload: dict):
-    """Toggle pin/star status on a session."""
+async def pin_session(session_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    """Toggle pin/star status on a session (owner-only)."""
+    user_id = resolve_user_id(user)
     pinned = payload.get("pinned", True)
     async with get_db() as db:
+        await _require_session_owner(db, session_id, user_id)
         await db.execute(
             "UPDATE sessions SET pinned = ? WHERE session_id = ?",
             (1 if pinned else 0, session_id),
@@ -137,9 +167,11 @@ async def pin_session(session_id: str, payload: dict):
 
 
 @router.post("/sessions/{session_id}/auto-title")
-async def auto_title_session(session_id: str):
-    """Generate a title from first user message. Preserves manual titles."""
+async def auto_title_session(session_id: str, user: dict = Depends(get_current_user)):
+    """Generate a title from first user message. Preserves manual titles. Owner-only."""
+    user_id = resolve_user_id(user)
     async with get_db() as db:
+        await _require_session_owner(db, session_id, user_id)
         # Check if title already set
         cursor = await db.execute("SELECT title FROM sessions WHERE session_id = ?", (session_id,))
         row = await cursor.fetchone()
@@ -185,14 +217,18 @@ async def auto_title_session(session_id: str):
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
-    """Delete a session and all its messages.
+async def delete_session(session_id: str, user: dict = Depends(get_current_user)):
+    """Delete a session and all its messages (owner-only).
 
     The SDK client is disconnected FIRST to stop any active streaming task,
     then the database rows are removed. This ordering prevents a race where
     the stream handler tries to persist messages to an already-deleted session.
     """
     from synapsis.server import cleanup_session_client
+
+    user_id = resolve_user_id(user)
+    async with get_db() as db:
+        await _require_session_owner(db, session_id, user_id)
 
     # Disconnect the SDK client first — stops active streams and removes
     # the client from the in-memory sessions dict.
@@ -208,10 +244,16 @@ async def delete_session(session_id: str):
 
 
 @router.delete("/history")
-async def clear_history():
-    """Delete all messages and sessions."""
+async def clear_history(user: dict = Depends(get_current_user)):
+    """Delete the current user's messages and sessions (scoped, not global)."""
+    user_id = resolve_user_id(user)
     async with get_db() as db:
-        await db.execute("DELETE FROM messages")
-        await db.execute("DELETE FROM sessions")
+        # Only delete messages belonging to this user's sessions.
+        await db.execute(
+            "DELETE FROM messages WHERE session_id IN "
+            "(SELECT session_id FROM sessions WHERE user_id = ?)",
+            (user_id,),
+        )
+        await db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
         await db.commit()
     return {"status": "cleared"}

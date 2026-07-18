@@ -23,12 +23,15 @@ import json
 import time
 from typing import Optional
 
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocket, WebSocketDisconnect, Query
 from starlette.websockets import WebSocketState
 
 from claude_agent_sdk._errors import CLIConnectionError
 
-from synapsis.config import logger
+from synapsis.config import logger, AUTH_DISABLED, LEGACY_USER_ID
+from synapsis.auth.tokens import verify_token
+from synapsis.auth.context import set_current_user_id
+from synapsis.auth.middleware import resolve_user_id
 from synapsis.chat_run_manager import chat_run_manager
 from synapsis.ws_utils import forward_events, stop_forward_task
 from synapsis.session_manager import (
@@ -62,8 +65,17 @@ __all__ = ["ws_chat", "get_activity_stats", "cleanup_session_client"]
 # Main WebSocket handler
 # ---------------------------------------------------------------------------
 
-async def ws_chat(websocket: WebSocket) -> None:
+async def ws_chat(websocket: WebSocket, token: Optional[str] = Query(default=None)) -> None:
     """Main WebSocket handler for /ws/chat.
+
+    Authentication (July-7 Step 3/4)
+    --------------------------------
+    The client connects with ``?token=<jwt>``. The token is validated and the
+    resolved ``user_id`` is stashed in the per-connection identity context so
+    every session this connection creates is owned by that user. In dev-bypass
+    mode (IA_AUTH_DISABLED=true) the legacy sentinel is used and no token is
+    required. When auth IS enforced and the token is missing/invalid, the
+    connection is rejected with close code 1008.
 
     Protocol -- client sends JSON frames:
       {"message": "..."}                     -- user chat message
@@ -90,6 +102,21 @@ async def ws_chat(websocket: WebSocket) -> None:
     Every outgoing frame carries a "session_id" field so the frontend can
     route it to the correct conversation panel.
     """
+    # --- Authenticate and resolve the owning identity (Step 3/4) ---
+    if AUTH_DISABLED:
+        user_id = LEGACY_USER_ID
+    else:
+        user = verify_token(token) if token else None
+        if user is None:
+            # Reject unauthenticated connections when auth is enforced.
+            await websocket.close(code=1008, reason="Authentication failed: missing or invalid token")
+            return
+        user_id = resolve_user_id(user)
+
+    # Bind the identity to this connection's async context so every session
+    # created downstream (via create_session) is owned by this user.
+    set_current_user_id(user_id)
+
     await websocket.accept()
     await increment_connections()
 
@@ -175,6 +202,24 @@ async def ws_chat(websocket: WebSocket) -> None:
 
             # --- Switch to / resume a different session ---
             if msg_type == "switch_session":
+                # Enforce per-user ownership: a user may only resume their own
+                # sessions. Unknown sessions are allowed (they'll be created on
+                # first message and owned by this user); sessions owned by a
+                # DIFFERENT user are rejected.
+                requested_sid = payload.get("session_id", "")
+                if requested_sid and not AUTH_DISABLED:
+                    from synapsis.database import get_session_owner
+                    owner = await get_session_owner(requested_sid)
+                    if owner is not None and owner != user_id:
+                        logger.warning(
+                            "Blocked cross-user session access: user %s -> session %s (owner %s)",
+                            user_id, requested_sid, owner,
+                        )
+                        await send_json(
+                            {"type": "error", "message": "Session not found."},
+                            sid=requested_sid,
+                        )
+                        continue
                 old_sid = session_id
                 session_id, client, needs_attach = await handle_switch_session(
                     payload, session_id, send_json
