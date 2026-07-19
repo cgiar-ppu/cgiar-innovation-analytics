@@ -7,6 +7,7 @@ import { useUIStore } from '../../stores/ui';
 import { ThemeToggle } from './ThemeToggle';
 import { TTSToggle } from '../chat/TTSToggle';
 import { ModelSelector } from './ModelSelector';
+import { UserMenu } from './UserMenu';
 import type { AppConfig } from '../../lib/types';
 
 const NAV_ITEMS = [
@@ -173,6 +174,9 @@ export default function TopBar({ config }: TopBarProps) {
               <Monitor className="w-4 h-4" />
             </button>
           )}
+
+          {/* Account menu — user email + sign out (only when a real session exists) */}
+          <UserMenu />
         </div>
       </div>
     </header>
