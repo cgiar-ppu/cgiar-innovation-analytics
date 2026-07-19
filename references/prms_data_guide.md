@@ -178,6 +178,19 @@ This freezes a reclassified code at its early type-7 phase and over-counts 2022/
 - **Innovation Use:** change the final `WHERE result_type_id = 7` to `= 2`. Output: 2022=39, 2023=102, 2024=63, 2025=346.
 - **Innovation Packages / IPSR:** use the **IPSR phase chain** in the `ord` VALUES list instead: `(2,0),(5,1),(7,2)`, then filter `result_type_id = 10`.
 
+### Headline / all-time totals — ALWAYS state your method (added 2026-07-19, QA Round 1)
+
+For **all-time** headline questions ("how many active innovations in total?", "how many discontinued?") there is no single number: simple `DISTINCT result_code` over all phases, the Section-4 latest-QAed-phase dedup, and dashboard-published-only views legitimately differ by ~100–200. Rules:
+
+1. **Never give a bare all-time total.** Always name the method in one clause (e.g. *"counting each result code once at its latest quality-assessed phase, W1/W2 plus W3/bilateral"*) and give the W1/W2 vs bilateral split.
+2. **Default method for all-time totals** = the Section-4 dedup CTE (per funding-window arm), because it is the only method verified against the Results Dashboard export. Do NOT invent ad-hoc dedup schemes on `version_id`/`status_id`/`source` beyond the documented Section-1/Section-4 patterns — those columns are QA gates and phase markers, not general-purpose dedup keys.
+3. **Self-check:** your per-year values must reproduce the locked Section-1 table (2022=477, 2023=872, 2024=1,016, 2025=1,185 alive-in-year; 62/160/445/963 latest-phase W1/W2). If they don't, your query is wrong.
+4. **Discontinued counts** are method-sensitive too (discontinued rows sit outside the `status_id=2` gate): state whether you counted all active-flagged discontinued result codes or only dashboard-visible ones.
+
+### Example result codes must satisfy the stated filter (added 2026-07-19, QA Round 1)
+
+When you list example result codes to illustrate a filtered/tagged set (e.g. "3 examples of Gender-tagged innovations"), each example MUST come from the SAME query that produced the count — never from a separate title/keyword search. If you fall back to keyword matching, say so explicitly per example ("title mentions gender; not formally IA-tagged"). Never present keyword-matched codes as tag-matched.
+
 ---
 
 ## 5. W1/W2 vs W3/Bilateral Funding Sources
