@@ -18,3 +18,15 @@ numpy>=1.26.0
 # python-jose signs/verifies the session JWT; bcrypt hashes issued passwords.
 python-jose[cryptography]>=3.3.0
 bcrypt>=4.0.0
+
+# Document generation — required by synapsis/exporters/docx.py (and the
+# watermark helper it shares with the AI-content disclaimer banner) for the
+# GET /api/export/{id}?format=docx endpoint. Prior to this pin, requirements.txt
+# (which Dockerfile.prod installs into the deployed dev/prod container) omitted
+# python-docx entirely, so the docx exporter's `from docx import Document`
+# raised ImportError -> HTTP 500 in the deployed container even though the
+# endpoint worked locally (requirements-macos.txt does list python-docx).
+# Version pinned to match the verified local dev environment (see
+# requirements-macos.txt). python-pptx / reportlab are NOT imported anywhere
+# in synapsis/ so they are intentionally left out of this lean prod list.
+python-docx>=1.1.0,<2.0.0
