@@ -40,6 +40,14 @@ from synapsis.database.tasks import (  # noqa: F401
 # -- Memory ------------------------------------------------------------------
 from synapsis.database.memory import load_memories_context  # noqa: F401
 
+# -- Users (interim self-signup) ----------------------------------------------
+from synapsis.database.users import (  # noqa: F401
+    init_users_table,
+    get_user_row,
+    create_user_row,
+    list_user_rows,
+)
+
 # -- History index -----------------------------------------------------------
 from synapsis.database.history import (  # noqa: F401
     init_history_tables,

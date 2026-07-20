@@ -1,10 +1,16 @@
 """
-User management from a JSON allow-list file.
+User authentication — DB-backed (interim self-signup, 2026-07-20).
 
-Users are defined in a JSON config file (default: config/allowed_users.json).
-Adding or removing users is a config-file edit — no code changes needed.
+Users now live in a persistent `users` table in chat.db (see
+``synapsis/database/users.py``), not in the JSON allow-list at runtime. The
+JSON allow-list (default: config/allowed_users.json) is still the *seed*
+source for the baked-in accounts — it is loaded once at boot and upserted
+into the table (never overwriting an existing row) — but is no longer read
+on the login/signup hot path. Adding a baked-in user is still a config-file
+edit (it seeds on next boot); the DB is what makes runtime self-signup
+possible without a redeploy.
 
-File format:
+File format (unchanged):
 {
   "users": [
     {
@@ -16,7 +22,7 @@ File format:
   ]
 }
 
-Ported from ast-chatbot/synapsis/auth/users.py.
+Ported from ast-chatbot/synapsis/auth/users.py; extended for DB-backed storage.
 """
 
 import json
@@ -27,10 +33,14 @@ import bcrypt
 from synapsis.config import USERS_FILE, logger
 
 
-def _load_users() -> list[dict]:
-    """Load users from the JSON allow-list file."""
+def _load_allowed_users_json() -> list[dict]:
+    """Load the baked-in allow-list JSON.
+
+    Used only by the one-time (idempotent, re-run-safe) DB seed migration in
+    ``synapsis.database.users.init_users_table`` — no longer on the login path.
+    """
     if not USERS_FILE.exists():
-        logger.warning("Users file not found at %s — no password users can log in", USERS_FILE)
+        logger.warning("Users file not found at %s — no baked-in users to seed", USERS_FILE)
         return []
 
     try:
@@ -42,14 +52,10 @@ def _load_users() -> list[dict]:
         return []
 
 
-def get_user_by_email(email: str) -> Optional[dict]:
-    """Look up a user by email address (case-insensitive)."""
-    users = _load_users()
-    email_lower = email.lower().strip()
-    for user in users:
-        if user.get("email", "").lower().strip() == email_lower:
-            return user
-    return None
+async def get_user_by_email(email: str) -> Optional[dict]:
+    """Look up a user by email address (case-insensitive) from the DB."""
+    from synapsis.database.users import get_user_row
+    return await get_user_row(email)
 
 
 def verify_password(plain_password: str, password_hash: str) -> bool:
@@ -64,14 +70,14 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
 
 
 def hash_password(plain_password: str) -> str:
-    """Hash a password with bcrypt for storage in the users file."""
+    """Hash a password with bcrypt for storage in the users table."""
     return bcrypt.hashpw(
         plain_password.encode("utf-8"),
         bcrypt.gensalt(),
     ).decode("utf-8")
 
 
-def authenticate_user(email: str, password: str) -> Optional[dict]:
+async def authenticate_user(email: str, password: str) -> Optional[dict]:
     """Authenticate a user by email and password.
 
     Returns a user dict (without password_hash) on success, None on failure.
@@ -79,7 +85,7 @@ def authenticate_user(email: str, password: str) -> Optional[dict]:
     every downstream consumer keys on (currently the email; the Cognito ``sub``
     once SSO federates).
     """
-    user = get_user_by_email(email)
+    user = await get_user_by_email(email)
     if not user:
         logger.info("Login attempt for unknown email: %s", email)
         return None
@@ -98,15 +104,16 @@ def authenticate_user(email: str, password: str) -> Optional[dict]:
     }
 
 
-def list_users() -> list[dict]:
+async def list_users() -> list[dict]:
     """List all users (without password hashes)."""
-    users = _load_users()
+    from synapsis.database.users import list_user_rows
+    rows = await list_user_rows()
     return [
         {
-            "user_id": u.get("email", ""),
-            "email": u.get("email", ""),
-            "name": u.get("name", ""),
-            "role": u.get("role", "user"),
+            "user_id": r.get("email", ""),
+            "email": r.get("email", ""),
+            "name": r.get("name", ""),
+            "role": r.get("role", "user"),
         }
-        for u in users
+        for r in rows
     ]

@@ -189,3 +189,10 @@ async def init_db() -> None:
     # -- History index tables (separate function to keep init_db focused) --
     from synapsis.database.history import init_history_tables
     await init_history_tables()
+
+    # -- Users table (persistent, self-signup-capable; separate function to
+    # keep init_db focused). Idempotent: creates the table if missing and
+    # seeds/upserts baked-in allow-list accounts without ever overwriting an
+    # existing row's password hash.
+    from synapsis.database.users import init_users_table
+    await init_users_table()

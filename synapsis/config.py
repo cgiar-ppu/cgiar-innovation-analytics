@@ -172,6 +172,13 @@ AUTH_DISABLED: bool = os.getenv(
 # idempotent user_id migration, and returned by the dev bypass.
 LEGACY_USER_ID: str = "legacy@innovation-analytics"
 
+# Interim self-signup (no email confirmation). Defaults OFF everywhere so the
+# prod-lineage config stays closed unless a deployment explicitly opts in.
+# deploy.yml sets IA_SELF_SIGNUP=true only for the dev stage's docker run.
+SELF_SIGNUP_ENABLED: bool = os.getenv(
+    "IA_SELF_SIGNUP", "false"
+).lower() in ("true", "1", "yes")
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------

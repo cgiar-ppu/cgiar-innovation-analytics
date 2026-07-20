@@ -71,6 +71,43 @@ describe('auth store', () => {
     expect(getAuthToken()).toBeNull()
   })
 
+  it('signup stores the token and resolves the identity (immediate access, no confirmation)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          token: 'jwt-new',
+          user: { user_id: 'new@cgiar.org', email: 'new@cgiar.org', name: 'New', role: 'researcher' },
+        }),
+      }),
+    )
+    const err = await useAuthStore.getState().signup('New', 'new@cgiar.org', 'a-strong-pw')
+    expect(err).toBeNull()
+    expect(getAuthToken()).toBe('jwt-new')
+    expect(useAuthStore.getState().user?.role).toBe('researcher')
+    expect(localStorage.getItem('ia-auth-token')).toBe('jwt-new')
+  })
+
+  it('signup returns a friendly error on 409 (duplicate email)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 409 }))
+    const err = await useAuthStore.getState().signup('Dup', 'dup@cgiar.org', 'a-strong-pw')
+    expect(err).toMatch(/already exists/i)
+    expect(getAuthToken()).toBeNull()
+  })
+
+  it('signup returns a friendly error on 422 (weak password / bad email)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 422 }))
+    const err = await useAuthStore.getState().signup('Weak', 'weak@cgiar.org', 'short')
+    expect(err).toMatch(/valid email|8 characters/i)
+  })
+
+  it('signup returns a friendly error on 404 (flag disabled)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404 }))
+    const err = await useAuthStore.getState().signup('X', 'x@cgiar.org', 'a-strong-pw')
+    expect(err).toMatch(/not available/i)
+  })
+
   it('acknowledgeDisclaimer persists per-user and gates on the flag', () => {
     useAuthStore.setState({ user: { userId: 'alice@cgiar.org', email: 'a', name: 'A', role: 'user' } })
     expect(useAuthStore.getState().disclaimerAcknowledged).toBe(false)

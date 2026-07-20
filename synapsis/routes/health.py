@@ -21,6 +21,7 @@ from synapsis.config import (
     APP_VERSION,
     AVAILABLE_MODELS,
     SELECTABLE_MODELS_FILTERED,
+    SELF_SIGNUP_ENABLED,
 )
 from synapsis.agents import SUBAGENTS
 from synapsis.constants import MEMORY_CATEGORIES
@@ -70,4 +71,9 @@ async def get_config():
         "vnc_available": not IS_MACOS and os.environ.get("DISPLAY") is not None,
         "vnc_port": 6080,
         "platform": SYNAPSIS_PLATFORM,
+        # Interim self-signup (no email confirmation) — the frontend only
+        # shows the "Create account" option when this is true. Flag-gated
+        # server-side (IA_SELF_SIGNUP); defaults false so prod-lineage
+        # deployments stay closed.
+        "self_signup": SELF_SIGNUP_ENABLED,
     }

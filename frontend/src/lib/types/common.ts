@@ -106,6 +106,12 @@ export interface AppConfig {
   vnc_port: number
   /** Host platform identifier (optional). */
   platform?: string
+  /**
+   * Whether the backend has interim self-signup enabled (IA_SELF_SIGNUP).
+   * Gates whether LoginScreen shows the "Create account" option. Optional /
+   * defaults to falsy so older backends without the field behave as before.
+   */
+  self_signup?: boolean
 }
 
 /**
