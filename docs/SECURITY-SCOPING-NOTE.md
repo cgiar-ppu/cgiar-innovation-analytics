@@ -100,3 +100,13 @@ so per-file ownership scoping was never part of this build's promise. The
 download route additionally accepts `?token=` (same query-param pattern as
 `routes/export.py`) so plain `<a href>` download links rendered from chat
 markdown — which cannot attach an `Authorization` header — keep working.
+
+## Interim self-signup, no email confirmation (added 2026-07-20)
+
+`POST /api/auth/signup` lets anyone create an account instantly (role always
+`researcher`, no email verification step) — an interim measure so
+researchers aren't blocked on a manual allow-list edit + redeploy while
+CGIAR Entra ID SSO is still being onboarded. It is gated behind the
+`IA_SELF_SIGNUP` env flag (default OFF in code; `deploy.yml` only sets it
+`true` for the dev stage), so it can be disabled instantly by unsetting the
+flag and does not reach the prod lineage unless explicitly re-enabled there.

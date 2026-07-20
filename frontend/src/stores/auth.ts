@@ -49,6 +49,12 @@ interface AuthState {
   initialize: () => Promise<void>
   /** Log in with email + password. Returns null on success, or an error string. */
   login: (email: string, password: string) => Promise<string | null>
+  /**
+   * Interim self-signup (no email confirmation) — creates the account and
+   * logs in immediately. Returns null on success, or an error string. Only
+   * reachable when the backend reports `self_signup: true` (IA_SELF_SIGNUP).
+   */
+  signup: (name: string, email: string, password: string) => Promise<string | null>
   /** Clear the session (token + user). The disclaimer ack persists per-user. */
   logout: () => void
   /** Record the "I understand" acknowledgment (persisted per-user). */
@@ -121,6 +127,36 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       })
       if (!res.ok) {
         return res.status === 401 ? 'Invalid email or password.' : `Login failed (${res.status}).`
+      }
+      const data = await res.json()
+      const token: string = data.token
+      const user = toAuthUser(data.user ?? {})
+      localStorage.setItem(TOKEN_KEY, token)
+      set({
+        token,
+        user,
+        disclaimerAcknowledged: readAck(user.userId),
+        authRequired: true,
+      })
+      return null
+    } catch {
+      return 'Could not reach the server. Please try again.'
+    }
+  },
+
+  signup: async (name, email, password) => {
+    try {
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password }),
+      })
+      if (!res.ok) {
+        if (res.status === 409) return 'An account with this email already exists.'
+        if (res.status === 422) return 'Enter a valid email and a password of at least 8 characters.'
+        if (res.status === 429) return 'Too many attempts. Please try again in a minute.'
+        if (res.status === 404) return 'Self-signup is not available on this deployment.'
+        return `Sign-up failed (${res.status}).`
       }
       const data = await res.json()
       const token: string = data.token

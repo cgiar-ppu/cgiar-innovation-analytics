@@ -85,15 +85,19 @@ Mappings:
     dev:
       SubdomainSuffix: "-dev"
       ScStage: dev
+      SelfSignup: "true"
     staging:
       SubdomainSuffix: "-staging"
       ScStage: tst
+      SelfSignup: "false"
     prod:
       SubdomainSuffix: ""
       ScStage: prd
+      SelfSignup: "false"
     feature:
       SubdomainSuffix: "-feature"
       ScStage: dev
+      SelfSignup: "true"
 
 # =============================================================================
 # Resources
@@ -295,8 +299,11 @@ Resources:
             systemctl enable docker && systemctl start docker
             usermod -aG docker ec2-user
 
-            # --- Fetch secrets from SSM ---
+            # --- Fetch secrets from SSM (tolerate absence -- empty default,
+            # never crash boot if a param hasn't been seeded yet) ---
             ANTHROPIC_KEY=$(aws ssm get-parameter --name "$SSM_PREFIX/anthropic-api-key" \
+              --with-decryption --query 'Parameter.Value' --output text --region "$REGION" 2>/dev/null || echo "")
+            OPENAI_KEY=$(aws ssm get-parameter --name "$SSM_PREFIX/openai-api-key" \
               --with-decryption --query 'Parameter.Value' --output text --region "$REGION" 2>/dev/null || echo "")
 
             # --- Login to ECR and pull image ---
@@ -348,6 +355,8 @@ Resources:
               -e AWS_REGION="$REGION" \
               -e LITESTREAM_S3_BUCKET="cgiar-ia-artifacts-${AWS::AccountId}" \
               -e ANTHROPIC_API_KEY="$ANTHROPIC_KEY" \
+              -e OPENAI_API_KEY="$OPENAI_KEY" \
+              -e IA_SELF_SIGNUP="${SelfSignup}" \
               -e SYNAPSIS_PORT="7780" \
               -e SYNAPSIS_HOST="0.0.0.0" \
               -e SYNAPSIS_PLATFORM="linux" \
@@ -404,6 +413,7 @@ Resources:
 
             echo "=== Bootstrap complete ==="
           - ScStage: !FindInMap [StageMap, !Ref Stage, ScStage]
+            SelfSignup: !FindInMap [StageMap, !Ref Stage, SelfSignup]
 
   # ---------------------------------------------------------------------------
   # CloudWatch Log Group

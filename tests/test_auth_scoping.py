@@ -9,6 +9,7 @@ Covers:
 """
 
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -17,36 +18,41 @@ from httpx import AsyncClient, ASGITransport
 
 
 # ---------------------------------------------------------------------------
-# Login / token round-trip (unit-level, no DB needed)
+# Login / token round-trip
+#
+# Users now live in the persistent `users` table (2026-07-20 self-signup
+# change), not the JSON allow-list at runtime -- the JSON is only the
+# one-time seed source (see synapsis/database/users.py). These tests insert
+# directly into the DB, mirroring what the seed migration would produce.
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def users_file(tmp_path):
-    """Write a temporary allow-list with one bcrypt user and patch USERS_FILE."""
-    import json
+@pytest_asyncio.fixture
+async def db_user(initialized_db: Path):
+    """Insert one bcrypt user row directly into the (temp) users table."""
     import bcrypt
+    from synapsis.database.users import create_user_row
 
     pw = "correct-horse"
     h = bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
-    path = tmp_path / "allowed_users.json"
-    path.write_text(json.dumps({"users": [
-        {"email": "alice@cgiar.org", "name": "Alice", "role": "admin", "password_hash": h},
-    ]}))
-    with patch("synapsis.config.USERS_FILE", path), patch("synapsis.auth.users.USERS_FILE", path):
+
+    with patch("synapsis.database.DB_PATH", initialized_db):
+        await create_user_row("alice@cgiar.org", "Alice", h, role="admin")
         yield {"email": "alice@cgiar.org", "password": pw}
 
 
-def test_wrong_password_rejected(users_file):
+@pytest.mark.asyncio
+async def test_wrong_password_rejected(db_user):
     from synapsis.auth.users import authenticate_user
-    assert authenticate_user(users_file["email"], "wrong") is None
+    assert await authenticate_user(db_user["email"], "wrong") is None
 
 
-def test_correct_password_issues_roundtrippable_token(users_file):
+@pytest.mark.asyncio
+async def test_correct_password_issues_roundtrippable_token(db_user):
     from synapsis.auth.users import authenticate_user
     from synapsis.auth.tokens import create_access_token, verify_token
     from synapsis.auth.middleware import resolve_user_id
 
-    user = authenticate_user(users_file["email"], users_file["password"])
+    user = await authenticate_user(db_user["email"], db_user["password"])
     assert user is not None
     assert user["user_id"] == "alice@cgiar.org"
 
