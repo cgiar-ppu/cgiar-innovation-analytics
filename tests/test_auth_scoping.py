@@ -160,3 +160,246 @@ async def test_user_cannot_delete_another_users_session(auth_client):
     alice = {"Authorization": f"Bearer {_token_for('alice@cgiar.org')}"}
     resp = await auth_client.delete("/api/sessions/s-bob", headers=alice)
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Admin-legacy-chat exception (2026-07-20): synapsis/auth/scoping.py
+# ---------------------------------------------------------------------------
+
+def test_allowed_user_ids_admin_widens_to_legacy():
+    from synapsis.auth.scoping import allowed_user_ids
+    from synapsis.config import LEGACY_USER_ID
+
+    assert allowed_user_ids("jose@synapsis-analytics.com", "admin") == [
+        "jose@synapsis-analytics.com", LEGACY_USER_ID,
+    ]
+    # Admin identity that IS the sentinel (e.g. dev-bypass) -> no duplicate.
+    assert allowed_user_ids(LEGACY_USER_ID, "admin") == [LEGACY_USER_ID]
+
+
+def test_allowed_user_ids_non_admin_own_only():
+    from synapsis.auth.scoping import allowed_user_ids
+
+    assert allowed_user_ids("ppt.tester@cgiar.org", "researcher") == ["ppt.tester@cgiar.org"]
+    assert allowed_user_ids("ppt.tester@cgiar.org", None) == ["ppt.tester@cgiar.org"]
+    assert allowed_user_ids("ppt.tester@cgiar.org", "user") == ["ppt.tester@cgiar.org"]
+
+
+def test_is_visible_to_admin_legacy_exception():
+    from synapsis.auth.scoping import is_visible_to
+    from synapsis.config import LEGACY_USER_ID
+
+    assert is_visible_to(LEGACY_USER_ID, "jose@synapsis-analytics.com", "admin") is True
+    assert is_visible_to(LEGACY_USER_ID, "ppt.tester@cgiar.org", "researcher") is False
+    assert is_visible_to("bob@cgiar.org", "alice@cgiar.org", "admin") is False
+    assert is_visible_to("alice@cgiar.org", "alice@cgiar.org", "researcher") is True
+    # Falsy owner (pre-migration edge case) -- visible regardless of role.
+    assert is_visible_to(None, "alice@cgiar.org", "researcher") is True
+    assert is_visible_to("", "alice@cgiar.org", "researcher") is True
+
+
+# ---------------------------------------------------------------------------
+# Admin-legacy-chat exception -- REST layer (list/history/export/delete)
+# ---------------------------------------------------------------------------
+
+@pytest_asyncio.fixture
+async def auth_client_legacy(initialized_db):
+    """Async client with auth ENFORCED: an admin, a researcher, and one
+    sentinel-owned ("legacy" / pre-auth) session."""
+    from synapsis.database import create_session, save_message
+    from synapsis.config import LEGACY_USER_ID
+
+    await create_session("s-admin", title="Admin's own chat", user_id="admin@cgiar.org")
+    await save_message("s-admin", "user", {"content": "admin question"})
+    await create_session("s-researcher", title="Researcher's own chat", user_id="researcher@cgiar.org")
+    await save_message("s-researcher", "user", {"content": "researcher question"})
+    await create_session("s-legacy", title="Old pre-login chat", user_id=LEGACY_USER_ID)
+    await save_message("s-legacy", "user", {"content": "legacy question"})
+
+    with (
+        patch("synapsis.database.DB_PATH", initialized_db),
+        patch("synapsis.config.AUTH_DISABLED", False),
+        patch("synapsis.auth.middleware.AUTH_DISABLED", False),
+    ):
+        from synapsis.server import app
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            yield client
+
+
+@pytest.mark.asyncio
+async def test_admin_sees_own_and_legacy_sessions(auth_client_legacy):
+    admin = {"Authorization": f"Bearer {_token_for('admin@cgiar.org', role='admin')}"}
+    resp = await auth_client_legacy.get("/api/sessions", headers=admin)
+    assert resp.status_code == 200
+    sessions = resp.json()["sessions"]
+    ids = {s["session_id"] for s in sessions}
+    assert ids == {"s-admin", "s-legacy"}
+    assert "s-researcher" not in ids
+
+    legacy_entry = next(s for s in sessions if s["session_id"] == "s-legacy")
+    admin_entry = next(s for s in sessions if s["session_id"] == "s-admin")
+    assert legacy_entry["is_legacy"] is True
+    assert admin_entry["is_legacy"] is False
+
+
+@pytest.mark.asyncio
+async def test_admin_can_open_and_export_legacy_session(auth_client_legacy):
+    admin_headers = {"Authorization": f"Bearer {_token_for('admin@cgiar.org', role='admin')}"}
+
+    hist = await auth_client_legacy.get("/api/history/s-legacy", headers=admin_headers)
+    assert hist.status_code == 200
+    assert hist.json()["messages"], "admin should see the legacy session's messages"
+
+    admin_token = _token_for("admin@cgiar.org", role="admin")
+    export = await auth_client_legacy.get(f"/api/export/s-legacy?format=md&token={admin_token}")
+    assert export.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_admin_can_rename_pin_and_delete_legacy_session(auth_client_legacy):
+    admin = {"Authorization": f"Bearer {_token_for('admin@cgiar.org', role='admin')}"}
+
+    rename = await auth_client_legacy.patch(
+        "/api/sessions/s-legacy", json={"title": "Renamed by admin"}, headers=admin,
+    )
+    assert rename.status_code == 200
+
+    pin = await auth_client_legacy.post(
+        "/api/sessions/s-legacy/pin", json={"pinned": True}, headers=admin,
+    )
+    assert pin.status_code == 200
+
+    delete = await auth_client_legacy.delete("/api/sessions/s-legacy", headers=admin)
+    assert delete.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_researcher_cannot_see_legacy_or_others_sessions(auth_client_legacy):
+    researcher = {"Authorization": f"Bearer {_token_for('researcher@cgiar.org', role='researcher')}"}
+
+    resp = await auth_client_legacy.get("/api/sessions", headers=researcher)
+    ids = {s["session_id"] for s in resp.json()["sessions"]}
+    assert ids == {"s-researcher"}
+
+    legacy_hist = await auth_client_legacy.get("/api/history/s-legacy", headers=researcher)
+    assert legacy_hist.status_code == 404
+
+    others_hist = await auth_client_legacy.get("/api/history/s-admin", headers=researcher)
+    assert others_hist.status_code == 404
+
+    legacy_delete = await auth_client_legacy.delete("/api/sessions/s-legacy", headers=researcher)
+    assert legacy_delete.status_code == 404
+
+    researcher_token = _token_for("researcher@cgiar.org", role="researcher")
+    legacy_export = await auth_client_legacy.get(f"/api/export/s-legacy?format=md&token={researcher_token}")
+    assert legacy_export.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_admin_new_session_creation_still_attributed_to_admin(initialized_db):
+    """Widening VISIBILITY for admins must not change CREATION attribution:
+    a session an admin creates is owned by the admin, never the sentinel."""
+    from synapsis.database import create_session, get_session_owner
+    from synapsis.auth.context import set_current_user_id
+    from synapsis.config import LEGACY_USER_ID
+
+    set_current_user_id("admin@cgiar.org", "admin")
+    try:
+        await create_session("s-new-by-admin")
+        owner = await get_session_owner("s-new-by-admin")
+        assert owner == "admin@cgiar.org"
+        assert owner != LEGACY_USER_ID
+    finally:
+        # Reset the contextvar so it doesn't leak into other tests.
+        set_current_user_id(LEGACY_USER_ID, "user")
+
+
+# ---------------------------------------------------------------------------
+# Admin-legacy-chat exception -- WebSocket switch_session
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_ws_switch_session_admin_legacy_ok_researcher_blocked(initialized_db):
+    """The switch_session ownership gate in synapsis/websocket.py must let an
+    admin resume a sentinel-owned ("legacy") session and must still reject a
+    researcher with the existing 404-equivalent error semantics.
+
+    Uses a minimal in-process fake WebSocket (no live server, no real SDK
+    subprocess -- the SDK client factory is patched out) so this never talks
+    to a live agent or incurs any cost.
+    """
+    import json as _json
+    from types import SimpleNamespace
+    from starlette.websockets import WebSocketState
+
+    from synapsis.database import create_session, save_message
+    from synapsis.config import LEGACY_USER_ID
+    from synapsis.websocket import ws_chat
+    from synapsis.session.client_registry import ClientRegistry
+
+    await create_session("s-ws-legacy", title="Legacy WS chat", user_id=LEGACY_USER_ID)
+    await save_message("s-ws-legacy", "user", {"content": "hi"})
+
+    class FakeWebSocket:
+        def __init__(self, frames):
+            self._frames = list(frames)
+            self.sent = []
+            self.client_state = WebSocketState.CONNECTED
+            self.close_code = None
+            self.close_reason = None
+
+        async def accept(self):
+            pass
+
+        async def receive_text(self):
+            if not self._frames:
+                from fastapi import WebSocketDisconnect
+                raise WebSocketDisconnect()
+            return self._frames.pop(0)
+
+        async def send_json(self, data):
+            self.sent.append(data)
+
+        async def close(self, code=1000, reason=""):
+            self.client_state = WebSocketState.DISCONNECTED
+            self.close_code = code
+            self.close_reason = reason
+
+    async def fake_create_and_connect_client(self, resume_session_id=None, model=None):
+        # Stand-in for a connected ClaudeSDKClient -- never spawns a real
+        # subprocess and never talks to a live agent.
+        return SimpleNamespace()
+
+    with (
+        patch("synapsis.config.AUTH_DISABLED", False),
+        patch("synapsis.websocket.AUTH_DISABLED", False),
+        patch.object(ClientRegistry, "_create_and_connect_client", fake_create_and_connect_client),
+    ):
+        admin_token = _token_for("admin@cgiar.org", role="admin")
+        ws_admin = FakeWebSocket([
+            _json.dumps({"type": "switch_session", "session_id": "s-ws-legacy"}),
+        ])
+        await ws_chat(ws_admin, token=admin_token)
+
+        assert not any(f.get("type") == "error" for f in ws_admin.sent), ws_admin.sent
+        assert any(
+            f.get("type") == "session" and f.get("session_id") == "s-ws-legacy"
+            for f in ws_admin.sent
+        ), ws_admin.sent
+
+        researcher_token = _token_for("researcher@cgiar.org", role="researcher")
+        ws_researcher = FakeWebSocket([
+            _json.dumps({"type": "switch_session", "session_id": "s-ws-legacy"}),
+        ])
+        await ws_chat(ws_researcher, token=researcher_token)
+
+        assert any(
+            f.get("type") == "error" and "not found" in f.get("message", "").lower()
+            for f in ws_researcher.sent
+        ), ws_researcher.sent
+        assert not any(
+            f.get("type") == "session" and f.get("session_id") == "s-ws-legacy"
+            for f in ws_researcher.sent
+        ), ws_researcher.sent

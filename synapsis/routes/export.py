@@ -22,7 +22,8 @@ from synapsis.database import get_db
 from synapsis.utils.db_helpers import fetch_one_or_404
 from synapsis.exporters import export_markdown, export_html, export_docx
 from synapsis.exporters.common import safe_filename
-from synapsis.auth.middleware import resolve_user_id
+from synapsis.auth.middleware import resolve_user_id, resolve_role
+from synapsis.auth.scoping import allowed_user_ids
 
 router = APIRouter(prefix="/api", tags=["export"])
 
@@ -33,13 +34,19 @@ EXPORT_DIR = WORKSPACE / "exports"
 # Database helpers
 # ---------------------------------------------------------------------------
 
-async def _get_session_data(session_id: str, user_id: str):
-    """Fetch session info and messages, scoped to the owning user (404 otherwise)."""
+async def _get_session_data(session_id: str, user_id: str, role: str | None = None):
+    """Fetch session info and messages, scoped to visible owners (404 otherwise).
+
+    Admins may ALSO export sentinel-owned ("legacy" / pre-auth) sessions --
+    see synapsis.auth.scoping.allowed_user_ids and docs/SECURITY-SCOPING-NOTE.md.
+    """
+    ids = allowed_user_ids(user_id, role)
+    placeholders = ",".join("?" for _ in ids)
     async with get_db() as db:
         session_row = await fetch_one_or_404(
             db,
-            "SELECT * FROM sessions WHERE session_id = ? AND user_id = ?",
-            (session_id, user_id),
+            f"SELECT * FROM sessions WHERE session_id = ? AND user_id IN ({placeholders})",
+            (session_id, *ids),
             "Session",
         )
 
@@ -124,13 +131,15 @@ async def export_conversation(
 
     if AUTH_DISABLED:
         user_id = LEGACY_USER_ID
+        role = "admin"
     else:
         user = verify_token(token) if token else None
         if user is None:
             raise HTTPException(status_code=401, detail="Not authenticated")
         user_id = resolve_user_id(user)
+        role = resolve_role(user)
 
-    title, rows = await _get_session_data(session_id, user_id)
+    title, rows = await _get_session_data(session_id, user_id, role)
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
     if format == "md":

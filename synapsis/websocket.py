@@ -31,7 +31,8 @@ from claude_agent_sdk._errors import CLIConnectionError
 from synapsis.config import logger, AUTH_DISABLED, LEGACY_USER_ID
 from synapsis.auth.tokens import verify_token
 from synapsis.auth.context import set_current_user_id
-from synapsis.auth.middleware import resolve_user_id
+from synapsis.auth.middleware import resolve_user_id, resolve_role
+from synapsis.auth.scoping import is_visible_to
 from synapsis.chat_run_manager import chat_run_manager
 from synapsis.ws_utils import forward_events, stop_forward_task
 from synapsis.session_manager import (
@@ -105,6 +106,7 @@ async def ws_chat(websocket: WebSocket, token: Optional[str] = Query(default=Non
     # --- Authenticate and resolve the owning identity (Step 3/4) ---
     if AUTH_DISABLED:
         user_id = LEGACY_USER_ID
+        role = "admin"
     else:
         user = verify_token(token) if token else None
         if user is None:
@@ -112,10 +114,14 @@ async def ws_chat(websocket: WebSocket, token: Optional[str] = Query(default=Non
             await websocket.close(code=1008, reason="Authentication failed: missing or invalid token")
             return
         user_id = resolve_user_id(user)
+        # Role comes from the verified JWT claim (never client input) --
+        # see synapsis.auth.tokens.verify_token / auth.middleware.resolve_role.
+        role = resolve_role(user)
 
-    # Bind the identity to this connection's async context so every session
-    # created downstream (via create_session) is owned by this user.
-    set_current_user_id(user_id)
+    # Bind the identity (and role) to this connection's async context so every
+    # session created downstream (via create_session) is owned by this user,
+    # and switch_session below can grant admins legacy-session visibility.
+    set_current_user_id(user_id, role)
 
     await websocket.accept()
     await increment_connections()
@@ -203,17 +209,19 @@ async def ws_chat(websocket: WebSocket, token: Optional[str] = Query(default=Non
             # --- Switch to / resume a different session ---
             if msg_type == "switch_session":
                 # Enforce per-user ownership: a user may only resume their own
-                # sessions. Unknown sessions are allowed (they'll be created on
-                # first message and owned by this user); sessions owned by a
-                # DIFFERENT user are rejected.
+                # sessions (admins may ALSO resume sentinel-owned "legacy"
+                # sessions -- see synapsis.auth.scoping.is_visible_to). Unknown
+                # sessions are allowed (they'll be created on first message and
+                # owned by this user); sessions owned by a DIFFERENT,
+                # non-visible user are rejected.
                 requested_sid = payload.get("session_id", "")
                 if requested_sid and not AUTH_DISABLED:
                     from synapsis.database import get_session_owner
                     owner = await get_session_owner(requested_sid)
-                    if owner is not None and owner != user_id:
+                    if owner is not None and not is_visible_to(owner, user_id, role):
                         logger.warning(
-                            "Blocked cross-user session access: user %s -> session %s (owner %s)",
-                            user_id, requested_sid, owner,
+                            "Blocked cross-user session access: user %s (role=%s) -> session %s (owner %s)",
+                            user_id, role, requested_sid, owner,
                         )
                         await send_json(
                             {"type": "error", "message": "Session not found."},

@@ -19,22 +19,27 @@ from fastapi import APIRouter, Depends, HTTPException
 from synapsis.database import get_db
 from synapsis.models import SessionUpdate
 from synapsis.session_manager import broadcast_to_all, broadcast_to_session
-from synapsis.auth.middleware import get_current_user, resolve_user_id
+from synapsis.auth.middleware import get_current_user, resolve_user_id, resolve_role
+from synapsis.auth.scoping import allowed_user_ids, is_visible_to
+from synapsis.config import LEGACY_USER_ID
 
 router = APIRouter(prefix="/api", tags=["sessions"])
 
 
-async def _require_session_owner(db, session_id: str, user_id: str) -> None:
-    """Raise 404 unless *session_id* is owned by *user_id*.
+async def _require_session_owner(db, session_id: str, user: dict) -> None:
+    """Raise 404 unless *session_id* is visible to the identity in *user*.
 
     Uses 404 (not 403) so the endpoint does not leak the existence of another
-    user's session — a user simply cannot see conversations that are not theirs.
+    user's session — a user simply cannot see conversations that are not
+    theirs. Admins additionally see sentinel-owned ("legacy" / pre-auth)
+    sessions -- see synapsis.auth.scoping.is_visible_to and
+    docs/SECURITY-SCOPING-NOTE.md.
     """
     cursor = await db.execute(
         "SELECT user_id FROM sessions WHERE session_id = ?", (session_id,)
     )
     row = await cursor.fetchone()
-    if row is None or (row["user_id"] and row["user_id"] != user_id):
+    if row is None or not is_visible_to(row["user_id"], resolve_user_id(user), resolve_role(user)):
         raise HTTPException(status_code=404, detail="Session not found")
 
 
@@ -57,12 +62,17 @@ async def list_sessions(user: dict = Depends(get_current_user)):
     """List the current user's sessions, ordered by most recently updated.
 
     Scoped to the authenticated identity (July-7 Step 4): each user only ever
-    sees their own conversations. Uses a single SQL query with a subquery to
+    sees their own conversations. Admins ALSO see sentinel-owned ("legacy" /
+    pre-auth) sessions -- see synapsis.auth.scoping.allowed_user_ids and
+    docs/SECURITY-SCOPING-NOTE.md. Uses a single SQL query with a subquery to
     fetch the first user message preview in one round-trip.
     """
     user_id = resolve_user_id(user)
+    role = resolve_role(user)
+    ids = allowed_user_ids(user_id, role)
+    placeholders = ",".join("?" for _ in ids)
     async with get_db() as db:
-        cursor = await db.execute("""
+        cursor = await db.execute(f"""
             SELECT
                 s.session_id,
                 s.title,
@@ -72,6 +82,7 @@ async def list_sessions(user: dict = Depends(get_current_user)):
                 s.message_count,
                 s.pinned,
                 s.task_status,
+                s.user_id,
                 (
                     SELECT m.data
                     FROM messages m
@@ -80,9 +91,9 @@ async def list_sessions(user: dict = Depends(get_current_user)):
                     LIMIT 1
                 ) AS first_user_data
             FROM sessions s
-            WHERE s.user_id = ?
+            WHERE s.user_id IN ({placeholders})
             ORDER BY COALESCE(s.pinned, 0) DESC, s.updated_at DESC
-        """, (user_id,))
+        """, tuple(ids))
         results = []
         for row in await cursor.fetchall():
             title = row["title"]
@@ -99,6 +110,11 @@ async def list_sessions(user: dict = Depends(get_current_user)):
                 "message_count": row["message_count"],
                 "pinned": bool(row["pinned"]),
                 "task_status": row["task_status"],
+                # Cheap, purely-informational marker: only ever true for an
+                # admin viewing a sentinel-owned pre-auth session (never for
+                # the sentinel's own live sessions, since only admins ever
+                # see rows whose owner != their own user_id here).
+                "is_legacy": row["user_id"] == LEGACY_USER_ID and user_id != LEGACY_USER_ID,
             })
         return {"sessions": results}
 
@@ -111,7 +127,7 @@ async def get_session_history(session_id: str, user: dict = Depends(get_current_
     """
     user_id = resolve_user_id(user)
     async with get_db() as db:
-        await _require_session_owner(db, session_id, user_id)
+        await _require_session_owner(db, session_id, user)
         messages = await _fetch_messages(db, session_id)
         return {"messages": messages, "session_id": session_id}
 
@@ -140,7 +156,7 @@ async def update_session(session_id: str, payload: SessionUpdate, user: dict = D
     """Rename a session (owner-only)."""
     user_id = resolve_user_id(user)
     async with get_db() as db:
-        await _require_session_owner(db, session_id, user_id)
+        await _require_session_owner(db, session_id, user)
         await db.execute(
             "UPDATE sessions SET title = ?, updated_at = ? WHERE session_id = ?",
             (payload.title, time.time(), session_id),
@@ -157,7 +173,7 @@ async def pin_session(session_id: str, payload: dict, user: dict = Depends(get_c
     user_id = resolve_user_id(user)
     pinned = payload.get("pinned", True)
     async with get_db() as db:
-        await _require_session_owner(db, session_id, user_id)
+        await _require_session_owner(db, session_id, user)
         await db.execute(
             "UPDATE sessions SET pinned = ? WHERE session_id = ?",
             (1 if pinned else 0, session_id),
@@ -171,7 +187,7 @@ async def auto_title_session(session_id: str, user: dict = Depends(get_current_u
     """Generate a title from first user message. Preserves manual titles. Owner-only."""
     user_id = resolve_user_id(user)
     async with get_db() as db:
-        await _require_session_owner(db, session_id, user_id)
+        await _require_session_owner(db, session_id, user)
         # Check if title already set
         cursor = await db.execute("SELECT title FROM sessions WHERE session_id = ?", (session_id,))
         row = await cursor.fetchone()
@@ -228,7 +244,7 @@ async def delete_session(session_id: str, user: dict = Depends(get_current_user)
 
     user_id = resolve_user_id(user)
     async with get_db() as db:
-        await _require_session_owner(db, session_id, user_id)
+        await _require_session_owner(db, session_id, user)
 
     # Disconnect the SDK client first — stops active streams and removes
     # the client from the in-memory sessions dict.
