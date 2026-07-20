@@ -90,6 +90,7 @@ export function SessionItem({ session, isActive, onSelect, onRename, onDelete }:
         <div className="flex items-center gap-2 text-[11px] text-text-muted mt-0.5">
           <span>{formatTimestamp(session.updated_at)}</span>
           <span>{session.message_count} msg{session.message_count !== 1 ? 's' : ''}</span>
+          {session.is_legacy && <span className="italic">(pre-login history)</span>}
         </div>
       </div>
       <div className="flex items-center gap-0.5 flex-shrink-0">

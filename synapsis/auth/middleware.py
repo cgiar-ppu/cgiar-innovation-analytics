@@ -106,3 +106,20 @@ def resolve_user_id(user: Optional[dict]) -> str:
     if user and user.get("user_id"):
         return str(user["user_id"])
     return LEGACY_USER_ID
+
+
+def resolve_role(user: Optional[dict]) -> str:
+    """Resolve a user payload to its verified ``role`` claim.
+
+    Reads the JWT ``role`` claim (never client input -- ``user`` here is
+    always the dict already produced by :func:`get_current_user` /
+    :func:`verify_token`, i.e. post-signature-verification). Defaults to
+    ``"user"`` for anonymous/missing-role payloads so an unrecognized shape
+    never silently grants admin-only visibility.
+
+    Used together with :func:`synapsis.auth.scoping.allowed_user_ids` to grant
+    admins visibility into sentinel-owned (pre-auth "legacy") sessions.
+    """
+    if user and user.get("role"):
+        return str(user["role"])
+    return "user"

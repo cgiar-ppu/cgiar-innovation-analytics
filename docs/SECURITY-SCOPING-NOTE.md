@@ -65,3 +65,26 @@ than shipped as a false sense of security.**
 > and history. The agent still runs in a shared workspace, so this is UI/API
 > scoping, not execution-sandbox isolation. Full per-user sandboxing is a
 > costed future phase, flagged openly rather than implied.
+
+## Admin-legacy-chat exception (added 2026-07-20)
+
+The `user_id` migration attributed every session that predates login to a
+sentinel identity, `LEGACY_USER_ID = "legacy@innovation-analytics"`
+(`synapsis/config.py`). Strict per-user filtering therefore hid that entire
+pre-login history from everyone, including admins, who reasonably expect to
+still see it. The fix widens *visibility* only, in one centralized place
+(`synapsis/auth/scoping.py::allowed_user_ids` / `is_visible_to`, consumed by
+`routes/sessions.py`, `routes/export.py`, and the WebSocket `switch_session`
+ownership check in `websocket.py`): a user whose **verified JWT `role`
+claim** is `"admin"` sees, opens, exports, resumes, renames, pins, and may
+delete BOTH their own sessions AND sentinel-owned ("legacy") sessions;
+non-admin roles are unaffected and remain strictly own-sessions-only with the
+existing 404-not-403 semantics. The role is read only from the
+signature-verified token (`auth/tokens.py::verify_token` → `resolve_role()`),
+never from client-supplied input, and is threaded into the WebSocket path via
+the same per-connection `contextvar` that already carries `user_id`
+(`auth/context.py`). Creation attribution is unchanged: a session an admin
+creates is still owned by that admin's own `user_id`, never silently
+re-attributed to the sentinel. This exception is a *visibility* widening
+only — it does not alter the honest execution-sandbox limitation described
+above.

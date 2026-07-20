@@ -25,4 +25,10 @@ export interface Session {
   pinned?: boolean
   /** Backend task status: "idle", "running", "completed", "failed", "cancelled". */
   task_status?: string
+  /**
+   * True only for an admin viewing a sentinel-owned pre-auth ("legacy")
+   * session -- see synapsis/auth/scoping.py. Purely informational; absent or
+   * false for a user's own sessions.
+   */
+  is_legacy?: boolean
 }
