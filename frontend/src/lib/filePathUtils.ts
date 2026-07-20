@@ -84,21 +84,76 @@ export function extractRelativePath(absolutePath: string): string | null {
  * ensure correct behavior with Nginx proxies and FastAPI's `{filename:path}`
  * route parameter.
  *
+ * `GET /api/files/{path}` requires authentication (added 2026-07-20). A
+ * plain `<a href>` cannot attach an `Authorization` header, so when a token
+ * is supplied it is appended as `?token=` — the same query-param pattern
+ * already used by the conversation-export links. Callers running in
+ * dev-bypass mode (no token available) simply omit it; the backend allows
+ * that when `IA_AUTH_DISABLED=true`.
+ *
  * @param relativePath - Path relative to the workspace root.
+ * @param token - Optional JWT to attach as `?token=` for unauthenticated
+ *   `<a>` navigation (pass `getAuthToken()` from the auth store).
  * @returns URL string like `/api/files/outputs/tunnel-architecture-speeds.html`
  *
  * @example
  * buildDownloadUrl('outputs/my report.html')
  * // → '/api/files/outputs/my%20report.html'
+ *
+ * @example
+ * buildDownloadUrl('outputs/my report.html', 'eyJhbGciOi...')
+ * // → '/api/files/outputs/my%20report.html?token=eyJhbGciOi...'
  */
-export function buildDownloadUrl(relativePath: string): string {
-  return (
+export function buildDownloadUrl(relativePath: string, token?: string | null): string {
+  const url =
     '/api/files/' +
     relativePath
       .split('/')
       .map(encodeURIComponent)
       .join('/')
-  )
+  return token ? `${url}?token=${encodeURIComponent(token)}` : url
+}
+
+/**
+ * Resolves an arbitrary anchor `href` (as found in agent-rendered markdown
+ * links, e.g. `[report](/workspace/outputs/report.docx)`) to a working
+ * download URL if it points inside the workspace; otherwise returns the
+ * href unchanged (e.g. `https://...` citation links pass through as-is).
+ *
+ * Fixes the raw-href bug: a workspace path rendered as a literal `<a href>`
+ * previously navigated the browser to e.g. `/workspace/outputs/report.docx`,
+ * which isn't a frontend route or an API route, so the SPA catch-all served
+ * `index.html` (200 OK, blank/broken page) instead of the file.
+ *
+ * @param href - The raw anchor href from markdown/HTML.
+ * @param token - Optional JWT to attach as `?token=` (see {@link buildDownloadUrl}).
+ * @returns A `/api/files/...` download URL, or the original href unchanged.
+ *
+ * @example
+ * resolveWorkspaceHref('/workspace/outputs/report.docx', 'eyJ...')
+ * // → '/api/files/outputs/report.docx?token=eyJ...'
+ *
+ * @example
+ * resolveWorkspaceHref('https://reporting.cgiar.org/result/123')
+ * // → 'https://reporting.cgiar.org/result/123' (unchanged)
+ */
+export function resolveWorkspaceHref(href: string, token?: string | null): string {
+  if (!href) return href
+  // Strip a leading file:// scheme if present (mirrors MarkdownImage's handling).
+  const cleaned = href.replace(/^file:\/\//, '')
+  const rel = extractRelativePath(cleaned)
+  if (!rel) return href
+  return buildDownloadUrl(rel, token)
+}
+
+/**
+ * Whether {@link resolveWorkspaceHref} would rewrite this href (i.e. it
+ * points inside the workspace, as opposed to an external URL that should
+ * pass through unchanged).
+ */
+export function isWorkspaceHref(href: string): boolean {
+  if (!href) return false
+  return extractRelativePath(href.replace(/^file:\/\//, '')) !== null
 }
 
 /**

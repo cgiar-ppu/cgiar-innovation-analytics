@@ -1,4 +1,5 @@
 import { api } from '../lib/api';
+import { getAuthToken } from '../stores/auth';
 
 export interface FileEntry {
   name: string;
@@ -19,7 +20,14 @@ export const filesService = {
     return api.postForm<{ path: string; size: number }>('/api/upload', file);
   },
 
+  /**
+   * `GET /api/files/{path}` requires auth (2026-07-20). This URL is used in
+   * a plain `<a href>` (see `pages/Files.tsx`), which can't attach an
+   * `Authorization` header, so the JWT is appended as `?token=`.
+   */
   downloadUrl(path: string): string {
-    return `/api/files/${encodeURIComponent(path)}`;
+    const token = getAuthToken();
+    const url = `/api/files/${encodeURIComponent(path)}`;
+    return token ? `${url}?token=${encodeURIComponent(token)}` : url;
   },
 };

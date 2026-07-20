@@ -289,9 +289,18 @@ export const api = {
   /**
    * Returns the direct download URL for a workspace file.
    *
+   * `GET /api/files/{path}` requires auth (2026-07-20); this is rendered as
+   * a plain `<a href>` (see `pages/Files.tsx`), which can't attach an
+   * `Authorization` header, so the JWT is appended as `?token=` — the same
+   * pattern used by `buildDownloadUrl` in `lib/filePathUtils.ts`.
+   *
    * @param filename - The filename as returned by {@link getFiles}.
    */
-  downloadUrl: (filename: string) => `${BASE}/api/files/${encodeURIComponent(filename)}`,
+  downloadUrl: (filename: string) => {
+    const token = getAuthToken()
+    const url = `${BASE}/api/files/${encodeURIComponent(filename)}`
+    return token ? `${url}?token=${encodeURIComponent(token)}` : url
+  },
 
   /** Returns the list of stored memories. */
   getMemories: () => get<{ memories: Memory[] }>('/api/memories'),

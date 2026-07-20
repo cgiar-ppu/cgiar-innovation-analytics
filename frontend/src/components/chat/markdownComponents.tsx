@@ -11,7 +11,8 @@ import React from 'react'
 import remarkGfm from 'remark-gfm'
 import { CodeBlock } from './CodeBlock'
 import { processChildrenForFilePaths } from './FileDownloadLink'
-import { extractRelativePath, buildDownloadUrl } from '../../lib/filePathUtils'
+import { extractRelativePath, buildDownloadUrl, resolveWorkspaceHref, isWorkspaceHref } from '../../lib/filePathUtils'
+import { getAuthToken } from '../../stores/auth'
 import type { Components } from 'react-markdown'
 
 /* ---- Shared across both assistant & streaming messages ---- */
@@ -34,7 +35,7 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
     const cleaned = resolvedSrc.replace(/^file:\/\//, '')
     const rel = extractRelativePath(cleaned)
     if (rel) {
-      resolvedSrc = buildDownloadUrl(rel)
+      resolvedSrc = buildDownloadUrl(rel, getAuthToken())
     }
   }
   return (
@@ -44,6 +45,36 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
       loading="lazy"
       className="max-w-full h-auto rounded-xl border border-[var(--border)] my-2"
     />
+  )
+}
+
+/**
+ * Anchor renderer for markdown `[text](href)` links.
+ *
+ * Agent replies sometimes contain markdown links pointing at an absolute
+ * workspace path (e.g. `[report](/workspace/outputs/report.docx)`). Left as
+ * a raw href, clicking it navigates the browser to a path that is neither a
+ * frontend route nor an API route — the SPA catch-all serves `index.html`
+ * (200, blank/broken page) instead of the file. Workspace-prefixed hrefs are
+ * rewritten to the authenticated `/api/files/...` download endpoint;
+ * anything else (external URLs, PRMS citation links, etc.) passes through
+ * unchanged.
+ */
+const MarkdownAnchor: Components['a'] = ({ href, children, node: _node, ...rest }) => {
+  const workspaceLink = Boolean(href && isWorkspaceHref(href))
+  const resolvedHref = href ? resolveWorkspaceHref(href, getAuthToken()) : href
+
+  // Only workspace-file links get download/new-tab treatment (matching
+  // FileDownloadLink's behavior). External / citation links are left exactly
+  // as ReactMarkdown would have rendered them before this override existed.
+  const extraProps = workspaceLink
+    ? { download: true, target: '_blank', rel: 'noopener noreferrer' }
+    : {}
+
+  return (
+    <a href={resolvedHref} {...extraProps} {...rest} onClick={(e) => e.stopPropagation()}>
+      {children}
+    </a>
   )
 }
 
@@ -72,6 +103,7 @@ export const ASSISTANT_MD_COMPONENTS: Components = {
     return <td>{processChildrenForFilePaths(children)}</td>
   },
   img: MarkdownImage,
+  a: MarkdownAnchor,
 }
 
 /* ---- Components for StreamingMessage (lightweight, no syntax highlighting) ---- */
@@ -112,4 +144,5 @@ export const STREAMING_MD_COMPONENTS: Components = {
     return <td>{processChildrenForFilePaths(children)}</td>
   },
   img: MarkdownImage,
+  a: MarkdownAnchor,
 }

@@ -17,6 +17,7 @@ import {
   containsFilePaths,
   parseFilePathsInText,
 } from '../../lib/filePathUtils'
+import { getAuthToken } from '../../stores/auth'
 
 // ---------------------------------------------------------------------------
 // FileDownloadLink — the core button component
@@ -38,7 +39,10 @@ interface FileDownloadLinkProps {
  * save dialog rather than navigating away.
  */
 export function FileDownloadLink({ relativePath, filename, fullPath }: FileDownloadLinkProps) {
-  const url = buildDownloadUrl(relativePath)
+  // `GET /api/files/{path}` requires auth (2026-07-20); this button renders
+  // a plain <a> (no Authorization header), so attach the JWT as ?token=
+  // (same pattern the export links and MarkdownAnchor use).
+  const url = buildDownloadUrl(relativePath, getAuthToken())
 
   return (
     <a
