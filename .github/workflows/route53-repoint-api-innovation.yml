@@ -1,0 +1,63 @@
+name: Repoint api-innovation to PROD ALB (One-Off)
+
+# PURPOSE (2026-07-19): api-innovation.synapsis-analytics.com (the backend/WS domain
+# used by the PROD SPA at innovation-analytics.synapsis-analytics.com) was CNAME'd to
+# the DEV ALB (cgiar-ia-dev-1903003658...). When auth was enabled on the dev stack,
+# the pre-auth prod frontend broke (401s / WS refused). This repoints the record to
+# the prod stack's own ALB, restoring dev/prod isolation.
+#
+# ROLLBACK: re-run with the change-batch value set back to
+#   cgiar-ia-dev-1903003658.eu-central-1.elb.amazonaws.com
+#
+# Pre-flight verified before dispatch: cgiar-ia-prod ALB healthy (2.0.0 backend,
+# /api/sessions 200 pre-auth); wildcard cert *.synapsis-analytics.com on the ALB.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  repoint-api-innovation:
+    runs-on: ubuntu-latest
+    environment: MGMT
+    steps:
+      - name: Configure AWS credentials (ai-sandbox MGMT role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::919959486181:role/cicd/github-actions-cgiar-innovation-analytics-MGMT-deploy
+          aws-region: eu-central-1
+
+      - name: Show current record (pre-change, for the audit log)
+        run: |
+          aws route53 list-resource-record-sets \
+            --hosted-zone-id Z079841559W4HJ5A3Q2Y \
+            --query "ResourceRecordSets[?Name=='api-innovation.synapsis-analytics.com.']" \
+            --output json
+
+      - name: UPSERT CNAME api-innovation -> cgiar-ia-prod ALB
+        run: |
+          aws route53 change-resource-record-sets \
+            --hosted-zone-id Z079841559W4HJ5A3Q2Y \
+            --change-batch '{
+              "Comment": "Repoint prod API domain from dev ALB to prod ALB (restore isolation after dev auth enablement)",
+              "Changes": [{
+                "Action": "UPSERT",
+                "ResourceRecordSet": {
+                  "Name": "api-innovation.synapsis-analytics.com",
+                  "Type": "CNAME",
+                  "TTL": 300,
+                  "ResourceRecords": [{"Value": "cgiar-ia-prod-580846753.eu-central-1.elb.amazonaws.com"}]
+                }
+              }]
+            }'
+          echo "Route53 UPSERT submitted successfully"
+
+      - name: Verify record (post-change)
+        run: |
+          aws route53 list-resource-record-sets \
+            --hosted-zone-id Z079841559W4HJ5A3Q2Y \
+            --query "ResourceRecordSets[?Name=='api-innovation.synapsis-analytics.com.']" \
+            --output json
