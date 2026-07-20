@@ -88,3 +88,15 @@ creates is still owned by that admin's own `user_id`, never silently
 re-attributed to the sentinel. This exception is a *visibility* widening
 only — it does not alter the honest execution-sandbox limitation described
 above.
+
+## Workspace-files API now requires auth (added 2026-07-20)
+
+`GET /api/files`, `GET /api/files/{path}`, and `POST /api/upload`
+(`synapsis/routes/files.py`) were previously unauthenticated on the deployed
+dev app — closed as a gap, not a new isolation boundary. Any authenticated
+user (any role) may list, download, or upload, consistent with the shared-
+workspace limitation described above: the workspace is common to all users,
+so per-file ownership scoping was never part of this build's promise. The
+download route additionally accepts `?token=` (same query-param pattern as
+`routes/export.py`) so plain `<a href>` download links rendered from chat
+markdown — which cannot attach an `Authorization` header — keep working.

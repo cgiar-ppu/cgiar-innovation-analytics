@@ -313,6 +313,21 @@ Resources:
             mkdir -p /opt/cgiar-ia/synapsis
             chown 1000:1000 /opt/cgiar-ia/synapsis 2>/dev/null || true
 
+            # --- Durable host dirs for generated/uploaded workspace files ---
+            # Container /workspace is otherwise ephemeral (wiped on every
+            # redeploy/replace) -- these are the directories the agent and
+            # its routes actually write to (system_prompt.py "Workspace
+            # Conventions" + synapsis/routes/files.py + synapsis/routes/export.py):
+            #   uploads/  -- user file uploads (POST /api/upload)
+            #   outputs/  -- agent-generated deliverables (incl. outputs/exports/
+            #                dashboard HTML) -- what users click download links for
+            #   exports/  -- session MD/HTML/DOCX/PDF exports (GET /api/export)
+            #   analysis/ -- agent-authored analysis write-ups
+            # Same UID-1000-BEFORE-docker-run lesson as the .synapsis mount above:
+            # a root-owned bind mount breaks writes from the non-root container user.
+            mkdir -p /opt/cgiar-ia/workspace-files/{uploads,outputs,exports,analysis}
+            chown -R 1000:1000 /opt/cgiar-ia/workspace-files 2>/dev/null || true
+
             # --- Run container ---
             docker run -d \
               --name "$CONTAINER_NAME" \
@@ -326,6 +341,10 @@ Resources:
               --log-opt max-buffer-size=4m \
               -p 7780:7780 \
               -v /opt/cgiar-ia/synapsis:/workspace/.synapsis \
+              -v /opt/cgiar-ia/workspace-files/uploads:/workspace/uploads \
+              -v /opt/cgiar-ia/workspace-files/outputs:/workspace/outputs \
+              -v /opt/cgiar-ia/workspace-files/exports:/workspace/exports \
+              -v /opt/cgiar-ia/workspace-files/analysis:/workspace/analysis \
               -e AWS_REGION="$REGION" \
               -e LITESTREAM_S3_BUCKET="cgiar-ia-artifacts-${AWS::AccountId}" \
               -e ANTHROPIC_API_KEY="$ANTHROPIC_KEY" \
