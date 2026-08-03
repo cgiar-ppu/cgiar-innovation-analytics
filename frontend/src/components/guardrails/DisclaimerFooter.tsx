@@ -5,9 +5,14 @@
  * view of the tool (mounted at the layout level). Short form of the CGIAR SO
  * SOP guidance line, per Marc's "maybe in a small footnote, so that it's always
  * there" spec (July 7 call, ~44:33).
+ *
+ * Carries the short form of the "reach out if in doubt" contact route
+ * (Jules-call item 2, 2026-07-07) — one mailto per contact, shared with
+ * DisclaimerModal via ./contacts.ts.
  */
 
 import { Info } from 'lucide-react'
+import { GUARDRAIL_CONTACTS } from './contacts'
 
 export default function DisclaimerFooter() {
   return (
@@ -22,6 +27,22 @@ export default function DisclaimerFooter() {
           AI outputs are for guidance only and require human quality assurance
           before use or citation. Based on CGIAR innovation data (PRMS) with
           AI-added interpretation.
+        </span>
+        <span data-testid="disclaimer-footer-contact">
+          In doubt?{' '}
+          {GUARDRAIL_CONTACTS.map((c, i) => (
+            <span key={c.email}>
+              {i > 0 && ' or '}
+              <a
+                href={`mailto:${c.email}`}
+                className="underline underline-offset-2 hover:text-[var(--accent)]"
+              >
+                {c.name}
+              </a>{' '}
+              ({c.remit})
+            </span>
+          ))}
+          .
         </span>
       </div>
     </footer>

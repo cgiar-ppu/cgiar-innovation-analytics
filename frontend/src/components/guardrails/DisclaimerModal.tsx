@@ -7,6 +7,10 @@
  * other available information + human quality assurance always required) plus
  * the CGIAR SO SOP guidance line. The user must click "I understand" to proceed.
  *
+ * Also carries the "reach out if in doubt" contact route (Jules-call item 2,
+ * 2026-07-07) — see ./contacts.ts for the wording and the pending-confirmation
+ * caveat on who the named contacts are.
+ *
  * Follows the repo's house modal style (framer-motion + glass Tailwind), the
  * same pattern used by AgentDetailModal.
  */
@@ -14,6 +18,7 @@
 import { motion } from 'framer-motion'
 import { ShieldCheck } from 'lucide-react'
 import { useAuthStore } from '../../stores/auth'
+import { GUARDRAIL_CONTACTS, CONTACT_LEAD_IN } from './contacts'
 
 export default function DisclaimerModal() {
   const acknowledge = useAuthStore((s) => s.acknowledgeDisclaimer)
@@ -67,6 +72,24 @@ export default function DisclaimerModal() {
             Scaffolding, not substitute: AI-generated content has no institutional
             standing until it is reviewed, validated, and approved by a responsible
             human author.
+          </p>
+
+          {/* "Reach out if in doubt" — the contact half of Jules-call item 2. */}
+          <p className="text-xs text-[var(--text-muted)]" data-testid="disclaimer-contact">
+            {CONTACT_LEAD_IN}{' '}
+            {GUARDRAIL_CONTACTS.map((c, i) => (
+              <span key={c.email}>
+                {i > 0 && ' or '}
+                <a
+                  href={`mailto:${c.email}`}
+                  className="underline underline-offset-2 hover:text-[var(--accent)]"
+                >
+                  {c.name}
+                </a>{' '}
+                ({c.remit})
+              </span>
+            ))}
+            .
           </p>
         </div>
 
