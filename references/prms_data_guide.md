@@ -210,7 +210,19 @@ Rules:
    ```
 2. **The arms do not have to sum to the total** — a code can appear in both windows or in several phases. Report the total as its own `COUNT(DISTINCT result_code)`, never as arm₁+arm₂, and say so if they differ.
 3. **Sanity check before you publish a number:** if a query joins any satellite table or spans more than one year, ask "could one innovation contribute more than one row here?" If yes and you did not use `DISTINCT result_code`, the number is wrong. A quick tell: rows ÷ codes ≫ 1.
-4. Every count carries its **snapshot vintage** ("June 13 2026 PRMS snapshot") — including short answers and answers where the count is incidental to a list.
+4. **A total quoted next to a list needs its OWN count query.** Never infer "N total exist" from the size or shape of the listing query — run a separate
+   `SELECT COUNT(DISTINCT result_code) …` with the *same* filters and quote that.
+   In particular **`SELECT DISTINCT result_code, title, tag, …` does NOT dedup by innovation**: `DISTINCT` applies to the whole row, and `title` / tag levels / IRL / year vary across a code's phases, so one innovation yields several "distinct" rows.
+   Worked example (Ghana climate-tagged Innovation Developments, 13-June-2026 snapshot — all three numbers come from the same filters):
+
+   | What you counted | Value | Correct? |
+   |---|---|---|
+   | raw joined rows (`COUNT(*)`) | 109 | ✗ +73% |
+   | `SELECT DISTINCT code, title, climate_tag` rows | 74 | ✗ +17% |
+   | **`COUNT(DISTINCT result_code)`** | **63** | ✓ |
+
+   Both wrong values were produced by the live agent in QA Round 2 (2026-08-03) while the five *cited example codes* were correct — an inflated total can hide behind perfectly good citations.
+5. Every count carries its **snapshot vintage** ("June 13 2026 PRMS snapshot") — including short answers and answers where the count is incidental to a list.
 
 ### Programme / initiative scoping — state the role basis (added 2026-08-03, QA Round 2)
 
