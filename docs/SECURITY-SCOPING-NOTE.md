@@ -110,3 +110,28 @@ CGIAR Entra ID SSO is still being onboarded. It is gated behind the
 `IA_SELF_SIGNUP` env flag (default OFF in code; `deploy.yml` only sets it
 `true` for the dev stage), so it can be disabled instantly by unsetting the
 flag and does not reach the prod lineage unless explicitly re-enabled there.
+
+### Email-domain allow-list (added 2026-08-03)
+
+Self-signup is additionally restricted to CGIAR email addresses, matching the
+policy already stated to Marc Schut on 2026-07-22 ("the sign up is not allowed
+to avoid anyone just using it — without a CG email"). Until now the code did
+not enforce it: any address could self-register on dev.
+
+- Config: `IA_SIGNUP_ALLOWED_DOMAINS`, comma-separated, **default
+  `cgiar.org`**. Unset/blank falls back to that default (fail closed — an
+  accidentally-empty variable must not open signup to the internet). The only
+  way to disable the restriction is the explicit value `*`.
+- Matching is an **exact, case-insensitive** comparison of the part after
+  `@`. Subdomains do NOT match: `x@mail.cgiar.org` is rejected under the
+  default; centre domains (e.g. `cimmyt.org`) must be listed explicitly.
+- Rejection is `403` with a user-facing sentence naming the allowed domains;
+  the login screen surfaces that sentence verbatim and also shows the rule as
+  a hint before submission (`/api/config → signup_allowed_domains`).
+- The check runs after the `IA_SELF_SIGNUP` flag gate and the rate limit, and
+  **before** the uniqueness lookup, so a disallowed address never learns
+  whether an account exists.
+
+This narrows, but does not replace, the SSO path: it is domain-level trust of
+a self-asserted address (no mailbox verification), so it remains an interim
+measure until Entra ID federation lands.

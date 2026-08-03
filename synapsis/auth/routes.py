@@ -18,11 +18,46 @@ from pydantic import BaseModel, field_validator
 from synapsis.auth.users import authenticate_user, get_user_by_email, hash_password
 from synapsis.auth.tokens import create_access_token
 from synapsis.auth.middleware import get_current_user
-from synapsis.config import SELF_SIGNUP_ENABLED, logger
+from synapsis.config import SELF_SIGNUP_ENABLED, SIGNUP_ALLOWED_DOMAINS, logger
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+# ---------------------------------------------------------------------------
+# Signup domain allow-list (IA_SIGNUP_ALLOWED_DOMAINS, default "cgiar.org")
+#
+# Jose -> Marc Schut, 2026-07-22: signup "is not allowed to avoid anyone just
+# using it (without a CG email)". The interim signup endpoint accepted ANY
+# address; these helpers make the code match that stated policy.
+# ---------------------------------------------------------------------------
+
+def _signup_domain_allowed(email: str) -> bool:
+    """Return True if `email`'s domain is on the self-signup allow-list.
+
+    Exact, case-insensitive match on the part after the LAST "@". Subdomains
+    do NOT match (``x@mail.cgiar.org`` is rejected under the default) — see
+    ``synapsis.config._parse_signup_allowed_domains`` for the rationale. An
+    empty allow-list means the restriction is disabled.
+
+    Reads the module-level ``SIGNUP_ALLOWED_DOMAINS`` at call time so tests
+    (and future runtime overrides) can patch it, mirroring how
+    ``SELF_SIGNUP_ENABLED`` is patched.
+    """
+    if not SIGNUP_ALLOWED_DOMAINS:
+        return True
+    domain = email.rsplit("@", 1)[-1].strip().lower()
+    return domain in [d.lower() for d in SIGNUP_ALLOWED_DOMAINS]
+
+
+def _signup_domain_message() -> str:
+    """User-facing rejection message naming the allowed domain(s)."""
+    domains = ", ".join(f"@{d}" for d in SIGNUP_ALLOWED_DOMAINS)
+    return (
+        f"Self-signup is restricted to CGIAR email addresses ({domains}). "
+        "If you believe you should have access, contact the team."
+    )
 
 
 class LoginRequest(BaseModel):
@@ -133,6 +168,19 @@ async def signup(body: SignupRequest, request: Request):
         )
 
     email = body.email.lower().strip()
+
+    # Domain allow-list (IA_SIGNUP_ALLOWED_DOMAINS, default "cgiar.org").
+    # Checked BEFORE the uniqueness lookup so a disallowed address never
+    # learns whether an account exists.
+    if not _signup_domain_allowed(email):
+        logger.info(
+            "Self-signup rejected (domain not allowed): %s (allow-list=%s)",
+            email, SIGNUP_ALLOWED_DOMAINS,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_signup_domain_message(),
+        )
 
     existing = await get_user_by_email(email)
     if existing:

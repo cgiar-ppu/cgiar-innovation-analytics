@@ -179,6 +179,47 @@ SELF_SIGNUP_ENABLED: bool = os.getenv(
     "IA_SELF_SIGNUP", "false"
 ).lower() in ("true", "1", "yes")
 
+
+def _parse_signup_allowed_domains(raw: str | None) -> list[str]:
+    """Parse IA_SIGNUP_ALLOWED_DOMAINS into a normalized allow-list.
+
+    Semantics (deliberately fail-CLOSED — see SIGNUP_ALLOWED_DOMAINS below):
+
+    - unset, empty, or whitespace-only  -> the default ``["cgiar.org"]``.
+      An accidentally-blank env var must never silently open signup to the
+      whole internet, so blank falls back to the restrictive default.
+    - ``"*"`` anywhere in the list      -> ``[]`` = restriction DISABLED
+      (explicit, deliberate opt-out; the only way to allow any domain).
+    - otherwise                         -> the comma-separated domains,
+      lower-cased and stripped (a leading ``@`` is tolerated).
+
+    Matching (see synapsis.auth.routes._signup_domain_allowed) is an EXACT,
+    case-insensitive comparison of the part after ``@``. Subdomains do NOT
+    match: ``x@mail.cgiar.org`` is rejected under the default. That is the
+    simplest reading of the stated requirement ("a CG email" = ``@cgiar.org``);
+    any additional domain (e.g. ``mail.cgiar.org``, centre domains like
+    ``cimmyt.org``) must be listed explicitly.
+    """
+    if raw is None or not raw.strip():
+        return ["cgiar.org"]
+    parts = [p.strip().lstrip("@").lower() for p in raw.split(",")]
+    parts = [p for p in parts if p]
+    if not parts:
+        return ["cgiar.org"]
+    if "*" in parts:
+        return []
+    return parts
+
+
+# Self-signup email-domain allow-list. Jose's commitment to Marc Schut
+# (2026-07-22): signup "is not allowed ... without a CG email". The interim
+# self-signup endpoint previously accepted ANY address, so this makes the code
+# match the stated policy. Empty list = no restriction (only reachable by
+# setting IA_SIGNUP_ALLOWED_DOMAINS="*").
+SIGNUP_ALLOWED_DOMAINS: list[str] = _parse_signup_allowed_domains(
+    os.getenv("IA_SIGNUP_ALLOWED_DOMAINS")
+)
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------

@@ -26,12 +26,15 @@ function resetStore() {
   })
 }
 
-function stubConfig(selfSignup: boolean) {
+function stubConfig(selfSignup: boolean, allowedDomains: string[] = []) {
   vi.stubGlobal(
     'fetch',
     vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ self_signup: selfSignup }),
+      json: async () => ({
+        self_signup: selfSignup,
+        signup_allowed_domains: allowedDomains,
+      }),
     }),
   )
 }
@@ -100,6 +103,29 @@ describe('LoginScreen', () => {
     await user.click(screen.getByTestId('login-submit'))
 
     expect(await screen.findByTestId('login-error')).toHaveTextContent(/already exists/i)
+  })
+
+  it('shows the allowed-domain hint in signup mode when the backend reports one', async () => {
+    stubConfig(true, ['cgiar.org'])
+    const user = userEvent.setup()
+    render(<LoginScreen />)
+
+    // Not shown in login mode…
+    await screen.findByTestId('signup-toggle')
+    expect(screen.queryByTestId('signup-domain-hint')).not.toBeInTheDocument()
+
+    // …but shown once the form switches to signup.
+    await user.click(screen.getByTestId('signup-toggle'))
+    expect(screen.getByTestId('signup-domain-hint')).toHaveTextContent('@cgiar.org')
+  })
+
+  it('shows no domain hint when the allow-list is empty (restriction disabled)', async () => {
+    stubConfig(true, [])
+    const user = userEvent.setup()
+    render(<LoginScreen />)
+
+    await user.click(await screen.findByTestId('signup-toggle'))
+    expect(screen.queryByTestId('signup-domain-hint')).not.toBeInTheDocument()
   })
 
   it('login mode (default) still calls login(), not signup()', async () => {

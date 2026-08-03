@@ -22,6 +22,9 @@ export default function LoginScreen() {
 
   const [mode, setMode] = useState<'login' | 'signup'>('login')
   const [selfSignupEnabled, setSelfSignupEnabled] = useState(false)
+  // Email domains self-signup accepts (config.signup_allowed_domains).
+  // Empty = no restriction, so no hint is shown.
+  const [allowedDomains, setAllowedDomains] = useState<string[]>([])
 
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -37,7 +40,12 @@ export default function LoginScreen() {
     fetch('/api/config')
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (!cancelled && data) setSelfSignupEnabled(Boolean(data.self_signup))
+        if (!cancelled && data) {
+          setSelfSignupEnabled(Boolean(data.self_signup))
+          setAllowedDomains(
+            Array.isArray(data.signup_allowed_domains) ? data.signup_allowed_domains : []
+          )
+        }
       })
       .catch(() => {})
     return () => {
@@ -118,6 +126,13 @@ export default function LoginScreen() {
             className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-transparent text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/40"
             data-testid="login-password"
           />
+
+          {mode === 'signup' && allowedDomains.length > 0 && (
+            <p className="text-xs text-[var(--text-muted)]" data-testid="signup-domain-hint">
+              Sign-up is limited to CGIAR email addresses (
+              {allowedDomains.map((d) => `@${d}`).join(', ')}).
+            </p>
+          )}
 
           {error && (
             <p className="text-xs text-red-500" role="alert" data-testid="login-error">

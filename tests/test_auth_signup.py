@@ -278,3 +278,124 @@ async def test_signup_rate_limit_kicks_in_after_five_per_minute(signup_client):
         json={"name": "Sixth", "email": "rl5@cgiar.org", "password": "s3cure-pw"},
     )
     assert sixth.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# Domain allow-list (IA_SIGNUP_ALLOWED_DOMAINS, default "cgiar.org")
+#
+# Jose -> Marc Schut, 2026-07-22: signup "is not allowed to avoid anyone just
+# using it (without a CG email)". These tests pin the code to that policy.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_signup_allowed_domain_passes(signup_client):
+    """Default allow-list (cgiar.org) lets a CGIAR address through."""
+    resp = await signup_client.post(
+        "/api/auth/signup",
+        json={"name": "Allowed", "email": "allowed.person@cgiar.org", "password": "s3cure-pw"},
+    )
+    assert resp.status_code == 201, resp.text
+
+
+@pytest.mark.asyncio
+async def test_signup_disallowed_domain_rejected_with_403_and_message(signup_client):
+    resp = await signup_client.post(
+        "/api/auth/signup",
+        json={"name": "Outsider", "email": "outsider@gmail.com", "password": "s3cure-pw"},
+    )
+    assert resp.status_code == 403, resp.text
+    detail = resp.json()["detail"]
+    assert "@cgiar.org" in detail
+    assert "restricted" in detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_signup_domain_check_is_case_insensitive(signup_client):
+    """Upper-case domains are accepted (and the stored email lower-cased)."""
+    resp = await signup_client.post(
+        "/api/auth/signup",
+        json={"name": "Shouty", "email": "Shouty.Person@CGIAR.ORG", "password": "s3cure-pw"},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["user"]["email"] == "shouty.person@cgiar.org"
+
+
+@pytest.mark.asyncio
+async def test_signup_subdomain_does_not_match(signup_client):
+    """Exact-domain semantics: mail.cgiar.org is NOT cgiar.org."""
+    resp = await signup_client.post(
+        "/api/auth/signup",
+        json={"name": "Sub", "email": "sub@mail.cgiar.org", "password": "s3cure-pw"},
+    )
+    assert resp.status_code == 403, resp.text
+
+
+@pytest.mark.asyncio
+async def test_signup_domain_allow_list_is_config_overridable(signup_client):
+    """Extra domains can be added without a code change."""
+    with patch(
+        "synapsis.auth.routes.SIGNUP_ALLOWED_DOMAINS", ["cgiar.org", "cimmyt.org"]
+    ):
+        ok = await signup_client.post(
+            "/api/auth/signup",
+            json={"name": "Centre", "email": "centre.person@cimmyt.org", "password": "s3cure-pw"},
+        )
+        assert ok.status_code == 201, ok.text
+
+        nope = await signup_client.post(
+            "/api/auth/signup",
+            json={"name": "Other", "email": "other@example.org", "password": "s3cure-pw"},
+        )
+        assert nope.status_code == 403, nope.text
+        assert "@cimmyt.org" in nope.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_signup_empty_allow_list_disables_the_restriction(signup_client):
+    """IA_SIGNUP_ALLOWED_DOMAINS="*" parses to [] = no restriction."""
+    with patch("synapsis.auth.routes.SIGNUP_ALLOWED_DOMAINS", []):
+        resp = await signup_client.post(
+            "/api/auth/signup",
+            json={"name": "Anyone", "email": "anyone@example.com", "password": "s3cure-pw"},
+        )
+        assert resp.status_code == 201, resp.text
+
+
+@pytest.mark.asyncio
+async def test_signup_flag_off_still_404_even_for_allowed_domain(signup_client_flag_off):
+    """The flag gate keeps precedence over the domain check (endpoint hidden)."""
+    resp = await signup_client_flag_off.post(
+        "/api/auth/signup",
+        json={"name": "Nope", "email": "nope@cgiar.org", "password": "s3cure-pw"},
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_config_reports_signup_allowed_domains(signup_client):
+    cfg = await signup_client.get("/api/config")
+    assert cfg.json()["signup_allowed_domains"] == ["cgiar.org"]
+
+
+# ---------------------------------------------------------------------------
+# Allow-list parsing (pure function — no HTTP)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (None, ["cgiar.org"]),            # unset -> restrictive default
+        ("", ["cgiar.org"]),              # blank -> restrictive default (fail closed)
+        ("   ", ["cgiar.org"]),           # whitespace -> restrictive default
+        (",,", ["cgiar.org"]),            # only separators -> restrictive default
+        ("*", []),                        # explicit opt-out -> no restriction
+        ("cgiar.org,*", []),              # "*" anywhere wins
+        ("CGIAR.org", ["cgiar.org"]),     # lower-cased
+        ("@cgiar.org", ["cgiar.org"]),    # leading @ tolerated
+        (" cgiar.org , cimmyt.org ", ["cgiar.org", "cimmyt.org"]),
+    ],
+)
+def test_parse_signup_allowed_domains(raw, expected):
+    from synapsis.config import _parse_signup_allowed_domains
+
+    assert _parse_signup_allowed_domains(raw) == expected

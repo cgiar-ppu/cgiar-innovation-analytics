@@ -22,6 +22,7 @@ from synapsis.config import (
     AVAILABLE_MODELS,
     SELECTABLE_MODELS_FILTERED,
     SELF_SIGNUP_ENABLED,
+    SIGNUP_ALLOWED_DOMAINS,
 )
 from synapsis.agents import SUBAGENTS
 from synapsis.constants import MEMORY_CATEGORIES
@@ -76,4 +77,8 @@ async def get_config():
         # server-side (IA_SELF_SIGNUP); defaults false so prod-lineage
         # deployments stay closed.
         "self_signup": SELF_SIGNUP_ENABLED,
+        # Email domains self-signup accepts (IA_SIGNUP_ALLOWED_DOMAINS).
+        # Empty list = no domain restriction. The login screen shows this as
+        # a hint so users see the rule before submitting.
+        "signup_allowed_domains": SIGNUP_ALLOWED_DOMAINS,
     }

@@ -156,6 +156,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         if (res.status === 422) return 'Enter a valid email and a password of at least 8 characters.'
         if (res.status === 429) return 'Too many attempts. Please try again in a minute.'
         if (res.status === 404) return 'Self-signup is not available on this deployment.'
+        // 403 = email-domain allow-list (IA_SIGNUP_ALLOWED_DOMAINS). The
+        // server writes a user-facing sentence naming the allowed domain(s),
+        // so surface it verbatim rather than inventing a second wording.
+        const detail = await res
+          .json()
+          .then((body) => (typeof body?.detail === 'string' ? body.detail : null))
+          .catch(() => null)
+        if (detail) return detail
         return `Sign-up failed (${res.status}).`
       }
       const data = await res.json()
