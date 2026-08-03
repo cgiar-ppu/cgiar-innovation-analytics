@@ -17,6 +17,7 @@ Each module defines an APIRouter that gets included by the main server:
 - git:            /api/git/status, /api/git/diff, /api/git/log, /api/git/show
 - skills:         /api/skills (skill/command discovery for autocomplete)
 - images:         /api/images/generate, /api/images/edit, /api/images/models (image generation & editing via OpenAI)
+- scope:          /api/scope/options (year + programme filter values for the agent data scope)
 """
 
 from synapsis.routes.health import router as health_router
@@ -38,6 +39,7 @@ from synapsis.routes.skills import router as skills_router
 from synapsis.routes.fleet import router as fleet_router
 from synapsis.routes.prms_dashboard import router as prms_dashboard_router
 from synapsis.routes.images import router as images_router
+from synapsis.routes.scope import router as scope_router
 
 __all__ = [
     "health_router",
@@ -58,5 +60,6 @@ __all__ = [
     "skills_router",
     "fleet_router",
     "prms_dashboard_router",
+    "scope_router",
     "images_router",
 ]

@@ -41,6 +41,7 @@ from synapsis.routes import (
     fleet_router,
     prms_dashboard_router,
     images_router,
+    scope_router,
 )
 from synapsis.auth.routes import router as auth_router
 from synapsis.websocket import ws_chat, get_activity_stats, cleanup_session_client
@@ -87,6 +88,7 @@ app.include_router(skills_router)
 app.include_router(fleet_router)
 app.include_router(prms_dashboard_router)
 app.include_router(images_router)
+app.include_router(scope_router)
 
 # -- Register WebSocket endpoints --
 app.websocket("/ws/chat")(ws_chat)

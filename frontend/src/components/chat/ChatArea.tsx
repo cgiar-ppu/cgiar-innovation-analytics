@@ -1,6 +1,7 @@
 import { useEffect, useCallback } from 'react'
 import { Maximize2, Minimize2, Wrench, Loader2 } from 'lucide-react'
 import { useChatStore } from '../../stores/chat'
+import { useScopeStore } from '../../stores/scope'
 import { useSessionsStore } from '../../stores/sessions'
 import { useUIStore } from '../../stores/ui'
 import { useTTSStore } from '../../stores/tts'
@@ -15,6 +16,7 @@ import { WelcomeScreen } from '../welcome/WelcomeScreen'
 import { ChatInput } from '../input/ChatInput'
 import { ExportMenu } from './ExportMenu'
 import { TTSSettingsPanel } from './TTSSettingsPanel'
+import { ScopeFilterBar } from './ScopeFilterBar'
 import type { ClientMessage } from '../../lib/types'
 
 interface Props {
@@ -64,7 +66,12 @@ export function ChatArea({ send, onFileUpload }: Props) {
     useChatStore.getState().addUserMessage(enrichedText)
     const activeId = useSessionsStore.getState().activeSessionId
     if (activeId) useSessionsStore.getState().markSessionBusy(activeId)
-    send({ message: enrichedText })
+
+    // Attach the active data scope (year / programme filters) so the backend
+    // can constrain the agent for this turn. `undefined` when nothing is
+    // selected — the frame is then byte-identical to the pre-filter one.
+    const scope = useScopeStore.getState().getActiveScope()
+    send(scope ? { message: enrichedText, scope } : { message: enrichedText })
   }, [send])
 
   const handleCancel = useCallback(() => {
@@ -73,7 +80,9 @@ export function ChatArea({ send, onFileUpload }: Props) {
 
   return (
     <div className="flex-1 flex flex-col relative min-h-0 overflow-x-hidden">
-      <div className="flex items-center justify-end gap-1 px-4 py-2 border-b border-[var(--border)] flex-shrink-0">
+      <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-[var(--border)] flex-shrink-0 flex-wrap">
+        <ScopeFilterBar />
+        <div className="flex items-center gap-1">
         <button
           onClick={toggleExpandedView}
           className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium transition-all ${
@@ -88,6 +97,7 @@ export function ChatArea({ send, onFileUpload }: Props) {
         </button>
         <TTSSettingsPanel />
         <ExportMenu />
+        </div>
       </div>
       <div ref={containerRef} className="chat-messages-area flex-1 overflow-y-auto overflow-x-hidden" style={{ overflowAnchor: 'auto' }}>
         <div className="max-w-chat mx-auto px-4 py-6 space-y-5 min-w-0">

@@ -440,6 +440,7 @@ One-shot stateless query. Creates a fresh agent, runs the query, returns the res
 | Field | Type | Constraints |
 |-------|------|-------------|
 | `message` | string | Required, 1–50,000 characters |
+| `scope` | object | Optional active data scope — `{"years": [2024], "programs": ["SP09 — Scaling for Impact"]}`. Invalid values → `422`. |
 
 **Response:**
 ```json
@@ -452,9 +453,43 @@ One-shot stateless query. Creates a fresh agent, runs the query, returns the res
     "estimated_cost": 0.02,
     "turns": 1,
     "duration_ms": 3500
-  }
+  },
+  "scope": {"years": [], "programs": []},
+  "scope_description": "no filters (full portfolio)"
 }
 ```
+
+---
+
+## 5b. Active data scope (agent filters)
+
+The **scope** is a user-set year / programme filter that constrains the AGENT,
+not a chart: the backend renders it into a delimited preamble prepended to the
+message handed to the SDK, instructing the agent to apply the filter inside its
+PRMS queries and to STATE the active scope in its answer (see
+`synapsis/scope.py`). It is accepted by `POST /api/query` (above) and by the
+chat WebSocket frame `{"message": "...", "scope": {...}}`. An absent or empty
+scope is a strict no-op — the agent sees exactly the user's text.
+
+### `GET /api/scope/options`
+
+Returns the values the filter UI offers. **Auth required.**
+
+```json
+{
+  "years": [2022, 2023, 2024, 2025],
+  "programs": [
+    {"code": "SP09", "label": "SP09 — Scaling for Impact",
+     "era": "Programs & Accelerators (2025+)"}
+  ],
+  "source": "prms"
+}
+```
+
+Programmes come from the PRMS `clarisa_initiatives` table, grouped by portfolio
+era (Initiatives 2022–2024 vs Programs & Accelerators 2025+). `source` is
+`"fallback"` when the PRMS database is unreachable and the static Science-Program
+list was used instead.
 
 ---
 

@@ -6,7 +6,7 @@
  * continues to work unchanged — all types are re-exported here.
  */
 
-export type { ServerMessage, ClientMessage } from './websocket'
+export type { ServerMessage, ClientMessage, MessageScope } from './websocket'
 export type { Session } from './session'
 export type { ChatMessage, MessageRole, PendingAttachment, SearchResult } from './chat'
 export type { PipelineStepMessage, PipelineStepState } from './pipeline'

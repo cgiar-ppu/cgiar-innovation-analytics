@@ -52,5 +52,12 @@ class SessionUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 
 class QueryRequest(BaseModel):
-    """POST /api/query — single-shot query."""
+    """POST /api/query — single-shot query.
+
+    ``scope`` is the same optional active-data-scope object the chat WebSocket
+    accepts (e.g. ``{"years": [2024], "programs": ["SP09 — Scaling for Impact"]}``).
+    Omitted/empty ⇒ no scope and behaviour identical to before. See
+    synapsis/scope.py.
+    """
     message: str = Field(..., min_length=1, max_length=50000)
+    scope: Optional[dict] = None

@@ -58,9 +58,20 @@ export type ServerMessage =
  * WebSocket. Discriminated by the `type` field (or absence thereof for the
  * standard chat message).
  */
+/**
+ * Active data scope (year / programme filters) attached to an outgoing message.
+ * The backend renders it into a preamble that constrains the agent's PRMS
+ * queries and forces it to state the slice in its answer. Omitted entirely when
+ * no filter is set. See synapsis/scope.py.
+ */
+export interface MessageScope {
+  years: number[]
+  programs: string[]
+}
+
 export type ClientMessage =
-  /** Send a chat message to the agent. */
-  | { message: string }
+  /** Send a chat message to the agent (optionally scoped by the filter bar). */
+  | { message: string; scope?: MessageScope }
   /** Request the current agent run to be cancelled. */
   | { type: 'cancel' }
   /** Ask the server to create and activate a new session. */

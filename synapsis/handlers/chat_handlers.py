@@ -29,6 +29,13 @@ from synapsis.database import (
     update_session_model,
 )
 from synapsis.chat_run_manager import chat_run_manager
+from synapsis.scope import (
+    ScopeValidationError,
+    apply_scope_to_message,
+    describe_scope,
+    normalize_scope,
+    scope_is_empty,
+)
 from synapsis.session_manager import (
     sessions,
     handle_cancel as _sm_handle_cancel,
@@ -172,12 +179,25 @@ async def handle_retry(
     replaces the in-memory session client, acquires the per-session lock,
     and launches a managed streaming task via the ChatRunManager.
 
+    Honours the same optional ``"scope"`` object as a regular user message, so
+    a retry after an AUP fallback stays inside the user's active filters.
+
     Returns the newly created ``retry_client``, or None if the payload
-    carries no message text (in which case nothing is done).
+    carries no message text / carries an invalid scope (in which case nothing
+    is done).
     """
     retry_message = payload.get("message", "").strip()
     retry_model = payload.get("model", "")
     if not retry_message:
+        return None
+
+    try:
+        scope = normalize_scope(payload.get("scope"))
+    except ScopeValidationError as exc:
+        await send_json(
+            {"type": "error", "message": f"Invalid data scope: {exc}"},
+            sid=session_id,
+        )
         return None
 
     # Cancel any in-flight managed task for this session
@@ -198,10 +218,12 @@ async def handle_retry(
         await retry_lock.acquire()
         retry_lock_acquired = True
 
+    # Persist the user's text unmodified; only the SDK copy carries the scope.
     await save_message(session_id, "user", {"content": retry_message})
 
     await launch_streaming_task(
-        session_id, retry_client, retry_message, send_json,
+        session_id, retry_client, apply_scope_to_message(retry_message, scope),
+        send_json,
         lock_acquired=retry_lock_acquired,
     )
 
@@ -303,16 +325,35 @@ async def handle_user_message(
     message, acquires the per-session lock, sends the message to the agent, and
     launches a managed streaming task via the ChatRunManager.
 
+    The frame may carry an optional ``"scope"`` object
+    (``{"years": [...], "programs": [...]}``) set by the UI filter bar. It is
+    validated here and rendered into a delimited preamble that is prepended to
+    the copy of the message handed to the SDK — see synapsis/scope.py for why
+    the injection is per-message rather than in the shared system-prompt file.
+    The persisted user message is never modified.
+
     Returns:
         (session_id, client) -- the (possibly newly created) session and client.
 
     Raises:
-        ValueError: If the payload carries an empty message string (caller
-                    should skip the frame).
+        ValueError: If the payload carries an empty message string, or an
+                    invalid scope (caller should skip the frame; an error frame
+                    has already been sent to the client in the scope case).
     """
     user_message = payload.get("message", "").strip()
     if not user_message:
         raise ValueError("Empty user message -- frame should be skipped")
+
+    # Validate the optional active-data-scope BEFORE doing any work, so a
+    # malformed filter payload can never reach the agent half-applied.
+    try:
+        scope = normalize_scope(payload.get("scope"))
+    except ScopeValidationError as exc:
+        await send_json(
+            {"type": "error", "message": f"Invalid data scope: {exc}"},
+            sid=session_id,
+        )
+        raise ValueError(f"Invalid scope: {exc}") from None
 
     await record_activity(time.time())
 
@@ -341,6 +382,16 @@ async def handle_user_message(
         )
     else:
         sdk_message = user_message
+
+    # Prepend the active data scope (year / programme filters) so the agent
+    # constrains its PRMS queries AND states the slice in its answer. No-op
+    # when the user has set no filters.
+    if not scope_is_empty(scope):
+        sdk_message = apply_scope_to_message(sdk_message, scope)
+        logger.info(
+            "Applying active data scope to session %s: %s",
+            session_id, describe_scope(scope),
+        )
 
     # Acquire the per-session lock before querying
     client, lock_acquired = await acquire_session_client(session_id, sessions)
