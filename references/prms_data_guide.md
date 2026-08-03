@@ -191,6 +191,42 @@ For **all-time** headline questions ("how many active innovations in total?", "h
 
 When you list example result codes to illustrate a filtered/tagged set (e.g. "3 examples of Gender-tagged innovations"), each example MUST come from the SAME query that produced the count — never from a separate title/keyword search. If you fall back to keyword matching, say so explicitly per example ("title mentions gender; not formally IA-tagged"). Never present keyword-matched codes as tag-matched.
 
+### Count innovations, never rows (added 2026-08-03, QA Round 2 — HIGH)
+
+**Every count of innovations must be `COUNT(DISTINCT result_code)`. Never report `COUNT(*)`, a row count, or `SUM(CASE WHEN …)` as a number of innovations.**
+
+A `result_code` has **one row per reporting phase** (§3), and joining satellite tables (`result_country`, `results_by_institution`, `result_impact_area_score`, `results_by_inititiative`, `results_innovations_dev`) fans the row count out further. Row counts therefore over-state innovation counts, typically by **1.5–2×**.
+
+Observed failure (QA Round 2, 2026-08-03): a "climate innovations in Ghana" answer reported **"109 total exist"** when the true number of distinct innovations was **63** — the 109 was the phase/join row count (+73%). The five cited example codes were all correct; only the headline was inflated. This is exactly the class of error that must never reach a donor-facing draft.
+
+Rules:
+1. The count expression is `COUNT(DISTINCT result_code)` — including inside the W1/W2 vs bilateral split. `SUM(CASE WHEN source='Result' … THEN 1 ELSE 0 END)` counts ROWS and is wrong even when it happens to agree (it agrees only where every code has exactly one phase, e.g. a 2025-only Science Programme).
+   ```sql
+   -- RIGHT: split by funding window, still deduped
+   COUNT(DISTINCT CASE WHEN source='Result' AND status_id=2 THEN result_code END) AS w1w2,
+   COUNT(DISTINCT CASE WHEN source='API'    AND status_id=6 THEN result_code END) AS bilateral,
+   COUNT(DISTINCT result_code) AS total
+   -- WRONG: SUM(CASE …) / COUNT(*) over a joined or multi-phase row set
+   ```
+2. **The arms do not have to sum to the total** — a code can appear in both windows or in several phases. Report the total as its own `COUNT(DISTINCT result_code)`, never as arm₁+arm₂, and say so if they differ.
+3. **Sanity check before you publish a number:** if a query joins any satellite table or spans more than one year, ask "could one innovation contribute more than one row here?" If yes and you did not use `DISTINCT result_code`, the number is wrong. A quick tell: rows ÷ codes ≫ 1.
+4. Every count carries its **snapshot vintage** ("June 13 2026 PRMS snapshot") — including short answers and answers where the count is incidental to a list.
+
+### Programme / initiative scoping — state the role basis (added 2026-08-03, QA Round 2)
+
+`results_by_inititiative.initiative_role_id` distinguishes **1 = lead / primary submitter** from other values = **contributing**. The two give materially different numbers for the same programme:
+
+| Programme | Lead submitter (role 1) | Any role | Difference |
+|---|---|---|---|
+| SP09 — Scaling for Impact (all years) | **224** (190 W1/W2 + 34 bilateral) | **279** (227 + 52) | +55 |
+| SP13 — Genebank (all years) | **32** (30 + 2) | **41** (38 + 3) | +9 |
+
+Rules:
+1. **Default = lead submitter (`initiative_role_id = 1`)**, matching the §6.3 template. This is what "innovations reported by X" means.
+2. **Always name the basis in the answer** ("lead submitter" / "any role, lead or contributing"). Do not switch basis between comparable questions in the same conversation or report — QA Round 2 saw SP09 answered lead-only and SP13 answered any-role, which is not comparable.
+3. If the user's phrasing is ambiguous ("involved in", "linked to", "contributed to"), give the lead-submitter figure **and** the any-role figure, as §6.3's adversarial template does.
+4. Programme filters resolve on `clarisa_initiatives.official_code` (`'SP13'`), **never** on a fuzzy name match — `SP13 — Genebank` (2025+, Programs era) and `INIT-03 — Genebanks` (2022–2024, Initiatives era) are different entities with different populations (32 vs 29 lead-submitter innovations). Note `clarisa_initiatives` also carries duplicate rows for some codes (e.g. two `INIT-11` rows), so join on `official_code` and dedup on `result_code`.
+
 ---
 
 ## 5. W1/W2 vs W3/Bilateral Funding Sources
@@ -363,6 +399,31 @@ GROUP BY gtl.title ORDER BY n DESC;
 -- Swap gender_tag_level_id for climate_change_tag_level_id / nutrition_tag_level_id /
 -- environmental_biodiversity_tag_level_id / poverty_tag_level_id to pivot a different dimension.
 -- Caveat: climate tags are systematically under-applied; never treat them as a complete census.
+```
+
+#### ⚠️ TWO tagging systems exist — say which one you used (added 2026-08-03, QA Round 2)
+
+A question about "the Gender Equality, Youth and Social Inclusion **impact area**" has **two** legitimate answers in this DB, an order of magnitude apart. Picking one silently is a reporting defect:
+
+| System | Where | Gender scope, type 7 (all years, QA gates applied) | Vintage |
+|---|---|---|---|
+| **Legacy tag levels** — `result.gender_tag_level_id ∈ (2,3)` (Significant / Principal) | columns on `result` | **814** = 790 W1/W2 (latest-phase) + 24 bilateral | used since 2022, applied broadly |
+| **Impact-area scores (IA1–IA5)** — `result_impact_area_score.impact_area_score_id` → `impact_areas_scores_components` (Gender = components 1 Gender equality / 2 Youth / 3 Social Inclusion; Climate = 4–5; Nutrition = 6–8; Environmental = 9–10; Poverty = 11–13) | junction table | **79** | introduced for the 2025 cycle; sparsely populated |
+
+Rules:
+1. **Name the system in the answer** ("legacy gender tag, Significant or Principal" vs "2025 IA3 impact-area score"). Never label a `*_tag_level_id` count as "the impact area" without that qualification — the impact-area *score* table is what carries the IA1–IA5 vocabulary.
+2. When the user says "impact area", the safe answer gives the legacy-tag number as the headline (it is the only one with full historical coverage) **and** states the IA-score number with its 2025-only coverage caveat.
+3. Both systems are self-reported and under-applied; neither is a census.
+
+```sql
+-- IA-score based (2025 vocabulary). Gender = components 1,2,3.
+SELECT COUNT(DISTINCT r.result_code)
+FROM result r
+JOIN result_impact_area_score s ON s.result_id = r.id AND s.is_active = 1
+WHERE r.result_type_id = 7 AND r.is_active = 1
+  AND ((r.source='Result' AND r.status_id=2) OR (r.source='API' AND r.status_id=6))
+  AND s.impact_area_score_id IN (1,2,3);
+-- OUTPUT: 79 (all of them 2025)
 ```
 
 ### 6.7 Innovation Use count by year (type 2)
@@ -591,8 +652,20 @@ therefore drops every type-10 row → canon = 0. This is a version-coverage gap
 in the dedup map, **not** an inherent "no data" condition, and not (as
 previously assumed) packages being submitted under a different source/status.
 
+**Use the IPSR phase chain, not "the CTE returns 0" (added 2026-08-03, QA Round 2).**
+§4 *Adapting to other result types* already gives the fix: for type 10 swap the
+`ord` VALUES for the **IPSR chain** `(2,0),(5,1),(7,2)`. Re-verified on
+`prdb_fresh.sqlite` 2026-08-03, that chain runs cleanly and returns
+**2023=5, 2024=16, 2025=53 → 74 distinct codes**, i.e. the same 74-code QAed
+population as the raw `source='Result' AND status_id=2` count, just assigned to
+one year each. So: **never report "the dedup CTE returns 0 for type 10"** — that
+is only true if you use the *reporting* chain by mistake. What remains genuinely
+open (below) is which of 74 / 96 is canonical, not whether the dedup can run.
+
 The per-year type-10 query does NOT use this CTE, so it correctly returns
-non-zero values (2023=47, 2024=64, 2025=53). The same version-set exclusion
+non-zero values (2023=47, 2024=64, 2025=53). Note these per-year figures are
+alive-in-year row-level values and are NOT the same metric as the IPSR-chain
+latest-phase assignment (5/16/53) — state which one you used. The same version-set exclusion
 also partly explains the type-2 naive(675) vs canon(550) divergence (OI-2).
 
 The 96 figure used by the KPI and chart bucket may be correct, or it may be

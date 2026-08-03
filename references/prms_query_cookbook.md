@@ -24,6 +24,8 @@ Run this 4-point check on every PRMS query. Most data errors come from skipping 
 
 5. **Show interpretation, then state the year(s).** Before running the main query, post a short interpretation block (type · year · funding · geography definition · filters · how counted) and pause for confirmation if any dimension is ambiguous. Open every answer by naming the reporting year(s) and geography definition it covers.
 
+6. **Count codes, never rows.** Every innovation count is `COUNT(DISTINCT result_code)` — including each arm of the W1/W2-vs-bilateral split. A `result_code` has one row per reporting phase, and any satellite join (`result_country`, `results_by_institution`, `results_innovations_dev`, `result_impact_area_score`, `results_by_inititiative`) fans it out further, so `COUNT(*)` / `SUM(CASE WHEN … THEN 1 END)` over a joined row set **over-counts**. If you list rows and then quote "N total", re-count with `COUNT(DISTINCT result_code)` — do not reuse the row count. (QA Round 2, 2026-08-03: a Ghana climate answer quoted **109** where the true distinct-innovation count was **63**.) Full rule: `prms_data_guide.md` → "Count innovations, never rows".
+
 > **Incident reference (2026-06-15):** "all results … in 2024" was answered with the all-years `canon` CTE and no `reported_year_id` filter. It returned 176 Africa IRL7+ innovations led by "SP01 Breeding for Tomorrow" — but the correct 2024 figure is **111**, led by **INIT-01 Accelerated Breeding**. SP01 does not exist in 2024. See `docs/incident-2026-06-15-year-scope-regression.md`.
 
 ---
