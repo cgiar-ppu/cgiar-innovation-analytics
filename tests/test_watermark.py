@@ -46,8 +46,8 @@ def test_markdown_watermark_block():
     assert md.startswith("> ")
     assert wm.WATERMARK_BANNER in md
     assert "human quality assurance" in md
-    # Contact route + export timestamp ride in the same blockquote.
-    assert wm.contact_line_text() in md
+    # Export timestamp rides in the same blockquote (no contact route — see
+    # test_exports_carry_no_contact_identities).
     assert wm.export_timestamp_line(PINNED) in md
     # Every line of the block stays inside the blockquote.
     assert all(line.startswith(">") for line in md.strip().splitlines())
@@ -58,8 +58,9 @@ def test_html_watermark_block_and_css():
     assert 'class="ai-watermark"' in html
     assert wm.WATERMARK_BANNER in html
     assert "ai-watermark" in wm.WATERMARK_HTML_CSS
-    assert 'class="ai-watermark-contact"' in html
     assert 'class="ai-watermark-timestamp"' in html
+    assert "ai-watermark-contact" not in html
+    assert "ai-watermark-contact" not in wm.WATERMARK_HTML_CSS
     assert wm.export_timestamp_line(PINNED) in html
 
 
@@ -72,94 +73,147 @@ def test_docx_watermark_applied_at_top_and_footer():
     texts = [p.text for p in doc.paragraphs]
     # Banner is the very first paragraph.
     assert texts[0] == wm.WATERMARK_BANNER
-    # Provenance + SOP + contact line follow, ahead of the body.
-    assert any("CGIAR innovation data (PRMS)" in t for t in texts[:4])
-    assert any("responsible human authors" in t for t in texts[:4])
-    assert any("Reach out before you use it" in t for t in texts[:4])
-    assert texts[4] == "Some body content."
+    # Provenance + SOP follow, ahead of the body (3-paragraph notice box).
+    assert any("CGIAR innovation data (PRMS)" in t for t in texts[:3])
+    assert any("responsible human authors" in t for t in texts[:3])
+    assert texts[3] == "Some body content."
     # Footer carries the banner on every page.
     footer_text = " ".join(p.text for p in doc.sections[0].footer.paragraphs)
     assert wm.WATERMARK_BANNER in footer_text
 
 
 # ---------------------------------------------------------------------------
-# Contact route (guardrails "reach out if in doubt")
+# Contact route — MUST NOT appear in exports (Jose's ruling, 2026-08-09)
 # ---------------------------------------------------------------------------
 
-def test_contact_line_text_wording():
-    line = wm.contact_line_text()
-    assert line.startswith(wm.CONTACT_LEAD_IN)
-    assert "Marc Schut (scope & use, marc.schut@cgiar.org)" in line
-    assert "Jose Luis Berenguer (technical, jose@synapsis-analytics.com)" in line
-    assert " or " in line
-    assert line.endswith(".")
+def _frontend_contact_identities() -> tuple[list[str], str]:
+    """Parse the in-app master contact file for its identities + lead-in.
 
+    `frontend/src/components/guardrails/contacts.ts` is the single source of
+    truth for the IN-APP contact route. Reading it here (rather than hardcoding
+    names) means the absence guard below keeps working if the in-app contacts
+    are ever changed: whoever is listed there must still never reach an export.
 
-def test_contact_line_html_has_mailto_links_and_escapes():
-    html = wm.contact_line_html()
-    for _name, email, _remit in wm.GUARDRAIL_CONTACTS:
-        assert f'<a href="mailto:{email}">{email}</a>' in html
-    # The ampersand in the "scope & use" remit must be HTML-escaped.
-    assert "scope &amp; use" in html
-    assert "scope & use" not in html
-
-
-def test_contacts_do_not_drift_from_frontend_master():
-    """`contacts.ts` is the master copy — the Python mirror must match verbatim.
-
-    Parses the TypeScript source and asserts every name, email, remit and the
-    lead-in sentence appear both in the Python constants and literally in
-    watermark.py, so the two copies can never silently diverge.
+    Returns:
+        ``(identities, lead_in)`` — every name and email string, plus the
+        ``CONTACT_LEAD_IN`` sentence.
     """
     assert CONTACTS_TS.is_file(), f"master contact file missing: {CONTACTS_TS}"
     ts_src = CONTACTS_TS.read_text(encoding="utf-8")
-    py_src = WATERMARK_PY.read_text(encoding="utf-8")
 
-    # --- contacts array ---
     # NB: split on the array literal's own "= [", not on the first "]" after
     # the identifier — the type annotation `GuardrailContact[]` has one too.
     array_block = re.search(
         r"GUARDRAIL_CONTACTS[^=]*=\s*\[(?P<items>.*?)\n\]", ts_src, re.DOTALL
     ).group("items")
-    ts_contacts = [
-        (m.group("name"), m.group("email"), m.group("remit"))
-        for m in re.finditer(
-            r"name:\s*'(?P<name>[^']+)'\s*,\s*"
-            r"email:\s*'(?P<email>[^']+)'\s*,\s*"
-            r"remit:\s*'(?P<remit>[^']+)'",
-            re.sub(r"\s+", " ", array_block),
-        )
-    ]
-    assert ts_contacts, "could not parse GUARDRAIL_CONTACTS out of contacts.ts"
-    assert ts_contacts == wm.GUARDRAIL_CONTACTS, (
-        "synapsis/exporters/watermark.py has drifted from its master copy "
-        "frontend/src/components/guardrails/contacts.ts — update both."
-    )
-    for name, email, remit in ts_contacts:
-        assert name in py_src and email in py_src and remit in py_src
+    identities: list[str] = []
+    for m in re.finditer(
+        r"name:\s*'(?P<name>[^']+)'\s*,\s*email:\s*'(?P<email>[^']+)'",
+        re.sub(r"\s+", " ", array_block),
+    ):
+        identities.extend([m.group("name"), m.group("email")])
+    assert identities, "could not parse GUARDRAIL_CONTACTS out of contacts.ts"
 
-    # --- lead-in sentence ---
     lead_in = re.search(r"CONTACT_LEAD_IN\s*=\s*'([^']+)'", ts_src).group(1)
-    assert lead_in == wm.CONTACT_LEAD_IN
-    assert lead_in in py_src
+    return identities, lead_in
 
 
-def test_contact_line_matches_frontend_sentence_plus_emails():
-    """The export sentence is the in-app CONTACT_LINE_TEXT with emails added.
+def test_exports_carry_no_contact_identities(tmp_path):
+    """No export surface may name a person or an email address.
 
-    Exports travel outside the app, where mailto links and the UI contact route
-    are unavailable, so the addresses have to be readable on the page. The rest
-    of the sentence must be identical to the frontend's.
+    Jose Luis Berenguer's ruling, 2026-08-09: the EXPORT watermark carries the
+    plain "AI-generated V0 draft, requires human validation" wording and NO
+    contact names — matching the CGIAR AI Zero Drafts exporter, whose documents
+    carry no contact line either. Exported files travel outside the app (email
+    attachments, shared drives, print), so personal contact identities must not
+    ride along. The contact route lives ON THE IN-APP SURFACES ONLY
+    (DisclaimerModal / DisclaimerFooter), which this test deliberately does not
+    touch.
+
+    This inverse guard replaces the former drift test: instead of asserting the
+    exporters mirror contacts.ts, it asserts they contain none of it.
     """
-    ts_src = CONTACTS_TS.read_text(encoding="utf-8")
-    lead_in = re.search(r"CONTACT_LEAD_IN\s*=\s*'([^']+)'", ts_src).group(1)
-    # Frontend renders "Name (remit)"; the export adds ", email" inside the parens.
-    frontend_sentence = f"{lead_in} " + " or ".join(
-        f"{n} ({r})" for n, _e, r in wm.GUARDRAIL_CONTACTS
-    ) + "."
-    exported = wm.contact_line_text()
-    stripped = re.sub(r", [^()]+@[^()]+\)", ")", exported)
-    assert stripped == frontend_sentence
+    docx = pytest.importorskip("docx")
+    from synapsis.exporters import export_docx, render_dashboard_html
+    from synapsis.exporters.workflow_run import (
+        export_workflow_run_html,
+        export_workflow_run_markdown,
+    )
+
+    identities, lead_in = _frontend_contact_identities()
+    forbidden = identities + [lead_in]
+
+    # --- The watermark render paths themselves ---
+    surfaces = {
+        "watermark_markdown": wm.watermark_markdown(PINNED),
+        "watermark_markdown_footer": wm.watermark_markdown_footer(PINNED),
+        "watermark_plain": wm.watermark_plain(PINNED),
+        "watermark_html": wm.watermark_html(PINNED),
+        "watermark_html_overlay": wm.watermark_html_overlay(PINNED),
+        "WATERMARK_HTML_CSS": wm.WATERMARK_HTML_CSS,
+    }
+
+    # --- A rendered DOCX: body paragraphs + header + footer ---
+    doc = docx.Document()
+    doc.add_paragraph("Some body content.")
+    wm.apply_ai_watermark(doc, date=PINNED, title="Innovation Portfolio")
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    reopened = docx.Document(buf)
+    section = reopened.sections[0]
+    surfaces["docx"] = "\n".join(
+        p.text
+        for p in list(reopened.paragraphs)
+        + list(section.header.paragraphs)
+        + list(section.footer.paragraphs)
+    )
+
+    # --- Real exporter outputs (dashboard + workflow run + session DOCX) ---
+    surfaces["dashboard_html"] = render_dashboard_html(
+        "Portfolio", [{"type": "kpi", "cards": [{"label": "Total", "value": "2,755"}]}]
+    )
+    run_log = {
+        "workflow_name": "Portfolio scan",
+        "run_id": "abcdef123456",
+        "status": "completed",
+        "initial_prompt": "Scan the portfolio.",
+        "steps": [],
+    }
+    surfaces["workflow_run_markdown"] = export_workflow_run_markdown(run_log)[0]
+    surfaces["workflow_run_html"] = export_workflow_run_html(run_log)[0]
+
+    filepath, _ = export_docx("My Session", "abc123", _fake_rows(), "standard", tmp_path)
+    exported = docx.Document(filepath)
+    exported_section = exported.sections[0]
+    surfaces["export_docx"] = "\n".join(
+        p.text
+        for p in list(exported.paragraphs)
+        + list(exported_section.header.paragraphs)
+        + list(exported_section.footer.paragraphs)
+    )
+
+    for surface, rendered in surfaces.items():
+        for needle in forbidden:
+            assert needle not in rendered, (
+                f"contact identity {needle!r} leaked into the {surface} export "
+                f"surface — exports must carry no contact names (Jose, 2026-08-09)"
+            )
+        # Belt and braces: no email address of any shape, and no mailto link.
+        # NB: the domain must start with a LETTER — otherwise this trips on the
+        # CDN version pins the dashboard export embeds (e.g. `chart.js@4.4.1`).
+        assert not re.search(r"[\w.+-]+@[A-Za-z][\w-]*\.[A-Za-z]{2,}", rendered), (
+            f"an email address leaked into the {surface} export surface"
+        )
+        assert "mailto:" not in rendered, (
+            f"a mailto contact link leaked into the {surface} export surface"
+        )
+
+    # The contact machinery itself is gone from the module.
+    for gone in ("contact_line_text", "contact_line_html", "GUARDRAIL_CONTACTS",
+                 "CONTACT_LEAD_IN"):
+        assert not hasattr(wm, gone), f"{gone} should have been removed from watermark.py"
+    assert "ai-watermark-contact" not in WATERMARK_PY.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -241,10 +295,11 @@ def test_overlay_and_footer_layering():
     assert "body>*" not in css
 
 
-def test_watermark_plain_carries_contact_route():
+def test_watermark_plain_is_a_single_line_notice():
     plain = wm.watermark_plain(PINNED)
     assert wm.WATERMARK_BANNER in plain
-    assert wm.contact_line_text() in plain
+    assert wm.provenance_notice(PINNED) in plain
+    assert wm.SOP_DISCLOSURE in plain
     assert "\n" not in plain  # still a single line
 
 
@@ -339,7 +394,7 @@ def test_docx_notice_box_is_bordered_and_shaded():
     from lxml import etree
 
     doc = _roundtripped_doc()
-    notice_paras = doc.paragraphs[:4]
+    notice_paras = doc.paragraphs[:3]
     assert notice_paras[0].text == wm.WATERMARK_BANNER
 
     borders = []
@@ -362,13 +417,16 @@ def test_docx_notice_box_is_bordered_and_shaded():
     assert len(set(borders)) == 1, "notice paragraph borders differ — box will not merge"
 
 
-def test_docx_notice_box_carries_timestamp_and_contact():
+def test_docx_notice_box_carries_timestamp():
     doc = _roundtripped_doc()
     texts = [p.text for p in doc.paragraphs[:4]]
     # Timestamp shares the provenance paragraph (zero-draft `break: 1` pattern).
     assert wm.export_timestamp_line(PINNED) in texts[1]
     assert wm.provenance_notice(PINNED) in texts[1]
-    assert texts[3] == wm.contact_line_text()
+    # The box is three paragraphs — banner / provenance+timestamp / SOP — and
+    # the body starts straight after it (no contact paragraph).
+    assert texts[2] == wm.SOP_DISCLOSURE
+    assert texts[3] == "Some body content."
 
 
 def test_docx_pPr_children_are_in_schema_order():
@@ -411,7 +469,7 @@ def test_apply_ai_watermark_is_no_op_safe_on_a_broken_document():
 
     # Top-of-document notice still applied despite the header/footer explosion.
     assert doc.paragraphs[0].text == wm.WATERMARK_BANNER
-    assert doc.paragraphs[3].text == wm.contact_line_text()
+    assert doc.paragraphs[2].text == wm.SOP_DISCLOSURE
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +492,6 @@ def test_markdown_export_is_watermarked():
     content, _ = export_markdown("Test", "abc123", _fake_rows(), "standard")
     assert wm.WATERMARK_BANNER in content
     assert "human quality assurance" in content
-    assert wm.contact_line_text() in content
     assert "Export generated on " in content
     # End-of-document footer closes the export.
     assert content.rstrip().endswith(wm.watermark_markdown_footer().rstrip())
@@ -453,7 +510,7 @@ def test_html_export_is_watermarked():
         '<div class="ai-watermark-overlay"'
     )
     assert ".ai-watermark-overlay{" in content  # CSS is embedded
-    assert wm.contact_line_text().split(" —")[0] in content
+    assert wm.SOP_DISCLOSURE in content
 
 
 def test_docx_export_is_watermarked(tmp_path):
@@ -500,7 +557,7 @@ def test_workflow_run_exports_are_watermarked():
 
     md, _ = export_workflow_run_markdown(run_log)
     assert wm.WATERMARK_BANNER in md
-    assert wm.contact_line_text() in md
+    assert wm.SOP_DISCLOSURE in md
     assert md.rstrip().endswith(wm.watermark_markdown_footer().rstrip())
 
     html, _ = export_workflow_run_html(run_log)

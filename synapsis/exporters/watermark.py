@@ -67,36 +67,24 @@ _WATERMARK_RGB: tuple[int, int, int] = (0xB4, 0x00, 0x00)
 
 
 # ---------------------------------------------------------------------------
-# Guardrail contact route — "reach out if in doubt"
+# NO CONTACT IDENTITIES IN EXPORTS — Jose Luis Berenguer's ruling, 2026-08-09.
 #
-# Julien Colomer's ask on the Marc<->Jules call (2026-07-07, item 2) had two
-# halves: "scaffolding, not substitute" AND "reach out if in doubt". The
-# in-app surfaces (DisclaimerModal / DisclaimerFooter) close the second half;
-# these constants carry the same route into every *exported* artefact, which
-# travels outside the app where the UI contact route is not reachable.
+# A previous build (commit a92b8f7) carried a "reach out if in doubt" line
+# naming individual people and their email addresses into every exported
+# artefact. That was reverted: exported files travel outside the app — email
+# attachments, shared drives, print — and must NOT carry personal contact
+# identities. The export wording is the plain "AI-generated V0 draft, requires
+# human validation" pattern, matching the CGIAR AI Zero Drafts exporter, whose
+# documents carry no contact line either.
 #
-# ⚠️ PENDING CONFIRMATION (decision D2, 2026-08-03 gap audit): the names and
-# the split below are a sensible DEFAULT chosen by the build, not an approved
-# decision. Jose Luis Berenguer to confirm (or replace with a shared inbox /
-# a single owner) before this reaches anyone outside the dev testers. The
-# addresses are the ones already carried in `config/allowed_users.json`.
-#
-# 🔗 MASTER COPY: `frontend/src/components/guardrails/contacts.ts` is the
-# single source of truth. This is a deliberate Python mirror of it (the
-# exporters are server-side and cannot import the TS module). Do not edit one
-# without the other — `tests/test_watermark.py` reads contacts.ts and asserts
-# every name, email, remit and the lead-in sentence match verbatim, so the two
-# copies can never silently drift.
+# The contact route still exists, but ONLY on the in-app surfaces
+# (`frontend/src/components/guardrails/contacts.ts` → DisclaimerModal /
+# DisclaimerFooter), where it is reachable and attributable. Do not mirror
+# those constants back into this module — `tests/test_watermark.py`
+# (`test_exports_carry_no_contact_identities`) reads contacts.ts and asserts
+# that none of its names, emails or its lead-in sentence appear in ANY export
+# surface.
 # ---------------------------------------------------------------------------
-
-#: (name, email, remit) mirroring ``GUARDRAIL_CONTACTS`` in contacts.ts.
-GUARDRAIL_CONTACTS: list[tuple[str, str, str]] = [
-    ("Marc Schut", "marc.schut@cgiar.org", "scope & use"),
-    ("Jose Luis Berenguer", "jose@synapsis-analytics.com", "technical"),
-]
-
-#: Lead-in sentence, verbatim from ``CONTACT_LEAD_IN`` in contacts.ts.
-CONTACT_LEAD_IN: str = "In doubt about an output? Reach out before you use it —"
 
 #: Zero-draft-pattern export timestamp line. ``{date}``/``{time}`` are filled by
 #: :func:`export_timestamp_line`. Always rendered in UTC, like the donor.
@@ -131,30 +119,6 @@ def export_timestamp_line(date: datetime | None = None) -> str:
     )
 
 
-def contact_line_text() -> str:
-    """Return the plain-text "reach out if in doubt" contact sentence.
-
-    Identical to contacts.ts's ``CONTACT_LINE_TEXT`` except that the email
-    addresses are spelled out: exports travel outside the app (attachments,
-    shared drives, print), where the in-app mailto links and the UI contact
-    route are not available, so the address has to be readable on the page.
-    """
-    people = " or ".join(
-        f"{name} ({remit}, {email})" for name, email, remit in GUARDRAIL_CONTACTS
-    )
-    return f"{CONTACT_LEAD_IN} {people}."
-
-
-def contact_line_html() -> str:
-    """Return :func:`contact_line_text` with ``mailto:`` links around the emails."""
-    people = " or ".join(
-        f"{_html.escape(name)} ({_html.escape(remit)}, "
-        f'<a href="mailto:{_html.escape(email)}">{_html.escape(email)}</a>)'
-        for name, email, remit in GUARDRAIL_CONTACTS
-    )
-    return f"{_html.escape(CONTACT_LEAD_IN)} {people}."
-
-
 # ---------------------------------------------------------------------------
 # Plain-text / Markdown
 # ---------------------------------------------------------------------------
@@ -169,8 +133,7 @@ def watermark_markdown(date: datetime | None = None) -> str:
         f"> **{WATERMARK_BANNER}**\n>\n"
         f"> {provenance_notice(date)}\n>\n"
         f"> {export_timestamp_line(date)}\n>\n"
-        f"> {SOP_DISCLOSURE}\n>\n"
-        f"> {contact_line_text()}\n"
+        f"> {SOP_DISCLOSURE}\n"
     )
 
 
@@ -188,10 +151,7 @@ def watermark_markdown_footer(date: datetime | None = None) -> str:
 
 def watermark_plain(date: datetime | None = None) -> str:
     """Return a single-line plain-text notice (for logs / minimal contexts)."""
-    return (
-        f"{WATERMARK_BANNER} — {provenance_notice(date)} {SOP_DISCLOSURE} "
-        f"{contact_line_text()}"
-    )
+    return f"{WATERMARK_BANNER} — {provenance_notice(date)} {SOP_DISCLOSURE}"
 
 
 # ---------------------------------------------------------------------------
@@ -208,8 +168,6 @@ WATERMARK_HTML_CSS: str = (
     "letter-spacing:0.02em;text-transform:uppercase;display:block;margin-bottom:0.35rem;}"
     ".ai-watermark .ai-watermark-sop{color:#7a4a4a;font-style:italic;margin-top:0.35rem;display:block;}"
     ".ai-watermark .ai-watermark-timestamp{color:#7a4a4a;display:block;margin-top:0.35rem;}"
-    ".ai-watermark .ai-watermark-contact{color:#5a0000;display:block;margin-top:0.35rem;}"
-    ".ai-watermark .ai-watermark-contact a{color:#b40000;}"
     # --- Diagonal per-page draft watermark (zero-draft parity) --------------
     # Chromium repeats ``position:fixed`` elements on every printed page, which
     # is what turns this single div into the donor's per-page diagonal mark in
@@ -291,7 +249,6 @@ def watermark_html(date: datetime | None = None) -> str:
         f"{provenance_notice(date)}"
         f'<span class="ai-watermark-timestamp">{export_timestamp_line(date)}</span>'
         f'<span class="ai-watermark-sop">{SOP_DISCLOSURE}</span>'
-        f'<span class="ai-watermark-contact">{contact_line_html()}</span>'
         "</div>"
     )
 
@@ -455,7 +412,8 @@ def apply_ai_watermark(doc, *, date: datetime | None = None, title: str | None =
     its documents, in Innovation Analytics' own palette and wording:
 
     * a bordered, shaded **notice box** at the very top of the body — banner,
-      provenance notice + export timestamp, SOP disclosure, contact line;
+      provenance notice + export timestamp, SOP disclosure (three paragraphs;
+      no contact line — see Jose's 2026-08-09 ruling above);
     * a diagonal red **draft watermark on every page** (VML text shape in the
       section header, behind the content);
     * a per-page **header**: document title + bold-red banner, thin rule under;
@@ -480,7 +438,7 @@ def apply_ai_watermark(doc, *, date: datetime | None = None, title: str | None =
 
     # --- Top-of-document watermark box (inserted before the current first para) ---
     body = doc.element.body
-    # Build the four notice paragraphs, then move them to the top in order.
+    # Build the three notice paragraphs, then move them to the top in order.
     banner_para = doc.add_paragraph()
     banner_run = banner_para.add_run(WATERMARK_BANNER)
     banner_run.bold = True
@@ -505,13 +463,8 @@ def apply_ai_watermark(doc, *, date: datetime | None = None, title: str | None =
     sop_run.italic = True
     sop_run.font.color.rgb = muted_color
 
-    contact_para = doc.add_paragraph()
-    contact_run = contact_para.add_run(contact_line_text())
-    contact_run.font.size = Pt(8)
-    contact_run.font.color.rgb = muted_color
-
-    # Box + shade the four notice paragraphs so they read as one panel.
-    notice_paras = (banner_para, prov_para, sop_para, contact_para)
+    # Box + shade the three notice paragraphs so they read as one panel.
+    notice_paras = (banner_para, prov_para, sop_para)
     for para in notice_paras:
         try:
             # Tight spacing keeps the merged box compact rather than leaving
