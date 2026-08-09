@@ -24,6 +24,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from synapsis.routes.prms_dashboard import (  # noqa: E402
     _PRMS_DB_PATH,
     _bind_years,
+    _entity_chart_wording,
+    _entity_label,
     _fetch_prms_data,
     _year_params,
     normalize_years,
@@ -158,3 +160,71 @@ class TestPRMSDashboardData:
         charts = _fetch_prms_data(years=[2024, 2025])["charts"]
         for chart in charts.values():
             assert "(2024–2025)" in chart["title"], chart["title"]
+
+
+# ---------------------------------------------------------------------------
+# F1 + F14 — Science-Program / Initiative chart
+# ---------------------------------------------------------------------------
+class TestEntityLabelling:
+
+    def test_entity_label_joins_code_and_name(self):
+        assert _entity_label("SP09", "Scaling for Impact") == "SP09 — Scaling for Impact"
+
+    def test_entity_label_strips_non_breaking_spaces(self):
+        # Several SP short names carry a trailing \xa0 in clarisa_initiatives.
+        assert _entity_label("SP02", "Sustainable Farming\xa0") == "SP02 — Sustainable Farming"
+
+    def test_entity_label_falls_back_to_the_bare_code(self):
+        assert _entity_label("SP99", None) == "SP99"
+        assert _entity_label("SP99", "  ") == "SP99"
+
+    def test_wording_is_science_programs_for_the_2025_era(self):
+        noun, era = _entity_chart_wording([3, 3, 3])
+        assert noun == "Science Programs"
+        assert era == "Programs & Accelerators (2025+)"
+
+    def test_wording_is_initiatives_for_the_2022_2024_era(self):
+        noun, era = _entity_chart_wording([2, 2])
+        assert noun == "Initiatives"
+        assert era == "Initiatives (2022–2024)"
+
+    def test_mixed_eras_are_named_explicitly_never_silently_merged(self):
+        noun, era = _entity_chart_wording([2, 3])
+        assert noun == "Science Programs / Initiatives"
+        assert "Initiatives (2022–2024)" in era
+        assert "Programs & Accelerators (2025+)" in era
+
+
+@requires_prms_db
+class TestTopEntitiesChart:
+
+    def test_2025_ranks_science_programs_with_the_top_one_first(self):
+        chart = _fetch_prms_data(years=[2025])["charts"]["top_initiatives"]
+        assert chart["chartType"] == "horizontalBar"
+        assert chart["title"] == "Top 10 Science Programs by Innovations (2025)"
+        assert chart["xAxisKey"] == "entity"
+        assert chart["data"][0]["entity"] == "SP09 — Scaling for Impact"
+        assert chart["data"][0]["count"] == 224
+        counts = [row["count"] for row in chart["data"]]
+        assert counts == sorted(counts, reverse=True)
+
+    def test_2022_is_labelled_as_the_initiative_era(self):
+        chart = _fetch_prms_data(years=[2022])["charts"]["top_initiatives"]
+        assert chart["title"] == "Top 10 Initiatives by Innovations (2022)"
+        assert chart["data"][0]["entity"] == "INIT-01 — Accelerated Breeding"
+
+    def test_a_cross_era_selection_names_both_eras(self):
+        chart = _fetch_prms_data(years=[2024, 2025])["charts"]["top_initiatives"]
+        assert chart["title"] == "Top 10 Science Programs / Initiatives by Innovations (2024–2025)"
+
+    def test_every_bar_carries_a_readable_label_and_an_era(self):
+        chart = _fetch_prms_data(years=None)["charts"]["top_initiatives"]
+        assert len(chart["data"]) == 10
+        for row in chart["data"]:
+            assert row["entity"].startswith(row["code"])
+            assert " — " in row["entity"]        # code + readable short name
+            assert "\xa0" not in row["entity"]   # non-breaking space cleaned
+            assert row["era"] in (
+                "Initiatives (2022–2024)",
+                "Programs & Accelerators (2025+)",
+            )

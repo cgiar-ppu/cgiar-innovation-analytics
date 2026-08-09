@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import {
   ResponsiveContainer,
-  BarChart, Bar,
+  BarChart, Bar, LabelList,
   LineChart, Line,
   AreaChart, Area,
   PieChart, Pie, Cell,
@@ -49,6 +49,28 @@ function chartIcon(chartType: ChartData['chartType']) {
   }
 }
 
+/** Width reserved for category labels on horizontal charts. */
+const CATEGORY_AXIS_WIDTH = 208
+
+/**
+ * Category-axis tick that keeps entity labels readable: short labels render in
+ * full; long ones lose the tail of the NAME but never the code prefix, and the
+ * full text stays available as a native tooltip.
+ */
+function CategoryTick(props: Record<string, unknown>) {
+  const { x, y, payload } = props as { x: number; y: number; payload: { value: string } }
+  const full = String(payload?.value ?? '')
+  const shown = full.length > 34 ? `${full.slice(0, 33)}…` : full
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text x={-6} y={0} dy={4} textAnchor="end" fill="var(--text-muted)" fontSize={11}>
+        {shown}
+        <title>{full}</title>
+      </text>
+    </g>
+  )
+}
+
 function CartesianBase({ children, xAxisKey }: {
   children: React.ReactNode
   xAxisKey?: string
@@ -85,6 +107,56 @@ function RenderBar({ data, series, xAxisKey }: ChartData) {
           />
         ))}
       </CartesianBase>
+    </BarChart>
+  )
+}
+
+/**
+ * Horizontal bar chart with the value printed on every bar.
+ *
+ * Used by the dashboard's "Top 10 Science Programs / Initiatives" chart
+ * (feedback item F14: the top entity must be readable OUTRIGHT — full name on
+ * the axis, value visible without hovering).
+ */
+function RenderHorizontalBar({ data, series, xAxisKey }: ChartData) {
+  const key = series[0]?.key
+  if (!key) return null
+
+  return (
+    <BarChart
+      data={data}
+      layout="vertical"
+      margin={{ top: 4, right: 44, bottom: 4, left: 0 }}
+    >
+      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
+      <XAxis type="number" tick={AXIS_TICK} axisLine={false} tickLine={false} />
+      <YAxis
+        type="category"
+        dataKey={xAxisKey}
+        width={CATEGORY_AXIS_WIDTH}
+        interval={0}
+        tick={<CategoryTick />}
+        axisLine={{ stroke: 'var(--border)' }}
+        tickLine={false}
+      />
+      <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'var(--surface-2)', fillOpacity: 0.4 }} />
+      {series.map((s, i) => (
+        <Bar
+          key={s.key}
+          dataKey={s.key}
+          name={s.label || s.key}
+          fill={getColor(i, s.color)}
+          radius={[0, 4, 4, 0]}
+          animationDuration={800}
+        >
+          {/* F14: the number is always on screen, never hover-only. */}
+          <LabelList
+            dataKey={s.key}
+            position="right"
+            style={{ fill: 'var(--text)', fontSize: 11, fontWeight: 600 }}
+          />
+        </Bar>
+      ))}
     </BarChart>
   )
 }
@@ -232,6 +304,12 @@ function RenderScatter({ data, series, xAxisKey }: ChartData) {
   )
 }
 
+/** Per-type body height. Horizontal/stacked charts need more vertical room. */
+const CHART_HEIGHTS: Partial<Record<ChartData['chartType'], number>> = {
+  horizontalBar: 360,
+  stackedBar: 360,
+}
+
 interface InteractiveChartProps {
   data: ChartData
   className?: string
@@ -245,6 +323,7 @@ export function InteractiveChart({ data, className = '' }: InteractiveChartProps
     switch (data.chartType) {
       case 'bar': return <RenderBar {...data} />
       case 'multiBar': return <RenderBar {...data} />
+      case 'horizontalBar': return <RenderHorizontalBar {...data} />
       case 'line': return <RenderLine {...data} />
       case 'area': return <RenderArea {...data} />
       case 'stackedArea': return <RenderStackedArea {...data} />
@@ -286,7 +365,7 @@ export function InteractiveChart({ data, className = '' }: InteractiveChartProps
             {data.description && (
               <p className="px-4 pb-1 text-xs text-[var(--text-muted)]">{data.description}</p>
             )}
-            <div className="px-4 pb-4" style={{ height: 300 }}>
+            <div className="px-4 pb-4" style={{ height: CHART_HEIGHTS[data.chartType] ?? 300 }}>
               <ResponsiveContainer width="100%" height="100%">
                 {renderChart()!}
               </ResponsiveContainer>

@@ -16,7 +16,7 @@ export interface SeriesConfig {
 }
 
 export interface ChartData {
-  chartType: 'bar' | 'line' | 'area' | 'pie' | 'multiBar' | 'stackedArea' | 'scatter'
+  chartType: 'bar' | 'horizontalBar' | 'stackedBar' | 'line' | 'area' | 'pie' | 'multiBar' | 'stackedArea' | 'scatter'
   title?: string
   description?: string
   xAxisKey?: string

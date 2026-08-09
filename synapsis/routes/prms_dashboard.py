@@ -29,8 +29,17 @@ logger = logging.getLogger("synapsis.routes.prms_dashboard")
 
 router = APIRouter(prefix="/api", tags=["prms-dashboard"])
 
-# Years the year filter accepts. "All years" is represented by year=None.
+# Years the year filter accepts. "All years" is represented by an empty
+# selection.
 _VALID_YEARS = {2022, 2023, 2024, 2025}
+
+# Portfolio-era labels — the SAME mapping the chat scope filter uses
+# (synapsis/routes/scope.py), so the dashboard and the agent can never disagree
+# about which era an entity belongs to. See references/prms_data_guide.md §3.
+_ERA_LABELS = {
+    2: "Initiatives (2022–2024)",
+    3: "Programs & Accelerators (2025+)",
+}
 
 # ---------------------------------------------------------------------------
 # In-memory cache (module-level) — keyed by year so each slice caches separately
@@ -290,20 +299,66 @@ GROUP BY cirl.name, cirl.id
 ORDER BY cirl.id;
 """
 
-# All-years top initiatives.
-# FIX (wave 2, F-2): added `source='Result' AND status_id=2` so the ranking
-# matches the QAed dashboard population (Scaling for Impact 438 → 270, etc.).
-# SP##/INIT-## era mixing is acceptable here because this is an all-years view
-# (the era tripwire only applies to single-year slices).
+# All-years top portfolio entities (Science Programs / Initiatives).
+#
+# F1 + F14 (2026-08-09): this chart used to rank raw `short_name` values with
+# no portfolio identity, so a 2025 view silently said "Initiatives" when the
+# entities are in fact Science Programs. It now selects `official_code` and
+# `portfolio_id` as well, and the route renders era-aware labels/titles reusing
+# the mapping from synapsis/routes/scope.py (portfolio_id 2 = "Initiatives
+# (2022–2024)", 3 = "Programs & Accelerators (2025+)").
+#
+# SCOPE CHANGE (F1, documented): the previous all-years query counted result
+# types 2, 7 and 10 while the per-year query counted type 7 only, so "All
+# years" and "2025" measured different things under the same "by Innovations"
+# title. The all-years ranking now uses the SAME canonical Innovation
+# Development set as the total_innovations KPI — the W1/W2 latest-phase canon
+# UNION the W3/bilateral Approved set, i.e. the 1,852 headline innovations.
+# Effect on this DB: SP09 270 -> 224, INIT-11 145 -> 70 (the delta is types
+# 2/10 and non-latest phases, which never belonged under "by Innovations").
+#
+# `MIN(...)` on short_name/portfolio_id collapses the handful of duplicate
+# official_code rows in clarisa_initiatives (INIT-11, INIT-12 — identical
+# short_name and portfolio_id in both rows). The prefix filter drops the
+# internal placeholder rows (MP-01/02, OFF-01, OPLAT-01/02), which carry an
+# empty short_name and previously rendered as blank bars.
 _SQL_TOP_INITIATIVES = """
-SELECT i.short_name AS initiative, COUNT(DISTINCT r.result_code) AS count
-FROM results_by_inititiative rbi
+WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
+cand AS (
+    SELECT r.result_code, r.id, r.result_type_id, o.o AS phord
+    FROM result r JOIN ord o ON o.v = r.version_id
+    WHERE r.source = 'Result' AND r.is_active = 1 AND r.status_id = 2
+),
+pick AS (SELECT result_code, MAX(phord) AS m FROM cand GROUP BY result_code),
+latest AS (
+    SELECT c.* FROM cand c
+    JOIN pick p ON p.result_code = c.result_code AND p.m = c.phord
+),
+canon_w12 AS (
+    SELECT l.result_code, l.id, l.result_type_id FROM latest l
+    WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
+),
+canon_bilateral AS (
+    SELECT r.result_code, MAX(r.id) AS id, 7 AS result_type_id
+    FROM result r
+    WHERE r.source = 'API' AND r.status_id = 6 AND r.is_active = 1 AND r.result_type_id = 7
+    GROUP BY r.result_code
+),
+scope AS (
+    SELECT result_code, id FROM canon_w12 WHERE result_type_id = 7
+    UNION ALL
+    SELECT result_code, id FROM canon_bilateral
+)
+SELECT i.official_code AS code,
+       MIN(i.short_name) AS short_name,
+       MIN(i.portfolio_id) AS portfolio_id,
+       COUNT(DISTINCT s.result_code) AS count
+FROM scope s
+JOIN results_by_inititiative rbi ON rbi.result_id = s.id AND rbi.initiative_role_id = 1
 JOIN clarisa_initiatives i ON rbi.inititiative_id = i.id
-JOIN result r ON r.id = rbi.result_id
-WHERE r.is_active = 1 AND rbi.initiative_role_id = 1
-  AND r.source = 'Result' AND r.status_id = 2
-  AND r.result_type_id IN (2, 7, 10)
-GROUP BY i.short_name
+WHERE i.official_code LIKE 'INIT-%' OR i.official_code LIKE 'SGP-%'
+   OR i.official_code LIKE 'PLAT-%' OR i.official_code LIKE 'SP%'
+GROUP BY i.official_code
 ORDER BY count DESC
 LIMIT 10;
 """
@@ -457,8 +512,15 @@ GROUP BY cirl.name, cirl.id
 ORDER BY cirl.id;
 """
 
+# Year-scoped top portfolio entities (F1 + F14). Same alive-in-year type-7
+# scope as before — only the projection changed, so per-year counts are
+# unchanged (2025: SP09 = 224, SP01 = 195, …). See _SQL_TOP_INITIATIVES for
+# the MIN()/prefix-filter rationale.
 _SQL_YEAR_TOP_INITIATIVES = """
-SELECT i.short_name AS initiative, COUNT(DISTINCT r.result_code) AS count
+SELECT i.official_code AS code,
+       MIN(i.short_name) AS short_name,
+       MIN(i.portfolio_id) AS portfolio_id,
+       COUNT(DISTINCT r.result_code) AS count
 FROM result r
 JOIN results_by_inititiative rbi ON rbi.result_id = r.id AND rbi.initiative_role_id = 1
 JOIN clarisa_initiatives i ON rbi.inititiative_id = i.id
@@ -466,7 +528,9 @@ WHERE r.result_type_id = 7
   AND r.is_active = 1
   AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
   AND r.reported_year_id IN (__YEARS__)
-GROUP BY i.short_name
+  AND (i.official_code LIKE 'INIT-%' OR i.official_code LIKE 'SGP-%'
+       OR i.official_code LIKE 'PLAT-%' OR i.official_code LIKE 'SP%')
+GROUP BY i.official_code
 ORDER BY count DESC
 LIMIT 10;
 """
@@ -558,6 +622,37 @@ def _bind_years(sql: str, years: Sequence[int]) -> str:
 def _year_params(years: Sequence[int]) -> dict[str, int]:
     """Build the ``{y0: 2024, y1: 2025}`` parameter dict for ``_bind_years``."""
     return {f"y{i}": y for i, y in enumerate(years)}
+
+
+def _entity_label(code: str, short_name: Optional[str]) -> str:
+    """Readable portfolio-entity label, e.g. "SP09 — Scaling for Impact".
+
+    `\\xa0` (non-breaking space) shows up in several SP short names in
+    clarisa_initiatives — same cleanup as synapsis/routes/scope.py.
+    """
+    name = (short_name or "").replace("\xa0", " ").strip()
+    return f"{code} — {name}" if name else code
+
+
+def _entity_chart_wording(portfolio_ids: Sequence[Optional[int]]) -> tuple[str, str]:
+    """Return (noun, era_note) for a set of portfolio_ids present in the data.
+
+    The noun drives the chart title, so a 2025 view says "Science Programs"
+    and a 2022-2024 view says "Initiatives" — the F1 ask. A selection spanning
+    both eras is labelled with both nouns rather than silently picking one
+    (references/prms_data_guide.md §3 era tripwire).
+    """
+    eras = {pid for pid in portfolio_ids if pid is not None}
+    if eras == {3}:
+        return "Science Programs", _ERA_LABELS[3]
+    if eras == {2}:
+        return "Initiatives", _ERA_LABELS[2]
+    if not eras:
+        return "Programs / Initiatives", ""
+    return (
+        "Science Programs / Initiatives",
+        " + ".join(_ERA_LABELS[pid] for pid in sorted(eras) if pid in _ERA_LABELS),
+    )
 
 
 def years_label(years: Sequence[int]) -> str:
@@ -711,15 +806,36 @@ def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
         except sqlite3.Error as exc:
             logger.error("Chart query 'irl_distribution' failed: %s", exc)
 
-        # Top 10 initiatives (bar chart)
+        # Top 10 portfolio entities — Science Programs / Initiatives (F1 + F14).
+        #
+        # Rendered as a HORIZONTAL bar chart so every entity keeps its full
+        # readable name and its value is printed on the bar: the #1 entity is
+        # legible outright, without hovering and without truncation (F14).
+        # The response key stays `top_initiatives` for backward compatibility.
         try:
-            top_initiatives_data = _rows(cur, sql(sql_top_initiatives), params)
+            entity_rows = _rows(cur, sql(sql_top_initiatives), params)
+            noun, era_note = _entity_chart_wording([r.get("portfolio_id") for r in entity_rows])
+            entity_data = [
+                {
+                    "entity": _entity_label(r.get("code", ""), r.get("short_name")),
+                    "code": r.get("code", ""),
+                    "era": _ERA_LABELS.get(r.get("portfolio_id"), "Other"),
+                    "count": r.get("count", 0),
+                }
+                for r in entity_rows
+            ]
+            description = (
+                f"CGIAR portfolio entities contributing the most Innovation "
+                f"Developments, ranked by distinct result code"
+            )
+            if era_note:
+                description += f" · {era_note}"
             charts["top_initiatives"] = {
-                "chartType": "bar",
-                "title": f"Top 10 Initiatives by Innovations{label_suffix}",
-                "description": "CGIAR initiatives contributing the most innovations",
-                "xAxisKey": "initiative",
-                "data": top_initiatives_data,
+                "chartType": "horizontalBar",
+                "title": f"Top 10 {noun} by Innovations{label_suffix}",
+                "description": description,
+                "xAxisKey": "entity",
+                "data": entity_data,
                 "series": [{"key": "count", "label": "Innovations", "color": "#E37222"}],
             }
         except sqlite3.Error as exc:
