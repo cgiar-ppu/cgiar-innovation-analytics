@@ -3,12 +3,11 @@ import { Sprout, TrendingUp, Lightbulb, BookOpen, MessageSquare, Database, Bot, 
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
 import { dashboardService } from '../services/dashboard';
-import { mockPRMSDashboard, mockActivityData } from '../lib/mockData';
+import { mockPRMSDashboard } from '../lib/mockData';
 import StatsCard from '../components/dashboard/StatsCard';
-import ActivityChart from '../components/dashboard/ActivityChart';
 import Badge from '../components/common/Badge';
 import { InteractiveChart } from '../components/chat/InteractiveChart';
-import type { PRMSDashboardData, ActivityDataPoint } from '../lib/types-extended';
+import type { PRMSDashboardData } from '../lib/types-extended';
 
 // Specific reporting year. The all-years portfolio view has been retired —
 // the dashboard always shows a single reporting year (default: 2025).
@@ -39,11 +38,6 @@ export default function Dashboard() {
     }
     refetch();
   }, [selectedYear, refetch]);
-
-  const { data: activity } = useApi<ActivityDataPoint[]>(
-    () => dashboardService.getActivity(),
-    mockActivityData
-  );
 
   const kpis = prmsData.kpis;
 
@@ -153,9 +147,6 @@ export default function Dashboard() {
         <InteractiveChart data={prmsData.charts.irl_distribution} />
         <InteractiveChart data={prmsData.charts.top_initiatives} />
       </div>
-
-      {/* Platform Activity */}
-      <ActivityChart data={activity} />
 
       {/* Quick Actions */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
