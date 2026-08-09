@@ -19,6 +19,7 @@ import os
 import sqlite3
 import time
 from datetime import datetime, timezone
+from collections.abc import Sequence
 from typing import Any, Optional
 
 from fastapi import APIRouter, Query
@@ -332,6 +333,22 @@ LIMIT 10;
 # Recipe 2) is no longer used for per-year views. It is retained in the all-
 # years queries (_SQL_TOTAL_INNOVATIONS, _SQL_RESULTS_BY_TYPE) for the headline
 # KPI which counts each innovation exactly once across all years.
+#
+# MULTI-YEAR (F7): every year-scoped query below carries the literal token
+# `__YEARS__` inside `reported_year_id IN (__YEARS__)`. At runtime
+# `_bind_years()` swaps that token for a bound-parameter list (`:y0, :y1, …`)
+# built from the validated year selection, so the SQL text is never
+# string-interpolated with user input.
+#
+# Semantics of a multi-year selection = ALIVE-IN-ANY-OF-THE-SELECTED-YEARS
+# (an OR across years). Because every count is COUNT(DISTINCT result_code),
+# a code that reported in 2024 AND 2025 is counted ONCE for the selection
+# {2024, 2025} — no double counting across years (the F4 discipline). It
+# follows that a multi-year total is NOT the sum of its single-year totals;
+# it is the size of their union.
+#
+# A single-year selection produces `IN (:y0)`, which is semantically identical
+# to the previous `= :year`, so single-year numbers are unchanged by design.
 
 # Bilateral (W3/API) Innovation Developments for the requested year — added to
 # the headline count so it matches the "include W3/bilateral" totals.
@@ -339,7 +356,7 @@ LIMIT 10;
 _SQL_YEAR_BILATERAL = """
 SELECT COUNT(DISTINCT result_code) FROM result
 WHERE result_type_id = 7 AND source = 'API' AND status_id = 6
-  AND is_active = 1 AND reported_year_id = :year;
+  AND is_active = 1 AND reported_year_id IN (__YEARS__);
 """
 
 # Headline Innovation Developments KPI for the year — alive-in-year W1/W2 count.
@@ -351,7 +368,7 @@ WHERE result_type_id = 7
   AND source = 'Result'
   AND is_active = 1
   AND status_id = 2
-  AND reported_year_id = :year;
+  AND reported_year_id IN (__YEARS__);
 """
 
 # Innovation Use (type 2) and Innovation Package (type 10) for the year use the
@@ -367,14 +384,14 @@ _SQL_YEAR_USES = """
 SELECT COUNT(DISTINCT result_code) FROM result
 WHERE is_active = 1
   AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))
-  AND result_type_id = 2 AND reported_year_id = :year;
+  AND result_type_id = 2 AND reported_year_id IN (__YEARS__);
 """
 
 _SQL_YEAR_PACKAGES = """
 SELECT COUNT(DISTINCT result_code) FROM result
 WHERE is_active = 1
   AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))
-  AND result_type_id = 10 AND reported_year_id = :year;
+  AND result_type_id = 10 AND reported_year_id IN (__YEARS__);
 """
 
 # Total results KPI for the year (all three innovation types, both windows).
@@ -382,7 +399,7 @@ _SQL_YEAR_TOTAL_RESULTS = """
 SELECT COUNT(DISTINCT result_code) FROM result
 WHERE is_active = 1
   AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))
-  AND result_type_id IN (2, 7, 10) AND reported_year_id = :year;
+  AND result_type_id IN (2, 7, 10) AND reported_year_id IN (__YEARS__);
 """
 
 _SQL_YEAR_INITIATIVES = """
@@ -392,7 +409,7 @@ JOIN results_by_inititiative rbi ON rbi.inititiative_id = i.id
 JOIN result r ON r.id = rbi.result_id
 WHERE r.is_active = 1
   AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
-  AND r.result_type_id IN (2, 7, 10) AND r.reported_year_id = :year;
+  AND r.result_type_id IN (2, 7, 10) AND r.reported_year_id IN (__YEARS__);
 """
 
 _SQL_YEAR_COUNTRIES = """
@@ -402,13 +419,13 @@ JOIN result r ON r.id = rc.result_id
 WHERE r.is_active = 1 AND rc.is_active = 1
   AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
   AND r.result_type_id IN (2, 7, 10)
-  AND r.reported_year_id = :year;
+  AND r.reported_year_id IN (__YEARS__);
 """
 
 # Charts scoped to the alive-in-year Innovation Development set for the year.
 # Each breakdown joins directly from alive-in-year result rows so the scope
 # is consistent with the headline KPI (type 7, source='Result', is_active=1,
-# status_id=2, reported_year_id=:year).
+# status_id=2, reported_year_id IN <selected years>).
 _SQL_YEAR_TOP_COUNTRIES = """
 SELECT c.name AS country, COUNT(DISTINCT r.result_code) AS count
 FROM result r
@@ -417,7 +434,7 @@ JOIN clarisa_countries c ON rc.country_id = c.id
 WHERE r.result_type_id = 7
   AND r.is_active = 1
   AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
-  AND r.reported_year_id = :year
+  AND r.reported_year_id IN (__YEARS__)
 GROUP BY c.name
 ORDER BY count DESC
 LIMIT 10;
@@ -435,7 +452,7 @@ JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_i
 WHERE r.result_type_id = 7
   AND r.is_active = 1
   AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
-  AND r.reported_year_id = :year
+  AND r.reported_year_id IN (__YEARS__)
 GROUP BY cirl.name, cirl.id
 ORDER BY cirl.id;
 """
@@ -448,7 +465,7 @@ JOIN clarisa_initiatives i ON rbi.inititiative_id = i.id
 WHERE r.result_type_id = 7
   AND r.is_active = 1
   AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
-  AND r.reported_year_id = :year
+  AND r.reported_year_id IN (__YEARS__)
 GROUP BY i.short_name
 ORDER BY count DESC
 LIMIT 10;
@@ -462,23 +479,23 @@ _SQL_YEAR_RESULTS_BY_TYPE = """
 SELECT 'Innovation Development' AS type,
     (SELECT COUNT(DISTINCT result_code) FROM result
      WHERE result_type_id = 7 AND source = 'Result' AND is_active = 1 AND status_id = 2
-       AND reported_year_id = :year)
+       AND reported_year_id IN (__YEARS__))
     +
     (SELECT COUNT(DISTINCT result_code) FROM result
      WHERE result_type_id = 7 AND source = 'API' AND is_active = 1 AND status_id = 6
-       AND reported_year_id = :year) AS count
+       AND reported_year_id IN (__YEARS__)) AS count
 UNION ALL
 SELECT 'Innovations in use' AS type, (
     SELECT COUNT(DISTINCT result_code) FROM result
     WHERE is_active = 1
       AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))
-      AND result_type_id = 2 AND reported_year_id = :year)
+      AND result_type_id = 2 AND reported_year_id IN (__YEARS__))
 UNION ALL
 SELECT 'Innovation Package' AS type, (
     SELECT COUNT(DISTINCT result_code) FROM result
     WHERE is_active = 1
       AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))
-      AND result_type_id = 10 AND reported_year_id = :year);
+      AND result_type_id = 10 AND reported_year_id IN (__YEARS__));
 """
 
 
@@ -503,19 +520,77 @@ def _rows(cursor: sqlite3.Cursor, sql: str, params: dict | None = None) -> list[
 
 
 # ---------------------------------------------------------------------------
+# Helpers: multi-year selection (F7)
+# ---------------------------------------------------------------------------
+def normalize_years(raw: Optional[Sequence[str | int]]) -> tuple[list[int], list[str]]:
+    """Parse a ``years`` query-parameter value into a sorted, deduped year list.
+
+    Accepts repeated params (``?years=2024&years=2025``) and/or comma lists
+    (``?years=2024,2025``), in any mix. Returns ``(years, invalid_tokens)``.
+    An empty ``years`` list means "All years".
+    """
+    if not raw:
+        return [], []
+    years: set[int] = set()
+    invalid: list[str] = []
+    for item in raw:
+        for token in str(item).split(","):
+            token = token.strip()
+            if not token:
+                continue
+            try:
+                value = int(token)
+            except ValueError:
+                invalid.append(token)
+                continue
+            if value in _VALID_YEARS:
+                years.add(value)
+            else:
+                invalid.append(token)
+    return sorted(years), invalid
+
+
+def _bind_years(sql: str, years: Sequence[int]) -> str:
+    """Replace the ``__YEARS__`` token with a bound-parameter list."""
+    return sql.replace("__YEARS__", ", ".join(f":y{i}" for i in range(len(years))))
+
+
+def _year_params(years: Sequence[int]) -> dict[str, int]:
+    """Build the ``{y0: 2024, y1: 2025}`` parameter dict for ``_bind_years``."""
+    return {f"y{i}": y for i, y in enumerate(years)}
+
+
+def years_label(years: Sequence[int]) -> str:
+    """Human-readable label for a year selection ("All years", "2024–2025")."""
+    if not years:
+        return "All years"
+    ordered = sorted(years)
+    if len(ordered) == 1:
+        return str(ordered[0])
+    # Contiguous runs collapse to a range; anything else is an explicit list.
+    if ordered[-1] - ordered[0] == len(ordered) - 1:
+        return f"{ordered[0]}–{ordered[-1]}"
+    return ", ".join(str(y) for y in ordered)
+
+
+# ---------------------------------------------------------------------------
 # Core: fetch all dashboard data from the PRMS database
 # ---------------------------------------------------------------------------
-def _fetch_prms_data(year: Optional[int] = None) -> dict[str, Any]:
+def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
     """Connect to the PRMS SQLite database and run all dashboard queries.
 
     Args:
-        year: If provided (2022-2025), the dashboard is sliced to that reporting
-            year using ALIVE-IN-YEAR counting: an Innovation Development (type 7)
-            is counted for year X if it has at least one active, Quality-Assessed
-            W1/W2 row in that year. Expected W1/W2 totals: 2022=477, 2023=872,
-            2024=1016, 2025=963 (+222 bilateral = 1185). All breakdown charts
-            (countries, IRL, initiatives, type) use the same alive-in-year scope.
-            If None, returns the all-years portfolio view (headline = 1,852).
+        years: Reporting years (2022-2025) to slice the dashboard to. The
+            dashboard uses ALIVE-IN-YEAR counting: an Innovation Development
+            (type 7) is counted for year X if it has at least one active,
+            Quality-Assessed W1/W2 row in that year. Expected single-year
+            W1/W2 totals: 2022=477, 2023=872, 2024=1016, 2025=963 (+222
+            bilateral = 1185). A multi-year selection is alive-in-ANY of the
+            selected years, deduped by result code (so it is the UNION of the
+            single-year sets, never their sum). All breakdown charts
+            (countries, IRL, programmes, type) use the same scope.
+            An empty/None selection returns the all-years portfolio view
+            (headline = 1,852).
 
     Returns the full API response dict. Raises FileNotFoundError if the
     database file does not exist, and sqlite3.Error on query failures.
@@ -523,9 +598,14 @@ def _fetch_prms_data(year: Optional[int] = None) -> dict[str, Any]:
     if not os.path.isfile(_PRMS_DB_PATH):
         raise FileNotFoundError(f"PRMS database not found at: {_PRMS_DB_PATH}")
 
-    is_year = year is not None
-    params = {"year": year} if is_year else None
-    label_suffix = f" ({year})" if is_year else ""
+    selected = sorted(years or ())
+    is_year = bool(selected)
+    params: Optional[dict[str, int]] = _year_params(selected) if is_year else None
+    label_suffix = f" ({years_label(selected)})" if is_year else ""
+
+    def sql(text: str) -> str:
+        """Bind the __YEARS__ token for year-scoped SQL; pass others through."""
+        return _bind_years(text, selected) if is_year else text
 
     conn = sqlite3.connect(f"file:{_PRMS_DB_PATH}?mode=ro", uri=True)
     try:
@@ -551,9 +631,9 @@ def _fetch_prms_data(year: Optional[int] = None) -> dict[str, Any]:
                 "countries_covered": _SQL_COUNTRIES_COVERED,
                 "innovation_packages": _SQL_INNOVATION_PACKAGES,
             }
-        for key, sql in kpi_queries.items():
+        for key, kpi_sql in kpi_queries.items():
             try:
-                kpis[key] = _scalar(cur, sql, params)
+                kpis[key] = _scalar(cur, sql(kpi_sql), params)
             except sqlite3.Error as exc:
                 logger.error("KPI query '%s' failed: %s", key, exc)
                 kpis[key] = 0
@@ -567,7 +647,7 @@ def _fetch_prms_data(year: Optional[int] = None) -> dict[str, Any]:
         bilateral_sql = _SQL_YEAR_BILATERAL if is_year else _SQL_ALL_YEARS_BILATERAL
         bilateral_label = "year_bilateral" if is_year else "all_years_bilateral"
         try:
-            bilateral_count = _scalar(cur, bilateral_sql, params)
+            bilateral_count = _scalar(cur, sql(bilateral_sql), params)
             if is_year:
                 kpis["total_innovations_w1w2"] = kpis.get("total_innovations", 0)
                 kpis["total_innovations_bilateral"] = bilateral_count
@@ -587,7 +667,7 @@ def _fetch_prms_data(year: Optional[int] = None) -> dict[str, Any]:
 
         # Innovations by type (pie chart)
         try:
-            results_by_type_data = _rows(cur, sql_results_by_type, params)
+            results_by_type_data = _rows(cur, sql(sql_results_by_type), params)
             # Note: summing per-type counts double-counts results that carry
             # more than one innovation type, so it does not equal the distinct
             # total_results. Keep the description generic rather than baking in
@@ -605,7 +685,7 @@ def _fetch_prms_data(year: Optional[int] = None) -> dict[str, Any]:
 
         # Top 10 countries (bar chart)
         try:
-            top_countries_data = _rows(cur, sql_top_countries, params)
+            top_countries_data = _rows(cur, sql(sql_top_countries), params)
             charts["top_countries"] = {
                 "chartType": "bar",
                 "title": f"Top 10 Countries by Innovations{label_suffix}",
@@ -619,7 +699,7 @@ def _fetch_prms_data(year: Optional[int] = None) -> dict[str, Any]:
 
         # IRL distribution (bar chart)
         try:
-            irl_data = _rows(cur, sql_irl, params)
+            irl_data = _rows(cur, sql(sql_irl), params)
             charts["irl_distribution"] = {
                 "chartType": "bar",
                 "title": f"Innovation Readiness Levels{label_suffix}",
@@ -633,7 +713,7 @@ def _fetch_prms_data(year: Optional[int] = None) -> dict[str, Any]:
 
         # Top 10 initiatives (bar chart)
         try:
-            top_initiatives_data = _rows(cur, sql_top_initiatives, params)
+            top_initiatives_data = _rows(cur, sql(sql_top_initiatives), params)
             charts["top_initiatives"] = {
                 "chartType": "bar",
                 "title": f"Top 10 Initiatives by Innovations{label_suffix}",
@@ -648,7 +728,12 @@ def _fetch_prms_data(year: Optional[int] = None) -> dict[str, Any]:
         return {
             "kpis": kpis,
             "charts": charts,
-            "year": year,
+            # `year` is kept for backward compatibility: it is the single
+            # selected year, or None for "All years" AND for any multi-year
+            # selection (which has no single year). `years` is authoritative.
+            "year": selected[0] if len(selected) == 1 else None,
+            "years": selected,
+            "years_label": years_label(selected),
             "last_updated": datetime.now(tz=timezone.utc).isoformat(),
         }
     finally:
@@ -673,30 +758,57 @@ def _fetch_prms_data(year: Optional[int] = None) -> dict[str, Any]:
 
 @router.get("/dashboard/prms-stats")
 async def prms_dashboard_stats(
+    years: Optional[list[str]] = Query(
+        None,
+        description="Reporting years to slice the dashboard to (2022-2025). "
+        "Repeat the parameter (?years=2024&years=2025) and/or pass a comma "
+        "list (?years=2024,2025). Omit for the all-years portfolio view. "
+        "Multiple years are ALIVE-IN-ANY-OF semantics, deduped by result code.",
+    ),
     year: Optional[int] = Query(
         None,
-        description="Filter the dashboard to a single reporting year (2022-2025). "
-        "Omit for the all-years portfolio view.",
+        description="Deprecated single-year alias, kept for backward "
+        "compatibility. Ignored when `years` is supplied.",
     ),
 ):
     """Return PRMS dashboard KPIs and chart data.
 
-    Pass ``?year=2025`` to slice the dashboard to a single reporting year; omit
-    it for the all-years portfolio view. Results are cached in-memory for 5
-    minutes per year. If the PRMS database is unavailable a 503 is returned.
-    Partial data is returned when individual queries fail. An invalid year
-    yields a 400.
+    Year selection (F7):
+
+    - omit both params  -> the all-years portfolio view ("All years")
+    - ``?year=2025``    -> single year (legacy alias, unchanged behaviour)
+    - ``?years=2025``   -> single year, identical numbers to ``?year=2025``
+    - ``?years=2024&years=2025`` or ``?years=2024,2025`` -> the UNION of both
+      years' alive-in-year sets, deduped by result code (never the sum).
+
+    Results are cached in-memory for 5 minutes per distinct year selection. If
+    the PRMS database is unavailable a 503 is returned. Partial data is
+    returned when individual queries fail. An invalid year yields a 400.
     """
-    if year is not None and year not in _VALID_YEARS:
+    selected, invalid = normalize_years(years)
+    if invalid:
         return JSONResponse(
             status_code=400,
             content={
                 "error": "Invalid year",
-                "detail": f"year must be one of {sorted(_VALID_YEARS)} or omitted.",
+                "detail": f"years must be drawn from {sorted(_VALID_YEARS)}; "
+                f"rejected: {invalid}.",
             },
         )
 
-    cache_key = year  # None for all-years, else the int year
+    if not selected and year is not None:
+        # Legacy single-year alias.
+        if year not in _VALID_YEARS:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Invalid year",
+                    "detail": f"year must be one of {sorted(_VALID_YEARS)} or omitted.",
+                },
+            )
+        selected = [year]
+
+    cache_key: Any = tuple(selected)  # () for all-years, else the sorted years
 
     # Return cached data if still fresh
     now = time.monotonic()
@@ -705,7 +817,7 @@ async def prms_dashboard_stats(
 
     # Fetch fresh data
     try:
-        data = _fetch_prms_data(year=year)
+        data = _fetch_prms_data(years=selected)
     except FileNotFoundError as exc:
         logger.error("PRMS database unavailable: %s", exc)
         return JSONResponse(

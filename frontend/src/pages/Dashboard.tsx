@@ -5,26 +5,27 @@ import { useApi } from '../hooks/useApi';
 import { dashboardService } from '../services/dashboard';
 import { mockPRMSDashboard } from '../lib/mockData';
 import StatsCard from '../components/dashboard/StatsCard';
+import YearMultiSelect, { yearsLabel } from '../components/dashboard/YearMultiSelect';
 import Badge from '../components/common/Badge';
 import { InteractiveChart } from '../components/chat/InteractiveChart';
 import type { PRMSDashboardData } from '../lib/types-extended';
 
-// Specific reporting year. The all-years portfolio view has been retired —
-// the dashboard always shows a single reporting year (default: 2025).
-const YEAR_OPTIONS = ['2025', '2024', '2023', '2022'] as const;
-type YearFilter = (typeof YEAR_OPTIONS)[number];
-const DEFAULT_YEAR: YearFilter = '2025';
+// Reporting-year selection (F7). An empty array means the all-years portfolio
+// view; one or more years request the alive-in-ANY-of union for those years
+// (deduped by result code server-side, so a multi-year total is the UNION of
+// the single-year sets and NOT their sum). Default: 2025.
+const DEFAULT_YEARS: number[] = [2025];
 
 export default function Dashboard() {
   const navigate = useNavigate();
 
-  const [selectedYear, setSelectedYear] = useState<YearFilter>(DEFAULT_YEAR);
-  // Keep the latest selectedYear available to the (memoized) fetcher.
-  const yearRef = useRef<YearFilter>(selectedYear);
-  yearRef.current = selectedYear;
+  const [selectedYears, setSelectedYears] = useState<number[]>(DEFAULT_YEARS);
+  // Keep the latest selection available to the (memoized) fetcher.
+  const yearsRef = useRef<number[]>(selectedYears);
+  yearsRef.current = selectedYears;
 
   const { data: prmsData, isLive, refetch, loading } = useApi<PRMSDashboardData>(
-    () => dashboardService.getPRMSStats(Number(yearRef.current)),
+    () => dashboardService.getPRMSStats(yearsRef.current),
     mockPRMSDashboard,
     { interval: 60000 }
   );
@@ -37,20 +38,28 @@ export default function Dashboard() {
       return;
     }
     refetch();
-  }, [selectedYear, refetch]);
+  }, [selectedYears, refetch]);
 
   const kpis = prmsData.kpis;
 
-  // Derive the innovation card label + sublabel. Per-year views show
-  // alive-in-year counts.
-  const innovLabel = `Innovations active in ${selectedYear}`;
+  // The active selection, stated in words. Prefer the server's own label so the
+  // header can never disagree with the numbers underneath it.
+  const scopeLabel = prmsData.years_label ?? yearsLabel(selectedYears);
+  const isAllYears = selectedYears.length === 0;
 
+  // Derive the innovation card label + sublabel. Year-scoped views show
+  // alive-in-year counts (union across the selected years).
+  const innovLabel = isAllYears
+    ? 'Innovations (all years)'
+    : `Innovations active in ${scopeLabel}`;
+
+  const periodWords = selectedYears.length > 1 ? 'these years' : 'this year';
   const innovSublabel =
     kpis.total_innovations_bilateral !== undefined && kpis.total_innovations_bilateral > 0
       ? `${(kpis.total_innovations_w1w2 ?? 0).toLocaleString()} W1/W2 + ${kpis.total_innovations_bilateral.toLocaleString()} bilateral`
       : kpis.total_innovations_bilateral === 0
-      ? 'W1/W2 pooled — all reporting in this year'
-      : 'Every innovation that reported in this year';
+      ? `W1/W2 pooled — all reporting in ${periodWords}`
+      : 'Every innovation in the portfolio, counted once';
 
   return (
     <div className="max-w-screen-xl mx-auto p-6 space-y-8">
@@ -73,26 +82,12 @@ export default function Dashboard() {
         <div>
           <h1 className="text-2xl font-bold text-[var(--text)] font-serif">Innovation Analytics</h1>
           <p className="text-sm text-[var(--text-muted)] mt-1">
-            CGIAR innovation portfolio · {selectedYear} — {kpis.total_results.toLocaleString()} innovations across {kpis.countries_covered} countries
+            CGIAR innovation portfolio · {scopeLabel} — {kpis.total_results.toLocaleString()} innovations across {kpis.countries_covered} countries
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {/* Year filter */}
-          <label className="flex items-center gap-2 text-sm text-[var(--text-muted)]">
-            <span className="hidden sm:inline">Year</span>
-            <select
-              value={selectedYear}
-              onChange={(e) => setSelectedYear(e.target.value as YearFilter)}
-              disabled={loading}
-              className="px-3 py-1.5 text-sm rounded-lg border border-[var(--border)] bg-[var(--surface-solid)] text-[var(--text)] hover:bg-[var(--surface-2)] transition-colors disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-[#427730]/40"
-            >
-              {YEAR_OPTIONS.map((y) => (
-                <option key={y} value={y}>
-                  {y}
-                </option>
-              ))}
-            </select>
-          </label>
+          {/* Year filter — "All years" + multiselect (F7) */}
+          <YearMultiSelect value={selectedYears} onChange={setSelectedYears} disabled={loading} />
           <button
             onClick={refetch}
             disabled={loading}

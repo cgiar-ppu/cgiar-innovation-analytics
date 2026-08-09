@@ -185,6 +185,11 @@ export interface PRMSDashboardData {
     irl_distribution: import('../components/chat/chartDetector').ChartData;
     top_initiatives: import('../components/chat/chartDetector').ChartData;
   };
+  /** The single selected year, or null for "All years" / a multi-year slice. */
   year?: number | null;
+  /** Authoritative year selection; [] means "All years". */
+  years?: number[];
+  /** Server-rendered label for the selection, e.g. "2024–2025" / "All years". */
+  years_label?: string;
   last_updated: string;
 }
