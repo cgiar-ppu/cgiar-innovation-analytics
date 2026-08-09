@@ -18,6 +18,12 @@ from claude_agent_sdk import (
 )
 from synapsis.agent_options import build_agent_options
 from synapsis.models import QueryRequest
+from synapsis.persona import (
+    PersonaValidationError,
+    apply_persona_to_message,
+    describe_persona,
+    normalize_persona,
+)
 from synapsis.scope import (
     ScopeValidationError,
     apply_scope_to_message,
@@ -32,23 +38,34 @@ router = APIRouter(prefix="/api", tags=["query"])
 async def api_query(payload: QueryRequest):
     """Process a single query and return the complete response.
 
-    Honours the optional ``scope`` object (year / programme filters) the same
-    way the chat WebSocket does: the scope preamble is prepended to the message
-    handed to the agent, so the answer is constrained to — and states — the
-    active slice.
+    Honours the optional ``scope`` object (year / programme filters) and the
+    optional ``agent`` selection the same way the chat WebSocket does: each is
+    rendered into a preamble prepended to the message handed to the agent, so
+    the answer is constrained to — and states — the active slice, and is routed
+    to the specialist the caller asked for.
 
     Returns:
         response: Combined text output
         tool_uses: List of tools the agent invoked
         result: Cost, turns, and duration metadata
         scope: The normalized active scope echoed back (empty when unscoped)
+        agent: The normalized specialist id echoed back ("" when unselected)
     """
     try:
         scope = normalize_scope(payload.scope)
     except ScopeValidationError as exc:
         raise HTTPException(status_code=422, detail=f"Invalid data scope: {exc}") from None
 
-    user_msg = apply_scope_to_message(payload.message.strip(), scope)
+    try:
+        persona = normalize_persona(payload.agent)
+    except PersonaValidationError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Invalid agent selection: {exc}"
+        ) from None
+
+    user_msg = apply_persona_to_message(
+        apply_scope_to_message(payload.message.strip(), scope), persona
+    )
 
     options = await build_agent_options()
 
@@ -76,4 +93,6 @@ async def api_query(payload: QueryRequest):
         "result": result_info,
         "scope": scope,
         "scope_description": describe_scope(scope),
+        "agent": persona,
+        "agent_description": describe_persona(persona),
     }

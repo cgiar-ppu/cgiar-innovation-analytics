@@ -70,8 +70,16 @@ export interface MessageScope {
 }
 
 export type ClientMessage =
-  /** Send a chat message to the agent (optionally scoped by the filter bar). */
-  | { message: string; scope?: MessageScope }
+  /**
+   * Send a chat message to the agent.
+   *
+   * `scope` carries the filter-bar selection; `agent` carries the specialist
+   * chosen in the agent picker (a builtin agent id such as
+   * "prms_data_analyst"). BOTH are omitted entirely when nothing is selected,
+   * so the default frame is byte-identical to the pre-filter/pre-picker one.
+   * See synapsis/scope.py and synapsis/persona.py.
+   */
+  | { message: string; scope?: MessageScope; agent?: string }
   /** Request the current agent run to be cancelled. */
   | { type: 'cancel' }
   /** Ask the server to create and activate a new session. */

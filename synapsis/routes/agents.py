@@ -8,6 +8,7 @@ Agent browsing, creation, and management API.
 - DELETE /api/agents/{agent_id}   -- Soft-delete a custom agent
 - POST   /api/agents/{id}/clone   -- Clone any agent as a new custom agent
 - POST   /api/agents/{id}/test    -- Validate an agent's configuration
+- GET    /api/personas            -- The specialists the chat picker may offer
 """
 
 import json
@@ -19,6 +20,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from synapsis.agents import SUBAGENTS, AGENT_REGISTRY
+from synapsis.persona import selectable_personas
 from synapsis.database import get_db
 from synapsis.constants import ALLOWED_MODELS, DEFAULT_AGENT_COLOR
 from synapsis.services.agent_service import generate_agent_id, create_agent_record
@@ -143,6 +145,23 @@ def _build_update_sql(payload: "AgentUpdate") -> tuple[str, list]:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+@router.get("/personas")
+async def list_personas():
+    """List the specialists the chat agent picker may offer (feedback F3).
+
+    This is deliberately NARROWER than ``GET /api/agents``: it returns exactly
+    the ids ``synapsis.persona.normalize_persona`` accepts, so the picker can
+    never offer something the chat path would reject. The nine base builtin
+    specialists — no ``_opus_powerful`` / ``_sonnet_efficient`` variants (a
+    legacy routing detail; every subagent runs Sonnet 4.6 regardless) and no
+    custom agents yet.
+
+    ``default`` is ``null``: no selection means the orchestrator routes on its
+    own judgement, which is the pre-picker behaviour.
+    """
+    return {"personas": selectable_personas(), "default": None}
+
 
 @router.get("/agents")
 async def list_agents():

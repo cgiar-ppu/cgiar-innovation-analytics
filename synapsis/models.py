@@ -58,6 +58,11 @@ class QueryRequest(BaseModel):
     accepts (e.g. ``{"years": [2024], "programs": ["SP09 — Scaling for Impact"]}``).
     Omitted/empty ⇒ no scope and behaviour identical to before. See
     synapsis/scope.py.
+
+    ``agent`` is the optional builtin specialist id the agent picker sets (e.g.
+    ``"prms_data_analyst"``). Omitted/empty ⇒ the orchestrator routes on its own
+    judgement, exactly as before. See synapsis/persona.py.
     """
     message: str = Field(..., min_length=1, max_length=50000)
     scope: Optional[dict] = None
+    agent: Optional[str] = None

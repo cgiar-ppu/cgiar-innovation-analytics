@@ -1,6 +1,7 @@
 import { useEffect, useCallback } from 'react'
 import { Maximize2, Minimize2, Wrench, Loader2 } from 'lucide-react'
 import { useChatStore } from '../../stores/chat'
+import { usePersonaStore } from '../../stores/persona'
 import { useScopeStore } from '../../stores/scope'
 import { useSessionsStore } from '../../stores/sessions'
 import { useUIStore } from '../../stores/ui'
@@ -16,6 +17,7 @@ import { WelcomeScreen } from '../welcome/WelcomeScreen'
 import { ChatInput } from '../input/ChatInput'
 import { ExportMenu } from './ExportMenu'
 import { TTSSettingsPanel } from './TTSSettingsPanel'
+import { PersonaPicker } from './PersonaPicker'
 import { ScopeFilterBar } from './ScopeFilterBar'
 import type { ClientMessage } from '../../lib/types'
 
@@ -68,10 +70,16 @@ export function ChatArea({ send, onFileUpload }: Props) {
     if (activeId) useSessionsStore.getState().markSessionBusy(activeId)
 
     // Attach the active data scope (year / programme filters) so the backend
-    // can constrain the agent for this turn. `undefined` when nothing is
-    // selected — the frame is then byte-identical to the pre-filter one.
+    // can constrain the agent for this turn, and the selected specialist so it
+    // can route the turn. Both are `undefined` when nothing is selected — the
+    // frame is then byte-identical to the pre-filter/pre-picker one.
     const scope = useScopeStore.getState().getActiveScope()
-    send(scope ? { message: enrichedText, scope } : { message: enrichedText })
+    const agent = usePersonaStore.getState().getActivePersona()
+    send({
+      message: enrichedText,
+      ...(scope ? { scope } : {}),
+      ...(agent ? { agent } : {}),
+    })
   }, [send])
 
   const handleCancel = useCallback(() => {
@@ -81,7 +89,10 @@ export function ChatArea({ send, onFileUpload }: Props) {
   return (
     <div className="flex-1 flex flex-col relative min-h-0 overflow-x-hidden">
       <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-[var(--border)] flex-shrink-0 flex-wrap">
-        <ScopeFilterBar />
+        <div className="flex items-center gap-2 flex-wrap">
+          <PersonaPicker />
+          <ScopeFilterBar />
+        </div>
         <div className="flex items-center gap-1">
         <button
           onClick={toggleExpandedView}

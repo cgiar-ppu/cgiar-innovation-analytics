@@ -36,6 +36,13 @@ from synapsis.scope import (
     normalize_scope,
     scope_is_empty,
 )
+from synapsis.persona import (
+    PersonaValidationError,
+    apply_persona_to_message,
+    describe_persona,
+    normalize_persona,
+    persona_is_empty,
+)
 from synapsis.session_manager import (
     sessions,
     handle_cancel as _sm_handle_cancel,
@@ -179,12 +186,13 @@ async def handle_retry(
     replaces the in-memory session client, acquires the per-session lock,
     and launches a managed streaming task via the ChatRunManager.
 
-    Honours the same optional ``"scope"`` object as a regular user message, so
-    a retry after an AUP fallback stays inside the user's active filters.
+    Honours the same optional ``"scope"`` object and ``"agent"`` selection as a
+    regular user message, so a retry after an AUP fallback stays inside the
+    user's active filters AND keeps their chosen specialist.
 
     Returns the newly created ``retry_client``, or None if the payload
-    carries no message text / carries an invalid scope (in which case nothing
-    is done).
+    carries no message text / carries an invalid scope or agent id (in which
+    case nothing is done).
     """
     retry_message = payload.get("message", "").strip()
     retry_model = payload.get("model", "")
@@ -196,6 +204,15 @@ async def handle_retry(
     except ScopeValidationError as exc:
         await send_json(
             {"type": "error", "message": f"Invalid data scope: {exc}"},
+            sid=session_id,
+        )
+        return None
+
+    try:
+        persona = normalize_persona(payload.get("agent"))
+    except PersonaValidationError as exc:
+        await send_json(
+            {"type": "error", "message": f"Invalid agent selection: {exc}"},
             sid=session_id,
         )
         return None
@@ -222,7 +239,10 @@ async def handle_retry(
     await save_message(session_id, "user", {"content": retry_message})
 
     await launch_streaming_task(
-        session_id, retry_client, apply_scope_to_message(retry_message, scope),
+        session_id, retry_client,
+        apply_persona_to_message(
+            apply_scope_to_message(retry_message, scope), persona
+        ),
         send_json,
         lock_acquired=retry_lock_acquired,
     )
@@ -326,11 +346,13 @@ async def handle_user_message(
     launches a managed streaming task via the ChatRunManager.
 
     The frame may carry an optional ``"scope"`` object
-    (``{"years": [...], "programs": [...]}``) set by the UI filter bar. It is
-    validated here and rendered into a delimited preamble that is prepended to
-    the copy of the message handed to the SDK — see synapsis/scope.py for why
-    the injection is per-message rather than in the shared system-prompt file.
-    The persisted user message is never modified.
+    (``{"years": [...], "programs": [...]}``) set by the UI filter bar, and an
+    optional ``"agent"`` string (a builtin specialist id) set by the agent
+    picker. Both are validated here and rendered into delimited preambles that
+    are prepended to the copy of the message handed to the SDK — see
+    synapsis/scope.py and synapsis/persona.py for why the injection is
+    per-message rather than in the shared system-prompt file. The persisted
+    user message is never modified.
 
     Returns:
         (session_id, client) -- the (possibly newly created) session and client.
@@ -354,6 +376,18 @@ async def handle_user_message(
             sid=session_id,
         )
         raise ValueError(f"Invalid scope: {exc}") from None
+
+    # Same discipline for the optional selected specialist (F3): validate the
+    # id before any work happens, so a bad picker payload can never reach the
+    # agent half-applied.
+    try:
+        persona = normalize_persona(payload.get("agent"))
+    except PersonaValidationError as exc:
+        await send_json(
+            {"type": "error", "message": f"Invalid agent selection: {exc}"},
+            sid=session_id,
+        )
+        raise ValueError(f"Invalid agent: {exc}") from None
 
     await record_activity(time.time())
 
@@ -391,6 +425,16 @@ async def handle_user_message(
         logger.info(
             "Applying active data scope to session %s: %s",
             session_id, describe_scope(scope),
+        )
+
+    # Prepend the selected specialist LAST so its block sits at the very top of
+    # the message the orchestrator reads. No-op when nothing is picked, which
+    # keeps the default routing byte-identical to the pre-picker behaviour.
+    if not persona_is_empty(persona):
+        sdk_message = apply_persona_to_message(sdk_message, persona)
+        logger.info(
+            "Routing session %s to selected specialist: %s",
+            session_id, describe_persona(persona),
         )
 
     # Acquire the per-session lock before querying
