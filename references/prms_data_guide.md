@@ -239,6 +239,20 @@ Rules:
 3. If the user's phrasing is ambiguous ("involved in", "linked to", "contributed to"), give the lead-submitter figure **and** the any-role figure, as §6.3's adversarial template does.
 4. Programme filters resolve on `clarisa_initiatives.official_code` (`'SP13'`), **never** on a fuzzy name match — `SP13 — Genebank` (2025+, Programs era) and `INIT-03 — Genebanks` (2022–2024, Initiatives era) are different entities with different populations (32 vs 29 lead-submitter innovations). Note `clarisa_initiatives` also carries duplicate rows for some codes (e.g. two `INIT-11` rows), so join on `official_code` and dedup on `result_code`.
 
+### Year-scoped counts vs the dashboard — reconcile the two conventions (added 2026-08-09, QA Round 3)
+
+When a **year scope** is active, two legitimate conventions are one click apart in this product, and they disagree:
+
+- **The dashboard** computes the **union of alive-in-any-selected-year** (deduped by `result_code`). With all four years selected it shows **1,885** = 1,663 W1/W2 + 222 bilateral.
+- **The chat's default for headline totals** is the Section-4 **latest-QAed-phase canon**: **1,852** = 1,630 + 222.
+- The 33-code gap is real, explainable, and fixed on this snapshot: 33 result codes whose latest QAed phase reclassified them out of type 7 (16 → Other output, 14 → Innovation Use, 1 each → Policy change / Other outcome / Knowledge product; 21 first reported in 2022, 12 in 2023).
+
+Rules (QA Round 3 found all three violated in live answers):
+
+1. **If the selected years span the whole snapshot (2022–2025), say which convention you used and name the other number** in one clause — e.g. *"1,852 counting each code once at its latest QAed phase; the dashboard's union-of-years view of the same selection shows 1,885 — the 33 extra codes were reclassified to other result types at their latest phase."* A user comparing chat and dashboard must not be left with two silent, differing totals for the identical selection.
+2. **A "how many" question under a multi-year scope MUST produce a deduped union total** — `COUNT(DISTINCT result_code)` across the selected years, split by funding arm — alongside any per-year table. A per-year table alone is not an answer: it invites the reader to sum (2024+2025: 1,016 + 1,185 = 2,201, wrong) when the true union is **1,630** = 1,408 W1/W2 + 222 bilateral.
+3. **If the selection crosses the 2024→2025 boundary, disclose the era change** (2022–2024 = Initiatives era, 2025 = Science Programs era). It is invisible in a bare total but becomes load-bearing the moment a programme breakdown is requested, because INIT-* and SP-* portfolios do not continue each other (§4 role-basis rule 4).
+
 ---
 
 ## 5. W1/W2 vs W3/Bilateral Funding Sources
@@ -437,6 +451,21 @@ WHERE r.result_type_id = 7 AND r.is_active = 1
   AND s.impact_area_score_id IN (1,2,3);
 -- OUTPUT: 79 (all of them 2025)
 ```
+
+#### ⚠️ Phase basis changes tag counts — state it (added 2026-08-09, QA Round 3)
+
+A legacy-tag count can be evaluated on two phase bases, and they differ materially:
+
+| Basis | Gender ∈ (Significant, Principal), type 7, QA gates | Meaning |
+|---|---|---|
+| **Latest QAed phase** (the §6.6 CTE above; the guide's locked headline) | **814** = 790 W1/W2 + 24 bilateral | the code's *current* tag state |
+| **Any QAed phase** | 862 = 838 W1/W2 + 24 bilateral | tagged at *some* point in its history |
+
+Rules (QA Round 3 observed a live answer headline 862 with no basis stated, and "838" labelled "public dashboard alignment"):
+
+1. **State the phase basis on every tag- or attribute-filtered count**, and never mix bases within one answer or report. The guide's locked/headline gender figure is the **latest-phase 814**.
+2. **The dashboard-aligned W1/W2 figure is the latest-phase 790** — never label the any-phase 838 as "dashboard alignment".
+3. The same fork exists for **every** filtered subset (countries, themes, climate, IRL): e.g. Ghana ∩ climate ≥ Significant is **63** on any-QAed-phase membership (the §4 worked example) but **60** (53 + 7) on the latest-phase basis. Both are defensible; a number quoted without its basis is not. If your figure differs from a guide-locked value, reconcile or flag it — don't ship both silently.
 
 ### 6.7 Innovation Use count by year (type 2)
 Identical corrected dedup pattern, filter `result_type_id = 2` at the final stage.
