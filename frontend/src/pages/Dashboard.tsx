@@ -7,6 +7,8 @@ import { mockPRMSDashboard } from '../lib/mockData';
 import StatsCard from '../components/dashboard/StatsCard';
 import YearMultiSelect, { yearsLabel } from '../components/dashboard/YearMultiSelect';
 import Badge from '../components/common/Badge';
+import { InfoPopover } from '../components/common/InfoPopover';
+import { INFO_TOPICS } from '../components/common/infoCopy';
 import { InteractiveChart } from '../components/chat/InteractiveChart';
 import type { PRMSDashboardData } from '../lib/types-extended';
 
@@ -80,7 +82,11 @@ export default function Dashboard() {
       {/* Header with title + refresh button */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-[var(--text)] font-serif">Innovation Analytics</h1>
+          <div className="flex items-center gap-1.5">
+            <h1 className="text-2xl font-bold text-[var(--text)] font-serif">Innovation Analytics</h1>
+            {/* F15 — how to read these figures (method, dedup, portfolio eras). */}
+            <InfoPopover topic={INFO_TOPICS.dashboard} size="md" />
+          </div>
           <p className="text-sm text-[var(--text-muted)] mt-1">
             CGIAR innovation portfolio · {scopeLabel} — {kpis.total_results.toLocaleString()} innovations across {kpis.countries_covered} countries
           </p>

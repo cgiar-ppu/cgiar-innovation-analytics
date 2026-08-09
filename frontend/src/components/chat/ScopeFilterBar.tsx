@@ -16,6 +16,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Filter, X, ChevronDown } from 'lucide-react'
 import { useScopeStore } from '../../stores/scope'
+import { InfoPopover } from '../common/InfoPopover'
+import { INFO_TOPICS } from '../common/infoCopy'
 
 function useClickOutside(onOutside: () => void) {
   const ref = useRef<HTMLDivElement>(null)
@@ -62,6 +64,8 @@ export function ScopeFilterBar() {
     >
       <Filter size={13} className="text-text-muted shrink-0" aria-hidden="true" />
       <span className="text-[11px] text-text-muted hidden md:inline">Data scope:</span>
+      {/* F15 — what these filters actually do (they constrain the AGENT). */}
+      <InfoPopover topic={INFO_TOPICS.filters} />
 
       {/* Year selector */}
       <button

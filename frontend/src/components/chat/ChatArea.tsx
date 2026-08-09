@@ -18,6 +18,8 @@ import { ChatInput } from '../input/ChatInput'
 import { ExportMenu } from './ExportMenu'
 import { TTSSettingsPanel } from './TTSSettingsPanel'
 import { PersonaPicker } from './PersonaPicker'
+import { InfoPopover } from '../common/InfoPopover'
+import { INFO_TOPICS } from '../common/infoCopy'
 import { ScopeFilterBar } from './ScopeFilterBar'
 import type { ClientMessage } from '../../lib/types'
 
@@ -90,6 +92,8 @@ export function ChatArea({ send, onFileUpload }: Props) {
     <div className="flex-1 flex flex-col relative min-h-0 overflow-x-hidden">
       <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-[var(--border)] flex-shrink-0 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
+          {/* F15 — what the chat surface is and how to read its answers. */}
+          <InfoPopover topic={INFO_TOPICS.chat} />
           <PersonaPicker />
           <ScopeFilterBar />
         </div>

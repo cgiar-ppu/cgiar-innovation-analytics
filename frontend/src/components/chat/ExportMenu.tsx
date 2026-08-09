@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from 'react'
 import { Download, FileText, FileCode, File, ChevronDown } from 'lucide-react'
 import { useSessionsStore } from '../../stores/sessions'
 import { api } from '../../lib/api'
+import { InfoPopover } from '../common/InfoPopover'
+import { INFO_TOPICS } from '../common/infoCopy'
 
 const FORMATS = [
   { key: 'docx', label: 'Word Document', desc: 'Best for editing & sharing', icon: FileText },
@@ -44,9 +46,13 @@ export function ExportMenu() {
 
       {open && activeSessionId && (
         <div className="absolute right-0 top-full mt-2 w-72 glass-strong rounded-2xl shadow-xl z-50 overflow-hidden">
-          <div className="px-4 py-3 border-b border-border">
-            <p className="text-xs font-semibold text-text-primary">Export Conversation</p>
-            <p className="text-[10px] text-text-muted mt-0.5">Download in your preferred format</p>
+          <div className="px-4 py-3 border-b border-border flex items-start justify-between gap-2">
+            <div>
+              <p className="text-xs font-semibold text-text-primary">Export Conversation</p>
+              <p className="text-[10px] text-text-muted mt-0.5">Download in your preferred format</p>
+            </div>
+            {/* F15 — what an export contains and what the watermark means. */}
+            <InfoPopover topic={INFO_TOPICS.exports} align="right" />
           </div>
 
           <div className="px-4 py-2.5 border-b border-border flex items-center justify-between">
