@@ -7,7 +7,7 @@ import json
 from datetime import datetime
 
 from .common import parse_row
-from .watermark import watermark_html, WATERMARK_HTML_CSS
+from .watermark import watermark_html, watermark_html_overlay, WATERMARK_HTML_CSS
 
 # ---------------------------------------------------------------------------
 # Inline CSS — extracted here so the render function stays readable
@@ -64,6 +64,7 @@ def export_html(title: str, session_id: str, rows, detail: str) -> tuple[str, st
 </style>
 </head>
 <body>
+{watermark_html_overlay()}
 <h1>{safe_title}</h1>
 {watermark_html()}
 <div class="meta">Session: {session_id} · Exported: {exported_at}</div>

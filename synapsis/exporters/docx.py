@@ -134,8 +134,9 @@ def export_docx(title: str, session_id: str, rows, detail: str, export_dir: Path
 
     # AI-content watermark / disclaimer — required on every export. Applied
     # last so the notice box lands at the very top of the document body and
-    # the banner is added to the page footer (every page).
-    apply_ai_watermark(doc)
+    # the per-page header/footer marks (running banner, diagonal draft
+    # watermark, page numbers) are attached to the section.
+    apply_ai_watermark(doc, title=title)
 
     export_dir.mkdir(parents=True, exist_ok=True)
     filename = safe_filename(title, session_id, "docx")

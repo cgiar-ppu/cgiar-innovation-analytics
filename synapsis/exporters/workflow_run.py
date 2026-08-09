@@ -5,7 +5,13 @@ import json
 from datetime import datetime
 
 from .common import safe_filename
-from .watermark import watermark_markdown, watermark_html, WATERMARK_HTML_CSS
+from .watermark import (
+    watermark_markdown,
+    watermark_markdown_footer,
+    watermark_html,
+    watermark_html_overlay,
+    WATERMARK_HTML_CSS,
+)
 
 
 def export_workflow_run_markdown(run_log: dict) -> tuple[str, str]:
@@ -115,6 +121,9 @@ def export_workflow_run_markdown(run_log: dict) -> tuple[str, str]:
     if cost:
         lines.append(f"- **Estimated Cost**: ${cost:.4f}")
     lines.append("")
+    # Per-page-footer analogue for a format with no pages: close the document
+    # with the product line + banner + provenance notice.
+    lines.append(watermark_markdown_footer())
 
     content = "\n".join(lines)
     base = safe_filename(f"workflow_run_{name}_{run_id[:8] if run_id else 'unknown'}")
@@ -242,6 +251,7 @@ def export_workflow_run_html(run_log: dict) -> tuple[str, str]:
 </style>
 </head>
 <body>
+{watermark_html_overlay()}
 <h1>Workflow Run: {html_lib.escape(name)}</h1>
 {watermark_html()}
 

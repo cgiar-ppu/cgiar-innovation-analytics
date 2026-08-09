@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 
 from .common import parse_row
-from .watermark import watermark_markdown
+from .watermark import watermark_markdown, watermark_markdown_footer
 
 
 def export_markdown(title: str, session_id: str, rows, detail: str) -> tuple[str, str]:
@@ -68,5 +68,9 @@ def export_markdown(title: str, session_id: str, rows, detail: str) -> tuple[str
             turns = data.get("turns", 0)
             duration = data.get("duration_ms", 0)
             lines.append(f"\n---\n*{turns} turns · {duration/1000:.1f}s*\n")
+
+    # Per-page-footer analogue for a format with no pages: close the document
+    # with the product line + banner + provenance notice.
+    lines.append(watermark_markdown_footer())
 
     return "\n".join(lines), "text/markdown"

@@ -38,7 +38,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .watermark import watermark_html, WATERMARK_HTML_CSS
+from .watermark import watermark_html, watermark_html_overlay, WATERMARK_HTML_CSS
 
 # CGIAR brand palette (mirrors synapsis/tools/create_chart.py)
 CGIAR_COLORS: list[str] = [
@@ -264,6 +264,7 @@ def render_dashboard_html(title: str, sections: list[dict]) -> str:
 {WATERMARK_HTML_CSS}</style>
 </head>
 <body>
+{watermark_html_overlay()}
 <header>
   <h1>{safe_title}</h1>
   <div class="meta">CGIAR Innovation Analytics · Generated {generated_at}</div>
