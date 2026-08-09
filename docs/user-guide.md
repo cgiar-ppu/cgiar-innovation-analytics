@@ -34,7 +34,7 @@ At the top of the interface, you will find a **dashboard** showing key portfolio
 |--------|---------------|
 | Total Results | 27,803 |
 | Total Innovations | 4,664 |
-| Innovation Uses | 559 |
+| Innovations in use | 559 |
 | Active Initiatives | 55 |
 | Countries Covered | 183 |
 | Knowledge Products | 12,850 |
@@ -132,7 +132,7 @@ A "result" is the core unit tracked in PRMS. It represents something CGIAR has p
 
 - **Knowledge Products** (12,850) — Publications, datasets, tools, and other research outputs
 - **Innovation Development** — The process of creating new technologies, practices, or approaches
-- **Innovation Use** (559) — Evidence that an innovation has been adopted or used by its target audience
+- **Innovations in use** (559) — Evidence that an innovation has been adopted or used by its target audience
 - **Policy Change** — Documented cases where CGIAR research influenced policy
 - **Capacity Sharing** — Activities that build capacity in partner organizations or countries
 - **Other Impact** — Additional outcome and impact categories

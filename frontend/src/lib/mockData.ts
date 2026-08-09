@@ -153,7 +153,7 @@ export const mockPRMSDashboard: PRMSDashboardData = {
       description: 'Distribution of innovation results across types',
       data: [
         { type: 'Innovation development', count: 2006 },
-        { type: 'Innovation use', count: 669 },
+        { type: 'Innovations in use', count: 669 },
         { type: 'Innovation Package', count: 95 },
       ],
       series: [{ key: 'count', label: 'Innovations' }],

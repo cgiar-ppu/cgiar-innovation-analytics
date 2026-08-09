@@ -206,7 +206,7 @@ SELECT 'Innovation Development' AS type,
      WHERE result_type_id = 7 AND source = 'API'
        AND status_id = 6 AND is_active = 1) AS count
 UNION ALL
-SELECT 'Innovation Use' AS type,
+SELECT 'Innovations in use' AS type,
     (SELECT COUNT(DISTINCT result_code) FROM result
      WHERE is_active = 1 AND result_type_id = 2) AS count
 UNION ALL
@@ -468,7 +468,7 @@ SELECT 'Innovation Development' AS type,
      WHERE result_type_id = 7 AND source = 'API' AND is_active = 1 AND status_id = 6
        AND reported_year_id = :year) AS count
 UNION ALL
-SELECT 'Innovation Use' AS type, (
+SELECT 'Innovations in use' AS type, (
     SELECT COUNT(DISTINCT result_code) FROM result
     WHERE is_active = 1
       AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))

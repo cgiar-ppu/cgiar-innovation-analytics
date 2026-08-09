@@ -127,7 +127,7 @@ export default function Dashboard() {
           color="#427730"
         />
         <StatsCard
-          label="Innovation Uses"
+          label="Innovations in use"
           value={kpis.innovation_uses}
           icon={<Lightbulb className="w-5 h-5" />}
           color="#E37222"

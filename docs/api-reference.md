@@ -350,7 +350,7 @@ curl https://cgiar-ia-dev-1903003658.eu-central-1.elb.amazonaws.com/api/dashboar
 |----------------------|---------|--------------------------------------------------|
 | `total_results`      | integer | Total active results in PRMS                     |
 | `total_innovations`  | integer | Count of innovation development results          |
-| `innovation_uses`    | integer | Count of documented innovation use cases         |
+| `innovation_uses`    | integer | Count of innovations in use (result type 2)      |
 | `active_initiatives` | integer | Distinct CGIAR initiatives with active results   |
 | `countries_covered`  | integer | Distinct countries with associated results       |
 | `knowledge_products` | integer | Results classified as knowledge products         |
