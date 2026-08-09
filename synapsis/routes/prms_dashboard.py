@@ -226,25 +226,90 @@ SELECT 'Innovation Package' AS type,
 ORDER BY count DESC;
 """
 
-# All-years top countries.
-# FIX (wave 2, F-2): added `source='Result' AND status_id=2` so the ranking is
-# scoped to the QAed dashboard population (matching the per-year branch and the
-# KPI cards). Without it the chart counted unQAed + bilateral rows (Kenya 357 →
-# 316, etc.). Geography note (Cheatsheet rule 5): this is a country breakdown
-# keyed on result_country only and is correct as-is. If a region/"Africa"
-# geography slicer is ever added here, it MUST use the country-ISO-3 OR
-# region-UN-M49 UNION rule — never one side alone.
+# All-years top countries, split by innovation readiness level (F13).
+#
+# F13 (2026-08-09): the chart used to be a flat "innovations per country" bar.
+# It now returns LONG-FORMAT rows (country, total, level, level_id, count) that
+# the route pivots into one stacked bar per country.
+#
+# SCOPE CHANGE (documented): the previous all-years query counted result types
+# 2, 7 and 10, but only Innovation Developments (type 7) carry a readiness
+# level, so a readiness split of that population would have been mostly empty.
+# The all-years ranking now uses the SAME canonical Innovation Development set
+# as the total_innovations KPI (W1/W2 latest-phase canon UNION W3/bilateral
+# Approved = the 1,852 headline innovations), which is also what the per-year
+# branch has always used. Effect on this DB: Kenya 316 -> 235, Ethiopia
+# 246 -> 193. The per-year numbers are unchanged (2025 Kenya = 189).
+#
+# IRL-PER-CODE RULE: a result code can carry different readiness levels across
+# rows/years, so the LEVEL IS THE LATEST ONE REPORTED WITHIN THE SELECTED
+# SCOPE — ROW_NUMBER() ordered by reported_year_id DESC, then result id DESC.
+# Exactly one level per code means the stacked segments of a country sum to
+# that country's DISTINCT-result-code count, with no row inflation. Codes with
+# no readiness record at all fall into an explicit "Not reported" segment
+# rather than silently vanishing from the total (the all-years canon set is
+# one row per code, so the ranking is a formality there; it is load-bearing
+# for multi-year selections).
+#
+# Geography note (Cheatsheet rule 5): this is a country breakdown keyed on
+# result_country only and is correct as-is. If a region/"Africa" slicer is ever
+# added it MUST use the country-ISO-3 OR region-UN-M49 UNION rule.
 _SQL_TOP_COUNTRIES = """
-SELECT c.name AS country, COUNT(DISTINCT r.result_code) AS count
-FROM result_country rc
-JOIN clarisa_countries c ON rc.country_id = c.id
-JOIN result r ON r.id = rc.result_id
-WHERE r.is_active = 1 AND rc.is_active = 1
-  AND r.source = 'Result' AND r.status_id = 2
-  AND r.result_type_id IN (2, 7, 10)
-GROUP BY c.name
-ORDER BY count DESC
-LIMIT 10;
+WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
+cand AS (
+    SELECT r.result_code, r.id, r.result_type_id, o.o AS phord
+    FROM result r JOIN ord o ON o.v = r.version_id
+    WHERE r.source = 'Result' AND r.is_active = 1 AND r.status_id = 2
+),
+pick AS (SELECT result_code, MAX(phord) AS m FROM cand GROUP BY result_code),
+latest AS (
+    SELECT c.* FROM cand c
+    JOIN pick p ON p.result_code = c.result_code AND p.m = c.phord
+),
+canon_w12 AS (
+    SELECT l.result_code, l.id, l.result_type_id FROM latest l
+    WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
+),
+canon_bilateral AS (
+    SELECT r.result_code, MAX(r.id) AS id, 7 AS result_type_id
+    FROM result r
+    WHERE r.source = 'API' AND r.status_id = 6 AND r.is_active = 1 AND r.result_type_id = 7
+    GROUP BY r.result_code
+),
+scope AS (
+    SELECT result_code, id FROM canon_w12 WHERE result_type_id = 7
+    UNION ALL
+    SELECT result_code, id FROM canon_bilateral
+),
+ranked_irl AS (
+    SELECT s.result_code, cirl.name AS level, cirl.id AS level_id,
+           ROW_NUMBER() OVER (PARTITION BY s.result_code ORDER BY s.id DESC) AS rn
+    FROM scope s
+    JOIN results_innovations_dev rid ON rid.results_id = s.id AND rid.is_active = 1
+    JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
+),
+code_irl AS (SELECT result_code, level, level_id FROM ranked_irl WHERE rn = 1),
+per_country AS (
+    SELECT c.name AS country, s.result_code
+    FROM scope s
+    JOIN result_country rc ON rc.result_id = s.id AND rc.is_active = 1
+    JOIN clarisa_countries c ON rc.country_id = c.id
+    GROUP BY c.name, s.result_code
+),
+top10 AS (
+    SELECT country, COUNT(DISTINCT result_code) AS total
+    FROM per_country GROUP BY country ORDER BY total DESC LIMIT 10
+)
+SELECT t.country AS country,
+       t.total AS total,
+       COALESCE(ci.level, 'Not reported') AS level,
+       COALESCE(ci.level_id, 9999) AS level_id,
+       COUNT(DISTINCT pc.result_code) AS count
+FROM top10 t
+JOIN per_country pc ON pc.country = t.country
+LEFT JOIN code_irl ci ON ci.result_code = pc.result_code
+GROUP BY t.country, t.total, level, level_id
+ORDER BY t.total DESC, level_id;
 """
 
 # All-years IRL distribution — BOTH funding windows (W1/W2 + W3/bilateral).
@@ -481,18 +546,52 @@ WHERE r.is_active = 1 AND rc.is_active = 1
 # Each breakdown joins directly from alive-in-year result rows so the scope
 # is consistent with the headline KPI (type 7, source='Result', is_active=1,
 # status_id=2, reported_year_id IN <selected years>).
+# Year-scoped top countries, split by readiness level (F13). Same alive-in-year
+# type-7 scope as before — the ranking and the per-country totals are unchanged
+# (2025: Kenya 189, Ethiopia 130, India 118); only the readiness split is new.
+# See _SQL_TOP_COUNTRIES for the IRL-per-code rule. It is load-bearing here:
+# 525 codes carry more than one readiness level across 2022-2025, so a
+# multi-year selection must pick exactly one (the latest reported) or the
+# stacked segments would exceed the country's distinct-code total.
 _SQL_YEAR_TOP_COUNTRIES = """
-SELECT c.name AS country, COUNT(DISTINCT r.result_code) AS count
-FROM result r
-JOIN result_country rc ON rc.result_id = r.id AND rc.is_active = 1
-JOIN clarisa_countries c ON rc.country_id = c.id
-WHERE r.result_type_id = 7
-  AND r.is_active = 1
-  AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
-  AND r.reported_year_id IN (__YEARS__)
-GROUP BY c.name
-ORDER BY count DESC
-LIMIT 10;
+WITH scope AS (
+    SELECT r.id, r.result_code, r.reported_year_id
+    FROM result r
+    WHERE r.result_type_id = 7
+      AND r.is_active = 1
+      AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
+      AND r.reported_year_id IN (__YEARS__)
+),
+ranked_irl AS (
+    SELECT s.result_code, cirl.name AS level, cirl.id AS level_id,
+           ROW_NUMBER() OVER (PARTITION BY s.result_code
+                              ORDER BY s.reported_year_id DESC, s.id DESC) AS rn
+    FROM scope s
+    JOIN results_innovations_dev rid ON rid.results_id = s.id AND rid.is_active = 1
+    JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
+),
+code_irl AS (SELECT result_code, level, level_id FROM ranked_irl WHERE rn = 1),
+per_country AS (
+    SELECT c.name AS country, s.result_code
+    FROM scope s
+    JOIN result_country rc ON rc.result_id = s.id AND rc.is_active = 1
+    JOIN clarisa_countries c ON rc.country_id = c.id
+    GROUP BY c.name, s.result_code
+),
+top10 AS (
+    SELECT country, COUNT(DISTINCT result_code) AS total
+    FROM per_country GROUP BY country ORDER BY total DESC LIMIT 10
+)
+SELECT t.country AS country,
+       t.total AS total,
+       COALESCE(ci.level, 'Not reported') AS level,
+       COALESCE(ci.level_id, 9999) AS level_id,
+       COUNT(DISTINCT pc.result_code) AS count
+FROM top10 t
+JOIN per_country pc ON pc.country = t.country
+LEFT JOIN code_irl ci ON ci.result_code = pc.result_code
+GROUP BY t.country, t.total, level, level_id
+ORDER BY t.total DESC, level_id;
 """
 
 # Per-year IRL distribution — BOTH funding windows. The JOIN to
@@ -622,6 +721,62 @@ def _bind_years(sql: str, years: Sequence[int]) -> str:
 def _year_params(years: Sequence[int]) -> dict[str, int]:
     """Build the ``{y0: 2024, y1: 2025}`` parameter dict for ``_bind_years``."""
     return {f"y{i}": y for i, y in enumerate(years)}
+
+
+#: Sentinel level_id used by the country queries for codes with no readiness
+#: record. Kept out of the IRL id range (11-20) so it always sorts last.
+_IRL_NOT_REPORTED_ID = 9999
+
+#: Colour for the "Not reported" stack segment. The real IRL levels take the
+#: frontend's 10-colour CGIAR palette in readiness order.
+_IRL_NOT_REPORTED_COLOR = "#8A8A8A"
+
+
+def _pivot_country_irl(
+    rows: Sequence[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Pivot long-format (country, level, count) rows into stacked-bar data.
+
+    Returns ``(data, series)`` where each data row is one country carrying one
+    numeric field per readiness level (``irl_<level_id>`` / ``irl_none``), and
+    ``series`` lists those fields in readiness order — low IRL first — with
+    "Not reported" last.
+
+    Level fields are keyed by id rather than by name so the chart never depends
+    on level names being free of characters a chart library might treat as a
+    path (e.g. "Model/Early Prototype").
+    """
+
+    def field(level_id: int) -> str:
+        return "irl_none" if level_id == _IRL_NOT_REPORTED_ID else f"irl_{level_id}"
+
+    countries: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    levels: dict[int, str] = {}
+
+    for row in rows:
+        country = row["country"]
+        if country not in countries:
+            countries[country] = {"country": country, "total": row.get("total", 0)}
+            order.append(country)
+        level_id = int(row.get("level_id", _IRL_NOT_REPORTED_ID))
+        levels.setdefault(level_id, row.get("level") or "Not reported")
+        countries[country][field(level_id)] = row.get("count", 0)
+
+    # Every country carries every level key so the stack is well-formed even
+    # where a level is absent for that country.
+    for entry in countries.values():
+        for level_id in levels:
+            entry.setdefault(field(level_id), 0)
+
+    series: list[dict[str, Any]] = []
+    for level_id in sorted(levels):
+        item: dict[str, Any] = {"key": field(level_id), "label": levels[level_id]}
+        if level_id == _IRL_NOT_REPORTED_ID:
+            item["color"] = _IRL_NOT_REPORTED_COLOR
+        series.append(item)
+
+    return [countries[c] for c in order], series
 
 
 def _entity_label(code: str, short_name: Optional[str]) -> str:
@@ -778,16 +933,22 @@ def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
         except sqlite3.Error as exc:
             logger.error("Chart query 'results_by_type' failed: %s", exc)
 
-        # Top 10 countries (bar chart)
+        # Top 10 countries, stacked by innovation readiness level (F13)
         try:
-            top_countries_data = _rows(cur, sql(sql_top_countries), params)
+            country_rows = _rows(cur, sql(sql_top_countries), params)
+            country_data, country_series = _pivot_country_irl(country_rows)
             charts["top_countries"] = {
-                "chartType": "bar",
-                "title": f"Top 10 Countries by Innovations{label_suffix}",
-                "description": "Countries with the most reported innovation results",
+                "chartType": "stackedBar",
+                "title": f"Top 10 Countries by Innovation Readiness{label_suffix}",
+                "description": (
+                    "Countries with the most Innovation Developments, each bar split "
+                    "by innovation readiness level (IRL, low to high). A result code "
+                    "is counted once per country at its latest reported readiness "
+                    "level, so the segments sum to the country's total."
+                ),
                 "xAxisKey": "country",
-                "data": top_countries_data,
-                "series": [{"key": "count", "label": "Innovations", "color": "#0065BD"}],
+                "data": country_data,
+                "series": country_series,
             }
         except sqlite3.Error as exc:
             logger.error("Chart query 'top_countries' failed: %s", exc)

@@ -27,6 +27,7 @@ from synapsis.routes.prms_dashboard import (  # noqa: E402
     _entity_chart_wording,
     _entity_label,
     _fetch_prms_data,
+    _pivot_country_irl,
     _year_params,
     normalize_years,
     years_label,
@@ -228,3 +229,87 @@ class TestTopEntitiesChart:
                 "Initiatives (2022–2024)",
                 "Programs & Accelerators (2025+)",
             )
+
+
+# ---------------------------------------------------------------------------
+# F13 — Top 10 countries, stacked by innovation readiness level
+# ---------------------------------------------------------------------------
+class TestCountryIRLPivot:
+
+    def test_pivot_produces_one_row_per_country_with_a_field_per_level(self):
+        rows = [
+            {"country": "Kenya", "total": 5, "level": "Idea", "level_id": 11, "count": 2},
+            {"country": "Kenya", "total": 5, "level": "Prototype", "level_id": 18, "count": 3},
+            {"country": "Mali", "total": 1, "level": "Prototype", "level_id": 18, "count": 1},
+        ]
+        data, series = _pivot_country_irl(rows)
+        assert [d["country"] for d in data] == ["Kenya", "Mali"]
+        assert data[0]["irl_11"] == 2 and data[0]["irl_18"] == 3
+        # Mali has no "Idea" innovations — the key must still exist and be 0,
+        # otherwise the stack is malformed.
+        assert data[1]["irl_11"] == 0
+        assert [s["key"] for s in series] == ["irl_11", "irl_18"]
+
+    def test_series_are_ordered_low_to_high_with_not_reported_last(self):
+        rows = [
+            {"country": "Kenya", "total": 3, "level": "Not reported", "level_id": 9999, "count": 1},
+            {"country": "Kenya", "total": 3, "level": "Prototype", "level_id": 18, "count": 1},
+            {"country": "Kenya", "total": 3, "level": "Idea", "level_id": 11, "count": 1},
+        ]
+        _, series = _pivot_country_irl(rows)
+        assert [s["label"] for s in series] == ["Idea", "Prototype", "Not reported"]
+        assert series[-1]["key"] == "irl_none"
+        assert series[-1]["color"] == "#8A8A8A"  # only "Not reported" is pinned
+
+    def test_level_fields_are_keyed_by_id_not_by_name(self):
+        # "Model/Early Prototype" contains a slash; keying by name would risk a
+        # chart library treating it as a nested path.
+        rows = [{"country": "Kenya", "total": 1, "level": "Model/Early Prototype",
+                 "level_id": 16, "count": 1}]
+        data, series = _pivot_country_irl(rows)
+        assert "irl_16" in data[0]
+        assert series[0]["label"] == "Model/Early Prototype"
+
+    def test_empty_input_is_handled(self):
+        assert _pivot_country_irl([]) == ([], [])
+
+
+@requires_prms_db
+class TestTopCountriesChart:
+
+    def test_chart_is_a_stacked_bar_with_an_irl_legend(self):
+        chart = _fetch_prms_data(years=[2025])["charts"]["top_countries"]
+        assert chart["chartType"] == "stackedBar"
+        assert chart["xAxisKey"] == "country"
+        labels = [s["label"] for s in chart["series"]]
+        assert labels[0] == "Idea" and labels[-1] == "Not reported"
+        assert "Proven Innovation" in labels
+
+    def test_2025_country_totals_are_unchanged_by_the_readiness_split(self):
+        # The per-year ranking scope did not change: only the split is new.
+        chart = _fetch_prms_data(years=[2025])["charts"]["top_countries"]
+        assert chart["data"][0]["country"] == "Kenya"
+        assert chart["data"][0]["total"] == 189
+        assert chart["data"][1]["total"] == 130  # Ethiopia
+        assert chart["data"][2]["total"] == 118  # India
+
+    @pytest.mark.parametrize("selection", [[2025], [2022], [2024, 2025], [2022, 2023, 2024, 2025], None])
+    def test_stacked_segments_always_sum_to_the_country_total(self, selection):
+        """No row inflation: one readiness level per result code, per scope."""
+        chart = _fetch_prms_data(years=selection)["charts"]["top_countries"]
+        assert len(chart["data"]) == 10
+        for row in chart["data"]:
+            segments = sum(v for k, v in row.items() if k.startswith("irl_"))
+            assert segments == row["total"], (selection, row["country"])
+
+    def test_countries_are_ranked_descending(self):
+        chart = _fetch_prms_data(years=None)["charts"]["top_countries"]
+        totals = [row["total"] for row in chart["data"]]
+        assert totals == sorted(totals, reverse=True)
+
+    def test_the_standalone_irl_distribution_chart_is_retained(self):
+        # F13 does not remove the portfolio-wide readiness chart; it answers a
+        # different question (portfolio shape vs geographic concentration).
+        charts = _fetch_prms_data(years=[2025])["charts"]
+        assert "irl_distribution" in charts
+        assert charts["irl_distribution"]["chartType"] == "bar"

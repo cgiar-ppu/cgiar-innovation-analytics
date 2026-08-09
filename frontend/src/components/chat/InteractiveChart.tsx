@@ -161,6 +161,51 @@ function RenderHorizontalBar({ data, series, xAxisKey }: ChartData) {
   )
 }
 
+/**
+ * Horizontal STACKED bar chart with a legend.
+ *
+ * Used by the dashboard's "Top 10 Countries by Innovation Readiness" chart
+ * (feedback item F13): one bar per country, segmented by IRL level. Horizontal
+ * because country names are long ("The Socialist Republic of Viet Nam") and
+ * would be unreadable rotated under a vertical bar.
+ *
+ * Series order is meaningful — the backend emits readiness levels low-to-high
+ * with "Not reported" last — so segments stack in readiness order.
+ */
+function RenderStackedBar({ data, series, xAxisKey }: ChartData) {
+  return (
+    <BarChart
+      data={data}
+      layout="vertical"
+      margin={{ top: 4, right: 16, bottom: 4, left: 0 }}
+    >
+      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
+      <XAxis type="number" tick={AXIS_TICK} axisLine={false} tickLine={false} />
+      <YAxis
+        type="category"
+        dataKey={xAxisKey}
+        width={CATEGORY_AXIS_WIDTH}
+        interval={0}
+        tick={<CategoryTick />}
+        axisLine={{ stroke: 'var(--border)' }}
+        tickLine={false}
+      />
+      <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'var(--surface-2)', fillOpacity: 0.4 }} />
+      <Legend wrapperStyle={{ fontSize: 10, paddingTop: 4 }} iconSize={8} />
+      {series.map((s, i) => (
+        <Bar
+          key={s.key}
+          dataKey={s.key}
+          name={s.label || s.key}
+          stackId="irl"
+          fill={getColor(i, s.color)}
+          animationDuration={800}
+        />
+      ))}
+    </BarChart>
+  )
+}
+
 function RenderLine({ data, series, xAxisKey }: ChartData) {
   return (
     <LineChart data={data} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
@@ -324,6 +369,7 @@ export function InteractiveChart({ data, className = '' }: InteractiveChartProps
       case 'bar': return <RenderBar {...data} />
       case 'multiBar': return <RenderBar {...data} />
       case 'horizontalBar': return <RenderHorizontalBar {...data} />
+      case 'stackedBar': return <RenderStackedBar {...data} />
       case 'line': return <RenderLine {...data} />
       case 'area': return <RenderArea {...data} />
       case 'stackedArea': return <RenderStackedArea {...data} />
