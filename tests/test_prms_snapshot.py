@@ -16,12 +16,15 @@ def _make_db(path, *, max_updated="2026-09-04 02:59:36.826833", rows=3, open_pha
     conn.executescript(
         """
         CREATE TABLE result (id INTEGER PRIMARY KEY, result_code INTEGER, last_updated_date TEXT);
-        CREATE TABLE version (id INTEGER PRIMARY KEY, phase_name TEXT, status INTEGER, is_active INTEGER);
-        INSERT INTO version VALUES (6, 'Reporting 2025', 0, 1);
+        CREATE TABLE version (id INTEGER PRIMARY KEY, phase_name TEXT, status INTEGER, is_active INTEGER, end_date TEXT);
+        INSERT INTO version VALUES (6, 'Reporting 2025', 0, 1, '2025-12-31T05:00:00.000Z');
+        -- June-2026 reality: the finished 2025 IPSR phase still flagged status=1. It has ENDED,
+        -- so it must NOT count as open (status alone misfires; see OPEN_PHASES_SQL).
+        INSERT INTO version VALUES (7, 'IPSR 2025', 1, 1, '2025-12-31T05:00:00.000Z');
         """
     )
     if open_phase:
-        conn.execute("INSERT INTO version VALUES (8, 'Reporting 2026', 1, 1)")
+        conn.execute("INSERT INTO version VALUES (8, 'Reporting 2026', 1, 1, '2026-12-31T05:00:00.000Z')")
     for i in range(rows):
         conn.execute(
             "INSERT INTO result VALUES (?, ?, ?)",
@@ -74,6 +77,7 @@ def test_latest_json_is_used_when_it_describes_the_same_file(root):
     assert info.data_as_of == "2026-09-04"
     assert info.result_count == 32194
     assert info.open_phases == ("8 Reporting 2026",)
+    assert info.open_phase_ids == (8,)  # phase 7 has status=1 but ended before the data date
     assert info.label == "PRMS snapshot 2026-09-07 (data as of 2026-09-04)"
     assert info.citation == "PRMS Database (snapshot 2026-09-07, data as of 2026-09-04)"
 
@@ -123,6 +127,29 @@ def test_cache_follows_symlink_retarget(root):
     assert second.extracted_on == "2026-09-08"
     assert second.data_as_of == "2026-09-08"
     assert second.result_count == 7
+
+
+def test_status_flag_alone_does_not_make_a_phase_open(root, tmp_path):
+    """June-2026 case: data date 2026-06-12, phases 6/7 (2025) flagged status=1 but ended → closed."""
+    june_dir = tmp_path / "fresh_13June2026"
+    june_dir.mkdir()
+    june = june_dir / "prdb_fresh.sqlite"
+    _make_db(str(june), max_updated="2026-06-12 16:57:11", rows=2, open_phase=False)
+    conn = sqlite3.connect(str(june))
+    conn.execute("UPDATE version SET status = 1 WHERE id = 6")  # both 2025 phases 'current' in June
+    conn.commit(); conn.close()
+    info = ps.get_snapshot_info(str(june))
+    assert info.data_as_of == "2026-06-12"
+    assert info.open_phases == () and info.open_phase_ids == ()
+
+
+def test_phase_with_null_end_date_and_status_1_counts_as_open(root, tmp_path):
+    db = tmp_path / "x.sqlite"
+    _make_db(str(db), open_phase=False)
+    conn = sqlite3.connect(str(db))
+    conn.execute("INSERT INTO version VALUES (9, 'IPSR 2026', 1, 1, NULL)")
+    conn.commit(); conn.close()
+    assert ps.get_snapshot_info(str(db)).open_phase_ids == (9,)
 
 
 def test_to_dict_is_json_serialisable(root):

@@ -142,7 +142,10 @@ def build_system_prompt(agents_dict: dict = None) -> str:
     _snap_rows = f"{_snap.result_count:,}" if _snap.result_count else "n/a"
     _snap_tables = str(_snap.table_count) if _snap.table_count else "n/a"
     _open_phases = ", ".join(_snap.open_phases) if _snap.open_phases else "none"
-    _open_phase_ids = ", ".join(p.split(" ", 1)[0] for p in _snap.open_phases) or "none"
+    _open_phase_filter = (
+        "`version_id NOT IN (" + ", ".join(str(i) for i in _snap.open_phase_ids) + ")`"
+        if _snap.open_phase_ids else "no filter needed — this snapshot has no open phase"
+    )
 
     return f"""You are a CGIAR innovations expert and data analyst with direct access to the PRMS
 SQLite database at {_prms_db_path} — {_snap_label}.
@@ -328,7 +331,7 @@ You have read-only access to the CGIAR PRMS (Performance and Results Management 
 **PRMS Database (canonical — the auto-refreshed snapshot):**
 - Path: `{_prms_db_path}` → {_snap_label}; {_snap_rows} rows in `result`, {_snap_tables} tables
 - The snapshot refreshes daily. The `prms_query` footer prints the snapshot it ran against — **quote that snapshot date next to every number** (never "June 2026" or any remembered date). Data state = {_snap_data_as_of}; extraction = {_snap_extracted}.
-- **Open (in-progress) reporting phases in this snapshot: {_open_phases}.** Rows in an open phase are provisional. Default behaviour: keep them OUT of per-year defaults and portfolio totals (add `reported_year_id <= 2025` or `version_id NOT IN ({_open_phase_ids})`). If the user explicitly asks about 2026, answer, but label every figure "provisional — open reporting phase, data as of {_snap_data_as_of}". The latest-phase dedup chains (1,3,4,6 and 2,5,7) already exclude open phases; naive unfiltered counts do NOT — say which you used.
+- **Open (in-progress) reporting phases in this snapshot: {_open_phases}.** Rows in an open phase are provisional. Default behaviour: keep them OUT of per-year defaults and portfolio totals (add {_open_phase_filter}). A phase is *open* when `version.status = 1` AND its `end_date` is after the snapshot data date ({_snap_data_as_of}) — `status` alone is not enough (the June-2026 snapshot still flagged the finished 2025 phases). If the user explicitly asks about 2026, answer, but label every figure "provisional — open reporting phase, data as of {_snap_data_as_of}". The latest-phase dedup chains (1,3,4,6 and 2,5,7) already exclude open phases; naive unfiltered counts do NOT — say which you used.
 - This is the exact database the `mcp__synapsis__prms_query` tool runs against. Use this path directly — do NOT use Glob/Bash/filesystem searches to locate the DB. You already know where it lives.
 
 **Reference files:**

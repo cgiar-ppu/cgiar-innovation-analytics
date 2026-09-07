@@ -55,6 +55,53 @@ _CACHE_TTL: float = 300.0  # 5 minutes
 _PRMS_DB_PATH = resolve_db_path()  # env PRMS_DB_PATH, else coding/PRMSDB/current (auto-refreshed)
 
 # ---------------------------------------------------------------------------
+# Reporting-phase scope (added 2026-09-07, snapshot re-point)
+# ---------------------------------------------------------------------------
+# Snapshots newer than June 2026 carry the 2026 reporting cycle while it is
+# still OPEN (`version.status = 1`; end date 2026-12-31). Rows in an open phase
+# are provisional and grow week by week. The canonical type-7 figures (1,852 /
+# 477 / 872 / 1,016 / 1,185) already exclude them because the latest-phase
+# chains list closed phases only — but the dashboard's naive KPIs (total
+# results, uses, packages) and the "latest readiness level per code" pivots do
+# NOT, and moved the moment the snapshot changed (all-years total 2,274 → 2,301,
+# packages 96 → 118, top-countries IRL split even for 2025).
+#
+# Rule (prms_data_guide §1.1): the dashboard shows CLOSED phases only (open =
+# `status = 1` AND `end_date` after the snapshot's data date; `status` alone would
+# have hidden the finished 2025 phases on the June snapshot). It is applied once
+# per connection as a TEMP VIEW named `result` — SQLite resolves an
+# unqualified table name in the `temp` schema before `main`, so every query in
+# this module transparently sees only closed-phase rows and no SQL had to be
+# rewritten (or can forget the rule later). Set IA_DASHBOARD_INCLUDE_OPEN_PHASES
+# =true to show open phases (a Marc-facing product decision, not a default).
+_INCLUDE_OPEN_PHASES: bool = os.getenv(
+    "IA_DASHBOARD_INCLUDE_OPEN_PHASES", "false"
+).lower() in ("true", "1", "yes")
+
+def _apply_phase_scope(conn: sqlite3.Connection) -> None:
+    """Restrict this connection's view of `result` to closed reporting phases.
+
+    The open-phase ids come from ``synapsis.prms_snapshot`` (open = ``status=1``
+    AND ``end_date`` after the snapshot's data date — ``status`` alone would
+    have hidden the finished 2025 phases on the June-2026 snapshot). Works on a
+    ``mode=ro`` connection: TEMP objects live in the connection's private temp
+    schema, not in the read-only file. No-op when
+    ``IA_DASHBOARD_INCLUDE_OPEN_PHASES`` is set or the snapshot has no open phase
+    (e.g. the June-2026 baseline), so those payloads are byte-identical to before.
+    """
+    if _INCLUDE_OPEN_PHASES:
+        return
+    ids = get_snapshot_info(_PRMS_DB_PATH).open_phase_ids
+    if not ids:
+        return
+    id_list = ", ".join(str(int(i)) for i in ids)  # ints only — never user input
+    conn.execute(
+        "CREATE TEMP VIEW IF NOT EXISTS result AS "
+        f"SELECT * FROM main.result WHERE version_id NOT IN ({id_list})"
+    )
+
+
+# ---------------------------------------------------------------------------
 # SQL Queries
 # ---------------------------------------------------------------------------
 
@@ -857,6 +904,7 @@ def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
 
     conn = sqlite3.connect(f"file:{_PRMS_DB_PATH}?mode=ro", uri=True)
     try:
+        _apply_phase_scope(conn)  # closed reporting phases only (see top of file)
         cur = conn.cursor()
 
         # -- KPIs (each wrapped individually so partial results are possible) --
@@ -1012,6 +1060,8 @@ def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
             "last_updated": datetime.now(tz=timezone.utc).isoformat(),
             # Which PRMS snapshot produced these numbers (date is data, not prose).
             "snapshot": get_snapshot_info(_PRMS_DB_PATH).to_dict(),
+            # True when open reporting phases were excluded from every figure above.
+            "closed_phases_only": not _INCLUDE_OPEN_PHASES,
         }
     finally:
         conn.close()

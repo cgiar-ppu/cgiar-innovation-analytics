@@ -98,6 +98,7 @@ class SnapshotInfo:
     result_count: Optional[int] = None
     table_count: Optional[int] = None
     open_phases: tuple[str, ...] = field(default_factory=tuple)
+    open_phase_ids: tuple[int, ...] = field(default_factory=tuple)
     source: str = "unknown"  # "latest.json" | "sqlite" | "unknown"
 
     # -- presentation helpers -------------------------------------------------
@@ -135,6 +136,7 @@ class SnapshotInfo:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["open_phases"] = list(self.open_phases)
+        d["open_phase_ids"] = list(self.open_phase_ids)
         d["label"] = self.label
         d["citation"] = self.citation
         return d
@@ -202,15 +204,18 @@ def _from_latest_json(path: str, realpath: str) -> Optional[SnapshotInfo]:
         # LATEST.json describes a different file than the one we read — do not
         # borrow its date. (Happens when PRMS_DB_PATH pins the June baseline.)
         return None
+    data_as_of = _iso_date(meta.get("max_last_updated_date"))
+    phases = _open_phases(realpath, data_as_of)
     return SnapshotInfo(
         path=path,
         realpath=realpath,
         available=True,
         extracted_on=_iso_date(meta.get("snapshot_date")),
-        data_as_of=_iso_date(meta.get("max_last_updated_date")),
+        data_as_of=data_as_of,
         result_count=_int_or_none(meta.get("result_count")),
         table_count=_int_or_none(meta.get("table_count")),
-        open_phases=_open_phases(realpath),
+        open_phases=tuple(f"{i} {n}" for i, n in phases),
+        open_phase_ids=tuple(i for i, _ in phases),
         source="latest.json",
     )
 
@@ -222,23 +227,38 @@ def _int_or_none(v: Any) -> Optional[int]:
         return None
 
 
-def _open_phases(realpath: str) -> tuple[str, ...]:
-    """Reporting phases still OPEN in this snapshot (``version.status = 1``).
+#: A reporting phase is OPEN when PRMS flags it current (``status = 1``) AND its
+#: ``end_date`` lies after the snapshot's data date. ``status`` alone is NOT
+#: enough: the June-2026 snapshot still carried ``status = 1`` on the 2025
+#: phases (6, 7) although they had ended on 2025-12-31 and their figures were
+#: final — treating them as open would have hidden 2025 entirely. On the
+#: 2026-09-07 snapshot the open phases are 8 "Reporting 2026" / 9 "IPSR 2026"
+#: (end 2026-12-31). ``?`` = the snapshot data date (``YYYY-MM-DD``).
+OPEN_PHASES_SQL = """
+SELECT id, phase_name FROM version
+WHERE is_active = 1 AND status = 1
+  AND (end_date IS NULL OR end_date = '' OR substr(end_date, 1, 10) > ?)
+ORDER BY id
+"""
+
+
+def _open_phases(realpath: str, data_as_of: Optional[str]) -> tuple[tuple[int, str], ...]:
+    """Return ``((id, phase_name), ...)`` of the phases still OPEN in this snapshot.
 
     Numbers inside an open phase are provisional and must never be folded into
-    portfolio totals without saying so. Returns labels like ``8 Reporting 2026``.
+    portfolio totals without saying so. When the data date is unknown, today's
+    date is used (conservative: a phase that has not ended yet counts as open).
     """
+    ref = data_as_of or _dt.date.today().isoformat()
     try:
         conn = sqlite3.connect(f"file:{realpath}?mode=ro", uri=True)
         try:
-            rows = conn.execute(
-                "SELECT id, phase_name FROM version WHERE status = 1 AND is_active = 1 ORDER BY id"
-            ).fetchall()
+            rows = conn.execute(OPEN_PHASES_SQL, (ref,)).fetchall()
         finally:
             conn.close()
     except sqlite3.Error:
         return ()
-    return tuple(f"{r[0]} {r[1]}" for r in rows)
+    return tuple((int(r[0]), str(r[1])) for r in rows)
 
 
 def _from_sqlite(path: str, realpath: str) -> SnapshotInfo:
@@ -263,15 +283,18 @@ def _from_sqlite(path: str, realpath: str) -> SnapshotInfo:
             extracted = _dt.date.fromtimestamp(os.stat(realpath).st_mtime).isoformat()
         except OSError:
             extracted = None
+    data_as_of = _iso_date(max_upd)
+    phases = _open_phases(realpath, data_as_of)
     return SnapshotInfo(
         path=path,
         realpath=realpath,
         available=True,
         extracted_on=extracted,
-        data_as_of=_iso_date(max_upd),
+        data_as_of=data_as_of,
         result_count=_int_or_none(cnt),
         table_count=_int_or_none(tables),
-        open_phases=_open_phases(realpath),
+        open_phases=tuple(f"{i} {n}" for i, n in phases),
+        open_phase_ids=tuple(i for i, _ in phases),
         source="sqlite",
     )
 
@@ -316,6 +339,7 @@ def snapshot_citation(db_path: Optional[str] = None) -> str:
 __all__ = [
     "DEFAULT_PRMS_DB_ROOT",
     "JUNE_2026_BASELINE_PATH",
+    "OPEN_PHASES_SQL",
     "SnapshotInfo",
     "default_db_path",
     "get_snapshot_info",
