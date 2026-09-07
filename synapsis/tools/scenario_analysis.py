@@ -24,6 +24,7 @@ from typing import Any
 from claude_agent_sdk import tool
 
 from synapsis.utils.responses import error_response, success_response
+from synapsis.prms_snapshot import resolve_db_path
 
 logger = logging.getLogger("synapsis.tools.scenario_analysis")
 
@@ -31,10 +32,7 @@ logger = logging.getLogger("synapsis.tools.scenario_analysis")
 # Configuration
 # ---------------------------------------------------------------------------
 
-PRMS_DB_PATH: str = os.getenv(
-    "PRMS_DB_PATH",
-    "/Users/smithai/workspace/coding/PRMSDB/prdb.sqlite",
-)
+PRMS_DB_PATH: str = resolve_db_path()  # env PRMS_DB_PATH, else coding/PRMSDB/current (auto-refreshed)
 
 VALID_SCENARIO_TYPES: list[str] = [
     "reallocation",

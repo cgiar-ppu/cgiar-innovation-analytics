@@ -16,6 +16,7 @@ Data is cached in-memory for 5 minutes since the PRMS snapshot is static.
 
 import logging
 import os
+from synapsis.prms_snapshot import get_snapshot_info, resolve_db_path
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -51,10 +52,7 @@ _CACHE_TTL: float = 300.0  # 5 minutes
 # ---------------------------------------------------------------------------
 # PRMS database path
 # ---------------------------------------------------------------------------
-_PRMS_DB_PATH = os.getenv(
-    "PRMS_DB_PATH",
-    "/Users/smithai/workspace/coding/PRMSDB/fresh_13June2026/prdb_fresh.sqlite",
-)
+_PRMS_DB_PATH = resolve_db_path()  # env PRMS_DB_PATH, else coding/PRMSDB/current (auto-refreshed)
 
 # ---------------------------------------------------------------------------
 # SQL Queries
@@ -1012,6 +1010,8 @@ def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
             "years": selected,
             "years_label": years_label(selected),
             "last_updated": datetime.now(tz=timezone.utc).isoformat(),
+            # Which PRMS snapshot produced these numbers (date is data, not prose).
+            "snapshot": get_snapshot_info(_PRMS_DB_PATH).to_dict(),
         }
     finally:
         conn.close()
@@ -1032,6 +1032,19 @@ def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
 # only one side silently undercounts (2024 Africa IRL7+: region-only=111,
 # country-only=203, comprehensive UNION=264). Add a regression test pinning
 # those numbers if such a slicer is introduced.
+
+@router.get("/prms/snapshot")
+async def prms_snapshot_info():
+    """Describe the PRMS snapshot the backend is reading (date is data, not prose).
+
+    Mirrors ``synapsis.prms_snapshot.get_snapshot_info()``: extraction date,
+    data state (``MAX(result.last_updated_date)``), row/table counts, open
+    reporting phases and ready-made ``label`` / ``citation`` strings. Cached for
+    60 s and keyed on the real file, so a daily symlink retarget is picked up
+    without a restart. Cheap enough to poll from any page footer.
+    """
+    return get_snapshot_info(_PRMS_DB_PATH).to_dict()
+
 
 @router.get("/dashboard/prms-stats")
 async def prms_dashboard_stats(

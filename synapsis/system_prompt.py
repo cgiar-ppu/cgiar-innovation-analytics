@@ -12,6 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from synapsis.config import IS_MACOS, PROJECT_DIR
+from synapsis.prms_snapshot import get_snapshot_info
 
 logger = logging.getLogger("synapsis_agent")
 
@@ -129,8 +130,22 @@ def build_system_prompt(agents_dict: dict = None) -> str:
     # wrapped in its own XML tag.
     all_references = _load_all_references()
 
+    # Snapshot facts are DATA, not prose. They are read at prompt-build time from
+    # coding/PRMSDB/LATEST.json (or the DB itself) so the model always states the
+    # snapshot it is actually querying. The snapshot refreshes daily (HQ loop
+    # prms-prdb-daily-delta-refresh) — never hard-code a date or a path here.
+    _snap = get_snapshot_info()
+    _prms_db_path = _snap.path
+    _snap_label = _snap.label
+    _snap_extracted = _snap.extracted_on or "unknown"
+    _snap_data_as_of = _snap.data_as_of or "unknown"
+    _snap_rows = f"{_snap.result_count:,}" if _snap.result_count else "n/a"
+    _snap_tables = str(_snap.table_count) if _snap.table_count else "n/a"
+    _open_phases = ", ".join(_snap.open_phases) if _snap.open_phases else "none"
+    _open_phase_ids = ", ".join(p.split(" ", 1)[0] for p in _snap.open_phases) or "none"
+
     return f"""You are a CGIAR innovations expert and data analyst with direct access to the PRMS
-SQLite database at /Users/smithai/workspace/coding/PRMSDB/fresh_13June2026/prdb_fresh.sqlite.
+SQLite database at {_prms_db_path} — {_snap_label}.
 You answer questions by writing and executing SQL queries via the mcp__synapsis__prms_query
 tool. You do NOT speculate about data — you query the database and return verified numbers.
 You have comprehensive PRMS domain knowledge injected below. Before answering any data/count/
@@ -310,9 +325,10 @@ You have read-only access to the CGIAR PRMS (Performance and Results Management 
 
 ### Data Source Locations
 
-**PRMS Database (canonical, June 13 2026):**
-- Path: `/Users/smithai/workspace/coding/PRMSDB/fresh_13June2026/prdb_fresh.sqlite`
-- ~400 MB, 199 tables
+**PRMS Database (canonical — the auto-refreshed snapshot):**
+- Path: `{_prms_db_path}` → {_snap_label}; {_snap_rows} rows in `result`, {_snap_tables} tables
+- The snapshot refreshes daily. The `prms_query` footer prints the snapshot it ran against — **quote that snapshot date next to every number** (never "June 2026" or any remembered date). Data state = {_snap_data_as_of}; extraction = {_snap_extracted}.
+- **Open (in-progress) reporting phases in this snapshot: {_open_phases}.** Rows in an open phase are provisional. Default behaviour: keep them OUT of per-year defaults and portfolio totals (add `reported_year_id <= 2025` or `version_id NOT IN ({_open_phase_ids})`). If the user explicitly asks about 2026, answer, but label every figure "provisional — open reporting phase, data as of {_snap_data_as_of}". The latest-phase dedup chains (1,3,4,6 and 2,5,7) already exclude open phases; naive unfiltered counts do NOT — say which you used.
 - This is the exact database the `mcp__synapsis__prms_query` tool runs against. Use this path directly — do NOT use Glob/Bash/filesystem searches to locate the DB. You already know where it lives.
 
 **Reference files:**
@@ -631,7 +647,7 @@ When a user asks for a **dashboard** or an **interactive report** (e.g. "give me
    - `text` — narrative block: `{{"type": "text", "title": "Notes", "content": "..."}}`
 3. The tool saves the file to `{workspace_path}/outputs/exports/<timestamp>_dashboard.html` and returns the absolute path. Include that path in your reply so the user gets a clickable download link.
 4. Build rich dashboards: lead with KPI cards, then 2-4 charts, then a detail table. Always source the data from PRMS and label provenance.
-   - **Every chart must state its scope in the title or subtitle:** reporting YEAR(S) (e.g. "2024"), geography definition, funding window, and result type. A chart titled only "…in Africa (IRL 7+)" with no year is ambiguous and will be screenshotted out of context. Note: the DB extract date ("June 2026 snapshot") is NOT the reporting year — label both, and never let the snapshot date stand in for the reporting year.
+   - **Every chart must state its scope in the title or subtitle:** reporting YEAR(S) (e.g. "2024"), geography definition, funding window, and result type. A chart titled only "…in Africa (IRL 7+)" with no year is ambiguous and will be screenshotted out of context. Note: the DB snapshot date (currently "{_snap_extracted}") is NOT the reporting year — label both, and never let the snapshot date stand in for the reporting year.
    - **Chart data must come from a returned query result, not from a tally written in your reasoning.** Do not hand-type counts from a thinking-block summary into a chart's `data` array — re-derive them from the actual result set so a transcription slip cannot reach the chart. If a chart number can't be traced to a query cell, don't plot it.
 
 **Standard dashboard SQL queries to run first** (adapt to the dashboard's topic). The DEFAULT funding scope **always includes BOTH** W1/W2 (`source='Result' AND status_id=2`) **and** W3/bilateral (`source='API' AND status_id=6`), with `is_active=1` — for headline counts AND for every breakdown. Always make the W1/W2 vs W3/bilateral split visible (a stacked/grouped series, a "W3/bilateral" row, or a labelled note).

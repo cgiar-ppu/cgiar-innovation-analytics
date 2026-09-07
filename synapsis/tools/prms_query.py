@@ -20,16 +20,15 @@ from typing import Any
 from claude_agent_sdk import tool
 
 from synapsis.utils.responses import error_response, success_response
+from synapsis.prms_snapshot import get_snapshot_info
+from synapsis.prms_snapshot import resolve_db_path
 
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-PRMS_DB_PATH: str = os.getenv(
-    "PRMS_DB_PATH",
-    "/Users/smithai/workspace/coding/PRMSDB/fresh_13June2026/prdb_fresh.sqlite",
-)
+PRMS_DB_PATH: str = resolve_db_path()  # env PRMS_DB_PATH, else coding/PRMSDB/current (auto-refreshed)
 
 # Safety limits
 # Default cap on rows returned when the query does not specify its own LIMIT
@@ -377,7 +376,7 @@ async def prms_query(args: dict[str, Any]) -> dict[str, Any]:
         "---",
         f"SQL executed: {limited_sql}",
         f"Execution time: {elapsed:.2f}s",
-        f"Source: PRMS Database (snapshot 2026-06-13)",
+        f"Source: {get_snapshot_info(PRMS_DB_PATH).citation}",
     ]
     if question:
         meta_lines.insert(1, f"Question: {question}")

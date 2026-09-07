@@ -90,6 +90,15 @@ export default function Dashboard() {
           <p className="text-sm text-[var(--text-muted)] mt-1">
             CGIAR innovation portfolio · {scopeLabel} — {kpis.total_results.toLocaleString()} innovations across {kpis.countries_covered} countries
           </p>
+          {/* Snapshot provenance — the date is data from the backend, never typed here. */}
+          <p className="text-xs text-[var(--text-muted)] mt-0.5" data-testid="dashboard-snapshot">
+            {prmsData.snapshot?.label ?? 'PRMS snapshot: date unavailable'}
+            {prmsData.snapshot?.open_phases?.length
+              ? ` · open reporting phase${prmsData.snapshot.open_phases.length > 1 ? 's' : ''} (${prmsData.snapshot.open_phases
+                  .map((p) => p.replace(/^\d+\s+/, ''))
+                  .join(', ')}) excluded from these figures`
+              : ''}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           {/* Year filter — "All years" + multiselect (F7) */}
@@ -202,7 +211,7 @@ export default function Dashboard() {
 
       {/* Footer: last updated timestamp */}
       <p className="text-xs text-center text-[var(--text-muted)]">
-        PRMS data as of {new Date(prmsData.last_updated).toLocaleDateString()} | Refreshes every 60 seconds
+        {prmsData.snapshot?.label ?? 'PRMS snapshot: date unavailable'} · figures fetched {new Date(prmsData.last_updated).toLocaleString()} | Refreshes every 60 seconds
       </p>
     </div>
   );

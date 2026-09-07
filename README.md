@@ -23,7 +23,7 @@ The CGIAR Innovation Analytics Platform provides intelligent, conversational acc
 
 - **Backend:** Python 3.11+ / FastAPI / WebSocket streaming / Claude Agent SDK (multi-agent orchestration)
 - **Frontend:** React 19 / TypeScript 5.7 / Vite 6 / Tailwind 3.4 / shadcn/ui / Zustand 5
-- **Data:** PRMS SQLite database (197 tables, ~398MB)
+- **Data:** PRMS SQLite snapshot (199 tables, ~470 MB), auto-refreshed daily — see CLAUDE.md → Data Source
 - **AI:** Claude Opus 4.6 orchestrator with specialist Sonnet subagents
 - **Deployment:** Native macOS (development) / AWS (production, planned)
 

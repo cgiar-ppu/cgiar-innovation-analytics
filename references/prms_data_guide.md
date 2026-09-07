@@ -1,6 +1,8 @@
 # PRMS Data Guide — Innovation Analytics Agent
 
-**Purpose:** Authoritative, query-ready guide for answering user questions about CGIAR **innovations** from the PRMS database. This guide is anchored on a set of **locked canonical counts** confirmed through an extensive reconstruction investigation (2026-06-14) against the live 13-June-2026 DB dump (`prdb_fresh.sqlite`) and the official CGIAR Results Dashboard "Export table" Excel output. Every count, every SQL template, and every caveat below is consistent with those locked numbers. When in doubt, the numbers in **Section 1** are ground truth.
+**Purpose:** Authoritative, query-ready guide for answering user questions about CGIAR **innovations** from the PRMS database. This guide is anchored on a set of **locked canonical counts** confirmed through an extensive reconstruction investigation (2026-06-14) against the June-2026 DB dump (`prdb_fresh.sqlite`) and the official CGIAR Results Dashboard "Export table" Excel output, and **re-verified identical on the 2026-09-07 snapshot**. Every count, every SQL template, and every caveat below is consistent with those locked numbers. When in doubt, the numbers in **Section 1** are ground truth for the closed phases 2022–2025.
+
+> **Which snapshot am I on?** Since 2026-09-07 the app reads the auto-refreshed snapshot `coding/PRMSDB/current` (metadata in `coding/PRMSDB/LATEST.json`), refreshed daily on delta. The `prms_query` tool footer prints the snapshot it ran against — quote *that* date next to every number, never a date remembered from this guide. See §1.1 for the open 2026 reporting phase that newer snapshots carry.
 
 > Companion file: `prms_schema_reference.md` (full table-by-table schema). This guide is the practical query/counting layer on top of it. Where the two disagree on a counting method, **this guide wins** — the schema reference predates the corrected dedup investigation.
 
@@ -8,7 +10,16 @@
 
 ## 1. Canonical Counts (Ground Truth)
 
-These are **locked**. They were reproduced exactly from `prdb_fresh.sqlite` using the corrected dedup CTE (Section 4) and verified 1:1 against the dashboard's Innovation Developments Excel export (1,630 rows; one row per logical innovation).
+These are **locked**. They were reproduced exactly from the June-2026 baseline (`prdb_fresh.sqlite`) using the corrected dedup CTE (Section 4), verified 1:1 against the dashboard's Innovation Developments Excel export (1,630 rows; one row per logical innovation), and re-verified unchanged on the 2026-09-07 snapshot (closed phases do not move).
+
+### 1.1 Open reporting phases (added 2026-09-07 — snapshot re-point)
+
+Newer snapshots carry the **2026 reporting cycle while it is still open**: `version` rows 8 "Reporting 2026" and 9 "IPSR 2026" have `status = 1` (open, end date 2026-12-31). On the 2026-09-07 snapshot they hold 144 active rows (21 type-7 Innovation Developments already `status_id = 2`, 12 type-10 packages, 90 type-11 complementary innovations, the rest in QA). These numbers grow week by week and are **provisional**.
+
+Rules:
+1. **Default scope stays 2022–2025.** Per-year defaults, the all-years headline (1,852) and every Section-1 figure exclude open phases. The latest-phase chains `(1,3,4,6)` / `(2,5,7)` do this by construction; a **naive unfiltered count does not** — add `reported_year_id <= 2025` or `version_id NOT IN (8, 9)` (derive the open ids from `SELECT id FROM version WHERE status = 1`, do not hard-code once more phases exist).
+2. **If the user asks about 2026, answer** — but label every figure *"provisional — open reporting phase, data as of &lt;snapshot data date&gt;"* and never fold it into a multi-year total without saying so.
+3. Closed phases never move: June-2026 → 2026-09-07 changed **zero** figures for 2022–2025 (re-verified: 477 / 872 / 1,016 / 1,185; headline 1,852).
 
 ### Innovation Developments — ALIVE-IN-YEAR, W1/W2 + W3/bilateral combined (the default per-year count)
 
@@ -23,7 +34,7 @@ The default per-year answer is the **Total** (W1/W2 pooled + W3/bilateral), alwa
 
 **Alive-in-year** counts an innovation in year X if it has at least one active row with `reported_year_id = X` that passes its funding-window QA gate: W1/W2 pooled (`source='Result' AND status_id=2`, "Quality Assessed") **or** W3/bilateral (`source='API' AND status_id=6`, "Approved"). A result_code that reported in 2022, 2023, and 2025 counts in all three years. These Totals are the correct default answers for "how many innovations in year X?" — show the W1/W2 vs W3/bilateral split, and note bilateral follows a separate QA pathway / is not on the public dashboard. W3/bilateral exists only from 2025, so 2022–2024 Total = W1/W2.
 
-Verified SQL (June 13 DB):
+Verified SQL (June-2026 baseline; identical on the 2026-09-07 snapshot):
 ```sql
 -- DEFAULT: both funding windows, broken out
 SELECT reported_year_id,
@@ -222,7 +233,7 @@ Rules:
    | **`COUNT(DISTINCT result_code)`** | **63** | ✓ |
 
    Both wrong values were produced by the live agent in QA Round 2 (2026-08-03) while the five *cited example codes* were correct — an inflated total can hide behind perfectly good citations.
-5. Every count carries its **snapshot vintage** ("June 13 2026 PRMS snapshot") — including short answers and answers where the count is incidental to a list.
+5. Every count carries its **snapshot vintage** — the date printed in the `prms_query` footer (e.g. "2026-09-07 PRMS snapshot, data as of 2026-09-04") — including short answers and answers where the count is incidental to a list. The snapshot refreshes daily; never quote a remembered date.
 
 ### Programme / initiative scoping — state the role basis (added 2026-08-03, QA Round 2)
 
@@ -287,7 +298,7 @@ ORDER BY reported_year_id;
 
 ## 6. Common Query Templates
 
-> All templates are SQLite, validated against `prdb_fresh.sqlite`. Join satellites on `result.id`; dedup/count on `result_code`. Filter `is_active = 1` everywhere.
+> All templates are SQLite, validated against the June-2026 baseline and re-run on the 2026-09-07 snapshot. Join satellites on `result.id`; dedup/count on `result_code`. Filter `is_active = 1` everywhere. Unless the user asks about 2026, also exclude the open reporting phase (§1.1).
 
 ### 6.1 Count by year — W1/W2 pooled component only (ALIVE-IN-YEAR; the pooled-only / public-dashboard view)
 *This is the W1/W2 component, used on request for the public-dashboard view. For the DEFAULT, include W3/bilateral too — see §6.1b (alive-in-year, both windows) and §6.2 (latest-phase dedup grand total).*

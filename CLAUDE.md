@@ -19,7 +19,8 @@ CGIAR Innovation Analytics Platform — a modular AI-powered analytics platform 
 
 ### Data Source
 
-- **PRMS Database:** SQLite at `/Users/smithai/workspace/coding/PRMSDB/prdb.sqlite` (197 tables, ~398MB)
+- **PRMS Database:** the auto-refreshed snapshot at `/Users/smithai/workspace/coding/PRMSDB/current` (symlink → newest verified `fresh_<YYYYMMDD>/prdb_<YYYYMMDD>.sqlite`; 199 tables, ~470 MB, 32k+ `result` rows). Metadata: `/Users/smithai/workspace/coding/PRMSDB/LATEST.json`. Refreshed daily on delta by the HQ loop `prms-prdb-daily-delta-refresh` (skill `ai--prms-data-refresh`). Override with `PRMS_DB_PATH`; June-2026 baseline for rollback/comparison: `…/PRMSDB/fresh_13June2026/prdb_fresh.sqlite` (never modify).
+- **Snapshot facts in code:** `synapsis/prms_snapshot.py` is the single source of truth (path resolution + `get_snapshot_info()` → date, counts, open phases). Never hard-code a snapshot date or path anywhere else. After a snapshot change rebuild the search index: `python -m synapsis.search.build_prms_index` (Mac: use a Python with `sentence-transformers`, e.g. the Synapsis venv).
 - **Schema docs:** `/Users/smithai/workspace/analysis/prms-database-discovery*.md` and `/Users/smithai/workspace/analysis/prms-schema-analysis.md`
 - **Innovation export:** `/Users/smithai/workspace/uploads/CGIAR_inovationPRMS_export_data_table_results_edited_GA.xlsx`
 
