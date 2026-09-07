@@ -667,7 +667,7 @@ WHERE r.result_type_id = 7 AND r.is_active = 1
 ...
 -- ❌ WRONG — `AND r.source='Result'` pre-excludes bilateral innovations that DO have IRL data
 ```
-> Real failure (2026-06-23): an IRL 7–9 count for Tanzania 2025 returned **45** instead of the dashboard's **46** because the query pre-filtered to `source='Result'`. The missing innovation was **result_code 28583** — a *bilateral* (`source='API'`) Innovation Development with a valid **IRL 9** record in `results_innovations_dev`. Bilateral rows are **not** uniformly devoid of readiness (or any other satellite) data — never assume they are. Include both windows and let the JOIN decide.
+> Real failure (2026-06-23): an IRL 7–9 count for Tanzania 2025 returned **45** instead of the dashboard's **46** because the query pre-filtered to `source='Result'`. *(Figures are June-2026-snapshot values. On the 2026-09-07 snapshot the same correct query returns **45**, because PRMS removed the Tanzania tag from result 18541 after June — so do not "correct" a 45 to 46 today; the lesson is the bilateral inclusion, not the number. Always re-run, never recite.)* The missing innovation was **result_code 28583** — a *bilateral* (`source='API'`) Innovation Development with a valid **IRL 9** record in `results_innovations_dev`. Bilateral rows are **not** uniformly devoid of readiness (or any other satellite) data — never assume they are. Include both windows and let the JOIN decide.
 
 - **Innovation Developments per year (the headline trend chart / KPI)** — use the CANONICAL dedup+bilateral query below verbatim. It returns one row per year with `w1w2`, `bilateral`, and `total` columns and matches the official dashboard totals (2022=62, 2023=160, 2024=445, 2025=1,185).
 - **By result type (both windows, broken out):**
