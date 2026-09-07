@@ -22,13 +22,11 @@ import sqlite3
 import sys
 
 from synapsis.search import corpus as corpus_mod
+from synapsis.prms_snapshot import resolve_db_path
 from synapsis.search import ranker as ranker_mod
 from synapsis.search.store import SearchStore
 
-DB = os.getenv(
-    "PRMS_DB_PATH",
-    "/Users/smithai/workspace/coding/PRMSDB/fresh_13June2026/prdb_fresh.sqlite",
-)
+DB = resolve_db_path()  # env PRMS_DB_PATH, else coding/PRMSDB/current (auto-refreshed)
 
 _RECIPE1_COUNT_SQL = """
 WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),

@@ -1,6 +1,6 @@
 # PRMS Query Cookbook
 **Status:** Authoritative — patterns here supersede ad-hoc SQL in conversations.  
-**Last verified:** 2026-06-14 against June 13 DB snapshot  
+**Last verified:** 2026-06-14 against the June-2026 baseline; re-verified 2026-09-07 against the auto-refreshed `coding/PRMSDB/current` snapshot — every 2022–2025 figure below is identical. Newer snapshots also carry an OPEN 2026 phase (`version_id` 8/9): exclude it by default, see pre-flight point 5.  
 **DB path:** `$PRMS_DB_PATH` (env var) or fallback from prms_dashboard.py
 
 ---
@@ -26,11 +26,13 @@ Run this 4-point check on every PRMS query. Most data errors come from skipping 
 
 6. **Count codes, never rows.** Every innovation count is `COUNT(DISTINCT result_code)` — including each arm of the W1/W2-vs-bilateral split. A `result_code` has one row per reporting phase, and any satellite join (`result_country`, `results_by_institution`, `results_innovations_dev`, `result_impact_area_score`, `results_by_inititiative`) fans it out further, so `COUNT(*)` / `SUM(CASE WHEN … THEN 1 END)` over a joined row set **over-counts**. If you list rows and then quote "N total", run a **separate** `SELECT COUNT(DISTINCT result_code)` with the same filters — never infer the total from the listing query, and remember `SELECT DISTINCT result_code, title, …` does **not** dedup by innovation (title/tag/IRL/year differ across a code's phases). (QA Round 2, 2026-08-03, same Ghana climate question: raw rows **109** ✗, `DISTINCT code,title,tag` rows **74** ✗, true **63** ✓.) Full rule: `prms_data_guide.md` → "Count innovations, never rows".
 
+7. **Open reporting phase = provisional data (added 2026-09-07).** Snapshots newer than June 2026 carry the 2026 cycle while it is still open (`version` 8 "Reporting 2026" / 9 "IPSR 2026", `status = 1`). Default scope is the closed phases 2022–2025: the latest-phase chains exclude open phases by construction, but any **naive / unfiltered** count must add `reported_year_id <= 2025` (or `version_id NOT IN (SELECT id FROM version WHERE status = 1)`). Answer 2026 questions only when asked, and label every such figure *provisional — open reporting phase, data as of <snapshot data date>*. Always quote the snapshot date printed in the `prms_query` footer.
+
 > **Incident reference (2026-06-15):** "all results … in 2024" was answered with the all-years `canon` CTE and no `reported_year_id` filter. It returned 176 Africa IRL7+ innovations led by "SP01 Breeding for Tomorrow" — but the correct 2024 figure is **111**, led by **INIT-01 Accelerated Breeding**. SP01 does not exist in 2024. See `docs/incident-2026-06-15-year-scope-regression.md`.
 
 ---
 
-## Quick Reference: Canonical Numbers (June 13 DB)
+## Quick Reference: Canonical Numbers (closed phases 2022–2025 — June-2026 baseline, identical on the 2026-09-07 snapshot)
 
 | Metric | All-years | 2022 | 2023 | 2024 | 2025 |
 |--------|-----------|------|------|------|------|
@@ -185,7 +187,7 @@ GROUP BY c.name ORDER BY count DESC LIMIT 10;
 -- Same pattern for IRL (JOIN results_innovations_dev) and initiatives (JOIN results_by_inititiative)
 ```
 
-**Expected output (verified against June 13 DB):**
+**Expected output (verified on the June-2026 baseline; identical on the 2026-09-07 snapshot):**
 
 | Year | W1/W2 | Bilateral | Total |
 |------|-------|-----------|-------|
@@ -347,7 +349,7 @@ WHERE r.result_type_id = 7
 GROUP BY cirl.level ORDER BY cirl.level;
 ```
 
-**Expected output (verified, June 13 DB):** IRL7=40, IRL8=25, IRL9=46 → **total 111** unique innovations.
+**Expected output (verified on the June-2026 baseline; identical on the 2026-09-07 snapshot):** IRL7=40, IRL8=25, IRL9=46 → **total 111** unique innovations.
 **Top 2024 programmes:** INIT-01 Accelerated Breeding (46), INIT-13 Plant Health (12), INIT-11 Excellence in Agronomy (11), INIT-21 (10) — **all `INIT-##`, zero `SP##`** (correct for 2024).
 
 > **Regression check:** if this query ever returns ~176 or shows `SP01`/"Breeding for Tomorrow", the `reported_year_id` filter has been dropped or an all-years dedup CTE has crept back in.

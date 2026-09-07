@@ -37,15 +37,14 @@ from synapsis.search import (
     FTS_FILE,
     VECTORS_FILE,
 )
+from synapsis.prms_snapshot import get_snapshot_info, resolve_db_path
 from synapsis.search import corpus as corpus_mod
 from synapsis.search import embedder as embedder_mod
 from synapsis.search import store as store_mod
 
-DEFAULT_DB = os.getenv(
-    "PRMS_DB_PATH",
-    "/Users/smithai/workspace/coding/PRMSDB/fresh_13June2026/prdb_fresh.sqlite",
-)
-DEFAULT_SNAPSHOT = "2026-06-13"
+DEFAULT_DB = resolve_db_path()  # env PRMS_DB_PATH, else coding/PRMSDB/current (auto-refreshed)
+# Snapshot tag recorded in prms_vectors_codes.json — derived from the DB actually indexed.
+DEFAULT_SNAPSHOT = get_snapshot_info(DEFAULT_DB).extracted_on or "unknown"
 
 
 def _load_existing_hashes(codes_file: Path, expected_dim: int) -> tuple[dict[int, str], dict[int, np.ndarray]]:

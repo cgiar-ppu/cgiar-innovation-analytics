@@ -31,6 +31,8 @@ from __future__ import annotations
 import html as _html
 from datetime import datetime, timezone
 
+from synapsis.prms_snapshot import get_snapshot_info
+
 # ---------------------------------------------------------------------------
 # Canonical wording — the single source of truth for all export formats.
 # Edit these constants (Jose drafts final, Marc sanity-checks) and every
@@ -48,6 +50,18 @@ PROVENANCE_NOTICE: str = (
     "requires human quality assurance before use or citation. "
     "Data as of {date}."
 )
+
+#: Snapshot provenance line — WHICH PRMS snapshot the figures came from. The
+#: value is data (synapsis/prms_snapshot.py reads LATEST.json / the DB), never
+#: typed here, so exports stop claiming a stale vintage after the daily refresh.
+#: Rendered directly under the provenance notice on every surface.
+SNAPSHOT_LINE: str = "{snapshot}."
+
+
+def snapshot_line(db_path: str | None = None) -> str:
+    """Return e.g. ``PRMS snapshot 2026-09-07 (data as of 2026-09-04).``"""
+    return SNAPSHOT_LINE.format(snapshot=get_snapshot_info(db_path).label)
+
 
 #: The CGIAR SO SOP mandatory disclosure sentence (Julien Colomer's deck).
 SOP_DISCLOSURE: str = (
@@ -132,6 +146,7 @@ def watermark_markdown(date: datetime | None = None) -> str:
     return (
         f"> **{WATERMARK_BANNER}**\n>\n"
         f"> {provenance_notice(date)}\n>\n"
+        f"> {snapshot_line()}\n>\n"
         f"> {export_timestamp_line(date)}\n>\n"
         f"> {SOP_DISCLOSURE}\n"
     )
@@ -145,13 +160,13 @@ def watermark_markdown_footer(date: datetime | None = None) -> str:
     last thing a reader (or a copy-paste) sees.
     """
     return (
-        f"\n---\n*{PRODUCT_FOOTER} • {WATERMARK_BANNER} • {provenance_notice(date)}*\n"
+        f"\n---\n*{PRODUCT_FOOTER} • {WATERMARK_BANNER} • {provenance_notice(date)} {snapshot_line()}*\n"
     )
 
 
 def watermark_plain(date: datetime | None = None) -> str:
     """Return a single-line plain-text notice (for logs / minimal contexts)."""
-    return f"{WATERMARK_BANNER} — {provenance_notice(date)} {SOP_DISCLOSURE}"
+    return f"{WATERMARK_BANNER} — {provenance_notice(date)} {snapshot_line()} {SOP_DISCLOSURE}"
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +183,7 @@ WATERMARK_HTML_CSS: str = (
     "letter-spacing:0.02em;text-transform:uppercase;display:block;margin-bottom:0.35rem;}"
     ".ai-watermark .ai-watermark-sop{color:#7a4a4a;font-style:italic;margin-top:0.35rem;display:block;}"
     ".ai-watermark .ai-watermark-timestamp{color:#7a4a4a;display:block;margin-top:0.35rem;}"
+    ".ai-watermark .ai-watermark-snapshot{color:#7a4a4a;display:block;margin-top:0.35rem;}"
     # --- Diagonal per-page draft watermark (zero-draft parity) --------------
     # Chromium repeats ``position:fixed`` elements on every printed page, which
     # is what turns this single div into the donor's per-page diagonal mark in
@@ -231,7 +247,7 @@ def watermark_html_overlay(date: datetime | None = None) -> str:
         f'<div class="ai-watermark-pagefooter" aria-hidden="true">'
         f"{PRODUCT_FOOTER} • "
         f'<span class="ai-watermark-banner">{WATERMARK_BANNER}</span> • '
-        f"{provenance_notice(date)}"
+        f"{provenance_notice(date)} {snapshot_line()}"
         f"</div>"
     )
 
@@ -247,6 +263,7 @@ def watermark_html(date: datetime | None = None) -> str:
         '<div class="ai-watermark" role="note" aria-label="AI-generated content notice">'
         f'<span class="ai-watermark-banner">{WATERMARK_BANNER}</span>'
         f"{provenance_notice(date)}"
+        f'<span class="ai-watermark-snapshot">{snapshot_line()}</span>'
         f'<span class="ai-watermark-timestamp">{export_timestamp_line(date)}</span>'
         f'<span class="ai-watermark-sop">{SOP_DISCLOSURE}</span>'
         "</div>"
@@ -412,7 +429,7 @@ def apply_ai_watermark(doc, *, date: datetime | None = None, title: str | None =
     its documents, in Innovation Analytics' own palette and wording:
 
     * a bordered, shaded **notice box** at the very top of the body — banner,
-      provenance notice + export timestamp, SOP disclosure (three paragraphs;
+      provenance notice + snapshot line + export timestamp, SOP disclosure (three paragraphs;
       no contact line — see Jose's 2026-08-09 ruling above);
     * a diagonal red **draft watermark on every page** (VML text shape in the
       section header, behind the content);
@@ -451,6 +468,11 @@ def apply_ai_watermark(doc, *, date: datetime | None = None, title: str | None =
     prov_run.font.color.rgb = RGBColor(0x5A, 0x00, 0x00)
     # Export timestamp rides in the same paragraph on its own line, exactly as
     # the zero-draft Data Notice does (a `break: 1` run after the provenance).
+    snap_run = prov_para.add_run()
+    snap_run.add_break()
+    snap_run.add_text(snapshot_line())
+    snap_run.font.size = Pt(9)
+    snap_run.font.color.rgb = RGBColor(0x5A, 0x00, 0x00)
     ts_run = prov_para.add_run()
     ts_run.add_break()
     ts_run.add_text(export_timestamp_line(date))

@@ -27,16 +27,14 @@ from typing import Any
 from fastapi import APIRouter, Depends
 
 from synapsis.auth.middleware import get_current_user
+from synapsis.prms_snapshot import resolve_db_path
 from synapsis.config import logger
 from synapsis.scope import VALID_YEARS
 
 router = APIRouter(prefix="/api", tags=["scope"])
 
 # Same resolution order as prms_dashboard.py / prms_query.py.
-_PRMS_DB_PATH = os.getenv(
-    "PRMS_DB_PATH",
-    "/Users/smithai/workspace/coding/PRMSDB/fresh_13June2026/prdb_fresh.sqlite",
-)
+_PRMS_DB_PATH = resolve_db_path()  # env PRMS_DB_PATH, else coding/PRMSDB/current (auto-refreshed)
 
 _ERA_LABELS = {
     2: "Initiatives (2022–2024)",
