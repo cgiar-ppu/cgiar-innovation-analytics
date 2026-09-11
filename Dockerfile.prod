@@ -72,7 +72,7 @@ ENV PYTHONUNBUFFERED=1 \
     CLAUDECODE=""
 
 # Fail the image build before replacing DEV if a required server import is missing.
-RUN python -c "from synapsis.server import app; assert any(r.path == '/api/voice/sessions' for r in app.routes)"
+RUN python -c "from synapsis.server import app; assert '/api/voice/sessions' in app.openapi()['paths']"
 
 # Non-root user
 RUN useradd -m -s /bin/bash appuser \
