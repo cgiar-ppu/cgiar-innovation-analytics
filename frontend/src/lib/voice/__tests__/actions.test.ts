@@ -75,6 +75,6 @@ describe('voice native chat actions', () => {
     const result = await adapter.execute('send_query', { session_id: 'one', message: 'Verify the cited result codes' }, signal, () => true)
     expect(result.status).toBe('accepted'); expect(result.run_id).toBe('real-receipt')
     expect(send).toHaveBeenCalledWith({ message: 'Verify the cited result codes', scope: { years: [2025], programs: ['SP09'] }, agent: 'prms_data_analyst' })
-    expect(useChatStore.getState().messages.at(-1)?.content).toBe('Verify the cited result codes')
+    expect(useChatStore.getState().messages.slice(-1)[0]?.content).toBe('Verify the cited result codes')
   })
 })
