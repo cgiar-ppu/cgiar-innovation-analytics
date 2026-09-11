@@ -19,6 +19,7 @@ import { useChatStore } from '../stores/chat'
 import { useSessionsStore } from '../stores/sessions'
 import { routeWebSocketMessage, type RouterContext } from './wsMessageRouter'
 import { getAuthToken } from '../stores/auth'
+import { observeChatEvent } from '../lib/chatCommands'
 
 /** Maximum delay (ms) between reconnection attempts. */
 const MAX_BACKOFF = 30_000
@@ -139,6 +140,7 @@ export function useWebSocket(): UseWebSocketReturn {
       try {
         const msg = JSON.parse(event.data)
         routeWebSocketMessage(msg, routerCtxRef.current)
+        observeChatEvent(msg)
       } catch (err) {
         console.error('[WebSocket] Error handling message:', err)
       }
@@ -173,6 +175,8 @@ export function useWebSocket(): UseWebSocketReturn {
   const send = useCallback((msg: ClientMessage) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(msg))
+    } else {
+      throw new Error("Chat is disconnected. Reconnect before sending.")
     }
   }, [])
 
