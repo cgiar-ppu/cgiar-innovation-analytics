@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import TopBar from './TopBar';
+import VoiceGuide from '../voice/VoiceGuide';
 import { ToastProvider } from '../common/Toast';
 import { WebSocketProvider } from '../../contexts/WebSocketContext';
 import { DesktopViewer } from '../desktop/DesktopViewer';
@@ -41,6 +42,7 @@ export default function Layout() {
         {/* Persistent AI-content disclaimer — visible on every view */}
         <DisclaimerFooter />
 
+        <VoiceGuide />
         <ToastProvider />
       </div>
     </WebSocketProvider>

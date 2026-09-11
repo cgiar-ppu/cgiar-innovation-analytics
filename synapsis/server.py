@@ -44,6 +44,8 @@ from synapsis.routes import (
     scope_router,
 )
 from synapsis.auth.routes import router as auth_router
+from synapsis.routes.voice import router as voice_router
+from synapsis.voice import sessions as voice_sessions
 from synapsis.websocket import ws_chat, get_activity_stats, cleanup_session_client
 from synapsis.workflow_ws import ws_workflow
 from synapsis.agent_ws import ws_agent
@@ -69,6 +71,7 @@ app.add_middleware(
 
 # -- Register route routers --
 app.include_router(auth_router)
+app.include_router(voice_router)
 app.include_router(health_router)
 app.include_router(files_router)
 app.include_router(sessions_router)
@@ -102,6 +105,7 @@ app.add_api_websocket_route("/ws/fleet/{fleet_id}", ws_fleet)
 async def on_startup():
     """Initialize the SQLite databases and background tasks on app startup."""
     await init_db()
+    await voice_sessions.startup()
     await init_workflow_db()
     await init_fleet_db()
     logger.info("Databases initialized (chat, workflow, fleet)")
@@ -134,6 +138,7 @@ async def on_shutdown():
     await chat_run_manager.shutdown()
     from synapsis.session import session_manager as _sm
     await _sm.stop_reaper()
+    await voice_sessions.shutdown()
     await close_db()
     await close_workflow_db()
     await close_fleet_db()

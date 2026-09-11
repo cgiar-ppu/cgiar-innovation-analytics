@@ -1,9 +1,7 @@
+import { sendChatQuery } from '../../lib/chatCommands'
 import { useEffect, useCallback } from 'react'
 import { Maximize2, Minimize2, Wrench, Loader2 } from 'lucide-react'
 import { useChatStore } from '../../stores/chat'
-import { usePersonaStore } from '../../stores/persona'
-import { useScopeStore } from '../../stores/scope'
-import { useSessionsStore } from '../../stores/sessions'
 import { useUIStore } from '../../stores/ui'
 import { useTTSStore } from '../../stores/tts'
 import { useAutoScroll } from '../../hooks/useAutoScroll'
@@ -49,39 +47,7 @@ export function ChatArea({ send, onFileUpload }: Props) {
   }, [])
 
   const handleSend = useCallback((text: string) => {
-    const { pendingAttachments, clearAttachments } = useChatStore.getState()
-
-    let enrichedText = text
-
-    if (pendingAttachments.length > 0) {
-      const attachmentBlock = [
-        '[Attached files]',
-        ...pendingAttachments.map(
-          (a) => `  ${a.fileName} -> ${a.filePath}`
-        ),
-        '[End attached files]',
-        '',
-      ].join('\n')
-
-      enrichedText = attachmentBlock + text
-      clearAttachments()
-    }
-
-    useChatStore.getState().addUserMessage(enrichedText)
-    const activeId = useSessionsStore.getState().activeSessionId
-    if (activeId) useSessionsStore.getState().markSessionBusy(activeId)
-
-    // Attach the active data scope (year / programme filters) so the backend
-    // can constrain the agent for this turn, and the selected specialist so it
-    // can route the turn. Both are `undefined` when nothing is selected — the
-    // frame is then byte-identical to the pre-filter/pre-picker one.
-    const scope = useScopeStore.getState().getActiveScope()
-    const agent = usePersonaStore.getState().getActivePersona()
-    send({
-      message: enrichedText,
-      ...(scope ? { scope } : {}),
-      ...(agent ? { agent } : {}),
-    })
+    sendChatQuery(text, send)
   }, [send])
 
   const handleCancel = useCallback(() => {

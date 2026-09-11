@@ -1,7 +1,6 @@
-import { useRef } from 'react'
 import { Plus } from 'lucide-react'
 import { useSessionsStore } from '../../stores/sessions'
-import { useChatStore } from '../../stores/chat'
+import { newChat, openChat } from '../../lib/chatCommands'
 import { SessionItem } from './SessionItem'
 import type { ClientMessage } from '../../lib/types'
 
@@ -12,64 +11,9 @@ interface Props {
 
 export function SessionList({ send }: Props) {
   const { sessions, activeSessionId } = useSessionsStore()
-  const { renameSession, deleteSession, setActiveSession, loadSessions } = useSessionsStore()
-  const abortRef = useRef<AbortController | null>(null)
-
-  const handleNewChat = () => {
-    // Cache the streaming session before switching so background tokens
-    // keep accumulating — same as handleSelect does for session switches.
-    const currentSession = useSessionsStore.getState().activeSessionId
-    if (currentSession) {
-      useChatStore.getState().cacheCurrentSession(currentSession)
-    }
-    useChatStore.getState().clearMessages()
-    setActiveSession(null)
-    send({ type: 'new_session' })
-  }
-
-  const handleSelect = async (sessionId: string) => {
-    if (sessionId === activeSessionId) return
-    abortRef.current?.abort()
-    abortRef.current = new AbortController()
-
-    // Cache the current session's state before switching away
-    if (activeSessionId) {
-      useChatStore.getState().cacheCurrentSession(activeSessionId)
-    }
-
-    setActiveSession(sessionId)
-
-    // If the session was previously marked busy, its cache may be stale:
-    // when we detach from a session's event stream (by switching away),
-    // completion events (result, session_complete) are buffered by the
-    // ChatRunManager but never forwarded to this connection. The cache
-    // therefore reflects the state at the time we left, not the current
-    // state. Invalidate it so we always load fresh data from the DB.
-    const wasBusy = useSessionsStore.getState().busySessions.has(sessionId)
-    if (wasBusy) {
-      useChatStore.getState().invalidateCachedSession(sessionId)
-    }
-
-    // Try to restore from cache first (preserves streaming state)
-    const restored = useChatStore.getState().restoreSession(sessionId)
-
-    if (!restored) {
-      // No cache — load from server
-      try {
-        // For sessions that are (or were) busy, use preserveBusy so the
-        // backend's buffer_replay_start can reconcile streaming state.
-        await useChatStore.getState().loadHistory(sessionId, abortRef.current.signal, wasBusy)
-      } catch { /* aborted or failed */ }
-    }
-
-    // Always tell the backend about the switch so subsequent messages are routed correctly
-    send({ type: 'switch_session', session_id: sessionId })
-
-    // Ensure busy state is set if the session is known to be busy
-    if (useSessionsStore.getState().busySessions.has(sessionId)) {
-      useChatStore.getState().setBusy(true)
-    }
-  }
+  const { renameSession, deleteSession, loadSessions } = useSessionsStore()
+  const handleNewChat = () => newChat(send)
+  const handleSelect = (id: string) => { void openChat(id, send).catch(() => {}) }
 
   const handleDelete = async (sessionId: string) => {
     await deleteSession(sessionId)

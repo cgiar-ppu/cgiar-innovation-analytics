@@ -8,6 +8,7 @@ import { SlashCommandMenu } from './SlashCommandMenu'
 import { useTextareaAutoGrow } from '../../hooks/useTextareaAutoGrow'
 import { useSkillsAutocomplete } from '../../hooks/useSkillsAutocomplete'
 import { useChatStore } from '../../stores/chat'
+import { useChatDraft } from '../../lib/chatCommands'
 
 interface Props {
   onSend: (text: string) => void
@@ -19,7 +20,7 @@ interface Props {
 export const ChatInput = memo(function ChatInput({ onSend, onCancel, onFileUpload, isBusy }: Props) {
   const pendingAttachments = useChatStore((s) => s.pendingAttachments)
   const removeAttachment = useChatStore((s) => s.removeAttachment)
-  const [text, setText] = useState('')
+  const { text, setText } = useChatDraft()
   const [isDragging, setIsDragging] = useState(false)
   const { textareaRef, adjustHeight } = useTextareaAutoGrow(200)
   const fileInputRef = useRef<HTMLInputElement>(null)
