@@ -16,8 +16,8 @@ export default function VoiceGuide() {
   const { send, isConnected } = useWebSocketContext()
   const navigate = useNavigate()
   const location = useLocation()
-  const current = useRef({ path: location.pathname, connected: isConnected })
-  current.current = { path: location.pathname, connected: isConnected }
+  const current = useRef({ path: location.pathname, connected: isConnected, send, navigate })
+  current.current = { path: location.pathname, connected: isConnected, send, navigate }
   const client = useRef<LiveClient | null>(null)
   const [available, setAvailable] = useState(false)
   const [open, setOpen] = useState(false)
@@ -40,7 +40,7 @@ export default function VoiceGuide() {
   useEffect(() => {
     let mounted = true
     api.get<{ enabled: boolean; configured: boolean }>('/api/voice/status').then(s => { if (mounted) setAvailable(s.enabled) }).catch(() => {})
-    const adapter = makeAdapter(send, navigate, () => current.current.path, () => current.current.connected)
+    const adapter = makeAdapter(message => current.current.send(message), path => current.current.navigate(path), () => current.current.path, () => current.current.connected)
     const instance = new LiveClient({
       status: (state, text) => { if (mounted) { setStatus(state); setMessage(text); if (state === 'connected') setStartedAt(Date.now()); if (state === 'idle' || state === 'error') setStartedAt(null) } },
       caption: caption => { if (mounted) setCaptions(rows => [...rows, caption].slice(-500)) },
@@ -53,7 +53,7 @@ export default function VoiceGuide() {
     const unload = () => instance.dispose()
     window.addEventListener('pagehide', unload)
     return () => { mounted = false; window.removeEventListener('pagehide', unload); instance.dispose(); client.current = null }
-  }, [send, navigate])
+  }, [])
   useEffect(() => { client.current?.contextChanged() }, [location.pathname])
   useEffect(() => {
     if (!startedAt) return
