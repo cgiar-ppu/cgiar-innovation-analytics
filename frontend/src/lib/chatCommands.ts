@@ -6,8 +6,13 @@ import { useChatStore } from '../stores/chat'
 import { useSessionsStore } from '../stores/sessions'
 import { useScopeStore } from '../stores/scope'
 import { usePersonaStore } from '../stores/persona'
+import { useAuthStore } from '../stores/auth'
 
 export const useChatDraft = create<{ text: string; setText: (text: string | ((previous: string) => string)) => void }>((set) => ({ text: '', setText: (text) => set(state => ({ text: typeof text === "function" ? text(state.text) : text })) }))
+// Drafts are transient and must never cross an identity change in the same tab.
+useAuthStore.subscribe((state, previous) => {
+  if (state.user?.userId !== previous.user?.userId || (previous.token && !state.token)) useChatDraft.getState().setText('')
+})
 export type SendChat = (message: ClientMessage) => void
 let selection = 0
 let ownDispatch = false

@@ -6,6 +6,7 @@ import { useChatStore } from '../../../stores/chat'
 import { useSessionsStore } from '../../../stores/sessions'
 import { useScopeStore } from '../../../stores/scope'
 import { usePersonaStore } from '../../../stores/persona'
+import { useAuthStore } from '../../../stores/auth'
 
 const chats = ['one', 'two'].map(id => ({ session_id: id, title: id, message_count: 0 })) as any
 const signal = new AbortController().signal
@@ -32,6 +33,12 @@ function setup() {
 }
 
 describe('voice native chat actions', () => {
+  it('clears the shared draft when the signed-in identity changes', () => {
+    useAuthStore.setState({ user: { userId: 'alice' } as any })
+    useChatDraft.getState().setText('Private unsent text')
+    useAuthStore.setState({ user: { userId: 'bob' } as any })
+    expect(useChatDraft.getState().text).toBe('')
+  })
   it('reads app without mutating and rejects unsupported action/arguments', async () => {
     const { adapter, send, navigate } = setup()
     expect((await adapter.execute('read_app', {}, signal, () => true)).active_chat).toBe('one')
