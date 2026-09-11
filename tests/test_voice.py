@@ -120,3 +120,10 @@ def test_knowledge_is_shipped_grounded_and_bounded():
     assert config['store'] is False
     assert all(t['parameters']['additionalProperties'] is False for t in config['delegation']['responses']['tools'])
     assert 'execute_code' not in str(config['delegation']['responses']['tools'])
+
+
+def test_container_declares_voice_http_dependency():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    assert any(line.startswith('httpx>=') for line in (root / 'requirements.txt').read_text().splitlines())
+    assert 'from synapsis.server import app' in (root / 'Dockerfile.prod').read_text()

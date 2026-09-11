@@ -6,6 +6,8 @@ websockets>=14.0
 python-multipart>=0.0.18
 aiofiles>=24.1.0
 aiosqlite>=0.20.0
+# Live voice session HTTP transport (also used by dictation/TTS).
+httpx>=0.27.0,<1.0.0
 
 # Required at startup: the prms_search tool imports synapsis.search.{ranker,store}
 # at module load (via synapsis/tools/__init__.py), and both do a top-level
