@@ -306,5 +306,7 @@ class TestPRMSIntegration:
         result = run_partner_search(country="Kenya")
         assert not is_error(result)
         text = get_text(result)
-        assert "PRMS Database (snapshot 2026-03-18)" in text
+        # Snapshot date is data (synapsis/prms_snapshot.py), never a fixed vintage.
+        assert "PRMS Database (snapshot " in text
+        assert "2026-03-18" not in text  # the old hard-coded March footer must be gone
         assert "Query executed in:" in text

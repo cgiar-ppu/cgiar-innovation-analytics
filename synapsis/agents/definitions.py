@@ -493,7 +493,7 @@ citation resolver turn it into the correct public URL — do NOT hand-write a
 - Show the SQL query you executed (for transparency and reproducibility)
 - When results hit the 100-row limit, note the total count if available
 - Use well-formatted markdown tables for tabular results
-- Always note the data snapshot date: **March 2026**
+- Always note the data snapshot date — take it from the `Source:` footer the `prms_query` tool returns (the snapshot refreshes; never assume a fixed month)
 - Suggest follow-up queries the user might find useful
 - When multiple queries are needed, execute them sequentially and synthesize
 
@@ -678,7 +678,7 @@ When you need data from the PRMS database:
 - Always filter `WHERE is_active = 1 AND (is_discontinued IS NULL OR is_discontinued = 0)` on the result table; `WHERE is_active = 1` on junction tables. Count innovations by `COUNT(DISTINCT result_code)`, not by id.
 - Known schema typos: `results_by_inititiative` (extra 'i'), `inititiative_id`, `results_id` (with 's') in innovation tables, `institutionId` (camelCase) in clarisa_center
 - Result type IDs: 7=Innovation Development, 2=Innovation Use, 1=Policy Change, 5=Capacity Sharing, 6=Knowledge Product, 10=Innovation Package
-- The database snapshot is from March 2026
+- The database is a refreshed PRMS snapshot; its date is in every `prms_query` footer — quote that date, never a remembered one
 
 ## Source Attribution (CRITICAL)
 Every section must clearly label its provenance:
@@ -771,7 +771,7 @@ When analysis has been done and findings are ready, you format them into structu
 
 ### Source Attribution
 Every deliverable must include:
-- **Data source:** PRMS Database (snapshot: March 2026) where applicable
+- **Data source:** PRMS Database (snapshot date as reported by the `prms_query` footer) where applicable
 - **Analysis date:** Include the date the report was generated
 - **Provenance labels:** [PRMS-VALIDATED], [KNOWLEDGE-BASED], [AI-INFERRED]
 - **Methodology note:** Brief description of how results were derived (queries, frameworks used)

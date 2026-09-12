@@ -19,7 +19,7 @@
 
 ## 3. What was actually correct for 2024
 
-Verified against `prdb_fresh.sqlite` (June 13 snapshot), alive-in-year 2024, Africa, IRL 7+:
+Verified against `prdb_fresh.sqlite` (June 13 snapshot; figures re-verified identical on the 2026-09-07 snapshot — closed phases do not move), alive-in-year 2024, Africa, IRL 7+:
 
 | Metric | Agent (wrong) | Correct 2024 | Error |
 |---|---|---|---|

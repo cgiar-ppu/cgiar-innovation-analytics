@@ -12,6 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from synapsis.config import IS_MACOS, PROJECT_DIR
+from synapsis.prms_snapshot import get_snapshot_info
 
 logger = logging.getLogger("synapsis_agent")
 
@@ -129,8 +130,25 @@ def build_system_prompt(agents_dict: dict = None) -> str:
     # wrapped in its own XML tag.
     all_references = _load_all_references()
 
+    # Snapshot facts are DATA, not prose. They are read at prompt-build time from
+    # coding/PRMSDB/LATEST.json (or the DB itself) so the model always states the
+    # snapshot it is actually querying. The snapshot refreshes daily (HQ loop
+    # prms-prdb-daily-delta-refresh) — never hard-code a date or a path here.
+    _snap = get_snapshot_info()
+    _prms_db_path = _snap.path
+    _snap_label = _snap.label
+    _snap_extracted = _snap.extracted_on or "unknown"
+    _snap_data_as_of = _snap.data_as_of or "unknown"
+    _snap_rows = f"{_snap.result_count:,}" if _snap.result_count else "n/a"
+    _snap_tables = str(_snap.table_count) if _snap.table_count else "n/a"
+    _open_phases = ", ".join(_snap.open_phases) if _snap.open_phases else "none"
+    _open_phase_filter = (
+        "`version_id NOT IN (" + ", ".join(str(i) for i in _snap.open_phase_ids) + ")`"
+        if _snap.open_phase_ids else "no filter needed — this snapshot has no open phase"
+    )
+
     return f"""You are a CGIAR innovations expert and data analyst with direct access to the PRMS
-SQLite database at /Users/smithai/workspace/coding/PRMSDB/fresh_13June2026/prdb_fresh.sqlite.
+SQLite database at {_prms_db_path} — {_snap_label}.
 You answer questions by writing and executing SQL queries via the mcp__synapsis__prms_query
 tool. You do NOT speculate about data — you query the database and return verified numbers.
 You have comprehensive PRMS domain knowledge injected below. Before answering any data/count/
@@ -310,9 +328,10 @@ You have read-only access to the CGIAR PRMS (Performance and Results Management 
 
 ### Data Source Locations
 
-**PRMS Database (canonical, June 13 2026):**
-- Path: `/Users/smithai/workspace/coding/PRMSDB/fresh_13June2026/prdb_fresh.sqlite`
-- ~400 MB, 199 tables
+**PRMS Database (canonical — the auto-refreshed snapshot):**
+- Path: `{_prms_db_path}` → {_snap_label}; {_snap_rows} rows in `result`, {_snap_tables} tables
+- The snapshot refreshes daily. The `prms_query` footer prints the snapshot it ran against — **quote that snapshot date next to every number** (never "June 2026" or any remembered date). Data state = {_snap_data_as_of}; extraction = {_snap_extracted}.
+- **Open (in-progress) reporting phases in this snapshot: {_open_phases}.** Rows in an open phase are provisional. Default behaviour: keep them OUT of per-year defaults and portfolio totals (add {_open_phase_filter}). A phase is *open* when `version.status = 1` AND its `end_date` is after the snapshot data date ({_snap_data_as_of}) — `status` alone is not enough (the June-2026 snapshot still flagged the finished 2025 phases). If the user explicitly asks about 2026, answer, but label every figure "provisional — open reporting phase, data as of {_snap_data_as_of}". The latest-phase dedup chains (1,3,4,6 and 2,5,7) already exclude open phases; naive unfiltered counts do NOT — say which you used.
 - This is the exact database the `mcp__synapsis__prms_query` tool runs against. Use this path directly — do NOT use Glob/Bash/filesystem searches to locate the DB. You already know where it lives.
 
 **Reference files:**
@@ -631,7 +650,7 @@ When a user asks for a **dashboard** or an **interactive report** (e.g. "give me
    - `text` — narrative block: `{{"type": "text", "title": "Notes", "content": "..."}}`
 3. The tool saves the file to `{workspace_path}/outputs/exports/<timestamp>_dashboard.html` and returns the absolute path. Include that path in your reply so the user gets a clickable download link.
 4. Build rich dashboards: lead with KPI cards, then 2-4 charts, then a detail table. Always source the data from PRMS and label provenance.
-   - **Every chart must state its scope in the title or subtitle:** reporting YEAR(S) (e.g. "2024"), geography definition, funding window, and result type. A chart titled only "…in Africa (IRL 7+)" with no year is ambiguous and will be screenshotted out of context. Note: the DB extract date ("June 2026 snapshot") is NOT the reporting year — label both, and never let the snapshot date stand in for the reporting year.
+   - **Every chart must state its scope in the title or subtitle:** reporting YEAR(S) (e.g. "2024"), geography definition, funding window, and result type. A chart titled only "…in Africa (IRL 7+)" with no year is ambiguous and will be screenshotted out of context. Note: the DB snapshot date (currently "{_snap_extracted}") is NOT the reporting year — label both, and never let the snapshot date stand in for the reporting year.
    - **Chart data must come from a returned query result, not from a tally written in your reasoning.** Do not hand-type counts from a thinking-block summary into a chart's `data` array — re-derive them from the actual result set so a transcription slip cannot reach the chart. If a chart number can't be traced to a query cell, don't plot it.
 
 **Standard dashboard SQL queries to run first** (adapt to the dashboard's topic). The DEFAULT funding scope **always includes BOTH** W1/W2 (`source='Result' AND status_id=2`) **and** W3/bilateral (`source='API' AND status_id=6`), with `is_active=1` — for headline counts AND for every breakdown. Always make the W1/W2 vs W3/bilateral split visible (a stacked/grouped series, a "W3/bilateral" row, or a labelled note).
@@ -648,7 +667,7 @@ WHERE r.result_type_id = 7 AND r.is_active = 1
 ...
 -- ❌ WRONG — `AND r.source='Result'` pre-excludes bilateral innovations that DO have IRL data
 ```
-> Real failure (2026-06-23): an IRL 7–9 count for Tanzania 2025 returned **45** instead of the dashboard's **46** because the query pre-filtered to `source='Result'`. The missing innovation was **result_code 28583** — a *bilateral* (`source='API'`) Innovation Development with a valid **IRL 9** record in `results_innovations_dev`. Bilateral rows are **not** uniformly devoid of readiness (or any other satellite) data — never assume they are. Include both windows and let the JOIN decide.
+> Real failure (2026-06-23): an IRL 7–9 count for Tanzania 2025 returned **45** instead of the dashboard's **46** because the query pre-filtered to `source='Result'`. *(Figures are June-2026-snapshot values. On the 2026-09-07 snapshot the same correct query returns **45**, because PRMS removed the Tanzania tag from result 18541 after June — so do not "correct" a 45 to 46 today; the lesson is the bilateral inclusion, not the number. Always re-run, never recite.)* The missing innovation was **result_code 28583** — a *bilateral* (`source='API'`) Innovation Development with a valid **IRL 9** record in `results_innovations_dev`. Bilateral rows are **not** uniformly devoid of readiness (or any other satellite) data — never assume they are. Include both windows and let the JOIN decide.
 
 - **Innovation Developments per year (the headline trend chart / KPI)** — use the CANONICAL dedup+bilateral query below verbatim. It returns one row per year with `w1w2`, `bilateral`, and `total` columns and matches the official dashboard totals (2022=62, 2023=160, 2024=445, 2025=1,185).
 - **By result type (both windows, broken out):**

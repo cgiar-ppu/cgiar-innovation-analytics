@@ -177,6 +177,23 @@ export interface PRMSKPIs {
   total_innovations_bilateral?: number;
 }
 
+/** Which PRMS snapshot the backend read (mirrors synapsis/prms_snapshot.py). */
+export interface PRMSSnapshotInfo {
+  available: boolean;
+  /** Dump/extraction date, ISO YYYY-MM-DD. */
+  extracted_on: string | null;
+  /** Data state = MAX(result.last_updated_date), ISO YYYY-MM-DD. */
+  data_as_of: string | null;
+  result_count: number | null;
+  table_count: number | null;
+  /** Reporting phases still open in this snapshot, e.g. "8 Reporting 2026". */
+  open_phases: string[];
+  source: 'latest.json' | 'sqlite' | 'unknown';
+  /** e.g. "PRMS snapshot 2026-09-07 (data as of 2026-09-04)". */
+  label: string;
+  citation: string;
+}
+
 export interface PRMSDashboardData {
   kpis: PRMSKPIs;
   charts: {
@@ -192,4 +209,6 @@ export interface PRMSDashboardData {
   /** Server-rendered label for the selection, e.g. "2024–2025" / "All years". */
   years_label?: string;
   last_updated: string;
+  /** Snapshot provenance; absent only on very old backends / mock data. */
+  snapshot?: PRMSSnapshotInfo;
 }

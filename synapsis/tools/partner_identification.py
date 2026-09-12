@@ -27,6 +27,8 @@ from typing import Any
 from claude_agent_sdk import tool
 
 from synapsis.utils.responses import error_response, success_response
+from synapsis.prms_snapshot import get_snapshot_info
+from synapsis.prms_snapshot import resolve_db_path
 
 logger = logging.getLogger("synapsis.tools.partner_identification")
 
@@ -34,10 +36,7 @@ logger = logging.getLogger("synapsis.tools.partner_identification")
 # Configuration
 # ---------------------------------------------------------------------------
 
-PRMS_DB_PATH: str = os.getenv(
-    "PRMS_DB_PATH",
-    "/Users/smithai/workspace/coding/PRMSDB/prdb.sqlite",
-)
+PRMS_DB_PATH: str = resolve_db_path()  # env PRMS_DB_PATH, else coding/PRMSDB/current (auto-refreshed)
 
 # Maximum results per source
 MAX_PRMS_PARTNERS: int = 30
@@ -719,7 +718,7 @@ async def partner_identification(args: dict[str, Any]) -> dict[str, Any]:
     result_text += f"""
 ---
 **Query executed in:** {elapsed:.2f}s
-**Source:** PRMS Database (snapshot 2026-03-18)
+**Source:** {get_snapshot_info(PRMS_DB_PATH).citation}
 **Partners from PRMS:** {len(partners)}
 **Attribution:** All PRMS results are [PRMS-VALIDATED]. Web search suggestions are [WEB-SOURCED].
 """

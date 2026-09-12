@@ -115,10 +115,8 @@ async def on_startup():
     # we (re)create them at every startup via CREATE INDEX IF NOT EXISTS. Mirrors
     # the PRMS_DB_PATH resolution used by prms_query.py / prms_dashboard.py.
     from synapsis.db_init import ensure_result_indexes
-    _prms_db_path = _os.getenv(
-        "PRMS_DB_PATH",
-        "/Users/smithai/workspace/coding/PRMSDB/prdb.sqlite",
-    )
+    from synapsis.prms_snapshot import resolve_db_path as _resolve_prms_db_path
+    _prms_db_path = _resolve_prms_db_path()
     ensure_result_indexes(_prms_db_path)
     logger.info("PRMS result-table indexes ensured (%s)", _prms_db_path)
 

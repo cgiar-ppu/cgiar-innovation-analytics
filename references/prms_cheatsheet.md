@@ -57,3 +57,6 @@ Linking innovations (type 7) to packages (type 10) via `result_by_innovation_pac
 
 ---
 *Worked check (2024, Africa, IRL 7+, Innovation Developments): region-only=111, country-only=203, **comprehensive country-OR-region = 264**. Led by INIT-01 Accelerated Breeding — no SP codes (correct for 2024).*
+
+### 9. Say which snapshot, and keep the open 2026 phase out of defaults (added 2026-09-07)
+The app reads the **auto-refreshed** snapshot (`coding/PRMSDB/current`); the `prms_query` footer prints the snapshot it ran against → **quote that date next to every number** (never "June 2026" from memory). Newer snapshots carry the **open** 2026 reporting phase (`version_id` 8/9 — open = `status=1` **and** `end_date` after the data date; `status` alone misfires): the canonical chains skip it, but a naive count does not — add `version_id NOT IN (<open ids>)` unless the user asks about 2026, and then label the figure *provisional — open reporting phase*. Closed-phase figures (rules 6–7) do not move between snapshots.
