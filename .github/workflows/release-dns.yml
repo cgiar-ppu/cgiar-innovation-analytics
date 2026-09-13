@@ -1,0 +1,20 @@
+name: IA release DNS
+on:
+  push:
+    branches: [feat/ia-release-20260914]
+    paths: [.github/dns-request.json]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  dns:
+    environment: MGMT
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::919959486181:role/cicd/github-actions-cgiar-innovation-analytics-MGMT-deploy
+          aws-region: eu-central-1
+      - run: pip install 'boto3>=1.35,<2'
+      - run: python3 .github/scripts/release-dns.py
