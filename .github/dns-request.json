@@ -1,15 +1,15 @@
 {
-  "Comment": "Publish IA staging on its dedicated TST load balancer",
+  "Comment": "Authorized production promotion: serve new SSO frontend from verified production ALB",
   "Changes": [
     {
       "Action": "UPSERT",
       "ResourceRecordSet": {
-        "Name": "innovation-analytics-staging.synapsis-analytics.com.",
+        "Name": "innovation-analytics.synapsis-analytics.com.",
         "Type": "CNAME",
         "TTL": 300,
         "ResourceRecords": [
           {
-            "Value": "cgiar-ia-staging-1012695535.eu-central-1.elb.amazonaws.com"
+            "Value": "cgiar-ia-prod-580846753.eu-central-1.elb.amazonaws.com"
           }
         ]
       }

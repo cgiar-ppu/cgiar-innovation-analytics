@@ -1,1 +1,4 @@
-{"stage":"staging","sequence":1}
+{
+  "stage": "prod",
+  "sequence": 2
+}
