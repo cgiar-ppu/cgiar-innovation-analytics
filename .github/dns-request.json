@@ -1,1 +1,18 @@
-{"Comment":"Validate IA staging HTTPS certificate","Changes":[{"Action":"UPSERT","ResourceRecordSet":{"Name":"_c9c1ebd227b5a774183ec0ec344f64ed.innovation-analytics-staging.synapsis-analytics.com.","Type":"CNAME","TTL":300,"ResourceRecords":[{"Value":"_8ece41bf4bf2f1a5ef4790d77b4d0e04.wzccmgtwzk.acm-validations.aws."}]}}]}
+{
+  "Comment": "Publish IA staging on its dedicated TST load balancer",
+  "Changes": [
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "innovation-analytics-staging.synapsis-analytics.com.",
+        "Type": "CNAME",
+        "TTL": 300,
+        "ResourceRecords": [
+          {
+            "Value": "cgiar-ia-staging-1012695535.eu-central-1.elb.amazonaws.com"
+          }
+        ]
+      }
+    }
+  ]
+}
