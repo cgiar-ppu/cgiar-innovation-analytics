@@ -23,6 +23,7 @@ from synapsis.config import (
     SELECTABLE_MODELS_FILTERED,
     SELF_SIGNUP_ENABLED,
     SIGNUP_ALLOWED_DOMAINS,
+    SSO_ENABLED,
 )
 from synapsis.agents import SUBAGENTS
 from synapsis.constants import MEMORY_CATEGORIES
@@ -35,6 +36,7 @@ async def health():
     """Basic health check returning model, workspace, and auth info."""
     return {
         "status": "ok",
+        "git_sha": os.getenv("GIT_SHA", "unknown"),
         "model": MODEL,
         "workspace": str(WORKSPACE),
         "auth_method": AUTH_METHOD,
@@ -81,4 +83,5 @@ async def get_config():
         # Empty list = no domain restriction. The login screen shows this as
         # a hint so users see the rule before submitting.
         "signup_allowed_domains": SIGNUP_ALLOWED_DOMAINS,
+        "sso_enabled": SSO_ENABLED,
     }

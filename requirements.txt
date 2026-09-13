@@ -19,6 +19,8 @@ numpy>=1.26.0
 # Authentication (Step 3 — app-level password login, JWT/bcrypt).
 # python-jose signs/verifies the session JWT; bcrypt hashes issued passwords.
 python-jose[cryptography]>=3.3.0
+Authlib==1.8.0
+PyJWT[crypto]>=2.10,<3
 bcrypt>=4.0.0
 
 # Document generation — required by synapsis/exporters/docx.py (and the

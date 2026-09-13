@@ -18,7 +18,8 @@ echo "=== Synapsis Startup (prod entrypoint) ==="
 mkdir -p /workspace/.synapsis
 
 # uvicorn command must match the original Dockerfile.prod CMD exactly.
-APP_CMD="python -m uvicorn app:app --host 0.0.0.0 --port ${SYNAPSIS_PORT:-7780}"
+# Access URLs can contain OAuth callback codes; application error logs remain on.
+APP_CMD="python -m uvicorn app:app --host 0.0.0.0 --port ${SYNAPSIS_PORT:-7780} --no-access-log"
 
 if [ -n "${LITESTREAM_S3_BUCKET}" ]; then
   echo "Litestream: attempting restore from s3://${LITESTREAM_S3_BUCKET}/litestream/chat.db ..."

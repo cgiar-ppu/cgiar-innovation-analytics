@@ -82,8 +82,7 @@ async def authenticate_user(email: str, password: str) -> Optional[dict]:
 
     Returns a user dict (without password_hash) on success, None on failure.
     The returned dict includes ``user_id`` — the stable identity claim that
-    every downstream consumer keys on (currently the email; the Cognito ``sub``
-    once SSO federates).
+    every downstream consumer keys on (the existing email owner ID, preserved after SSO linking).
     """
     user = await get_user_by_email(email)
     if not user:

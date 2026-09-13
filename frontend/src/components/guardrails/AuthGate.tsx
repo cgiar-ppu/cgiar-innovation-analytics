@@ -12,7 +12,7 @@
  */
 
 import { useEffect, type ReactNode } from 'react'
-import { useAuthStore } from '../../stores/auth'
+import { isSsoSession, useAuthStore } from '../../stores/auth'
 import LoginScreen from './LoginScreen'
 import DisclaimerModal from './DisclaimerModal'
 
@@ -22,6 +22,15 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     initialize()
   }, [initialize])
+
+  useEffect(() => {
+    const refresh = () => {
+      if (isSsoSession()) void useAuthStore.getState().refreshSso()
+    }
+    const timer = window.setInterval(refresh, 120_000)
+    window.addEventListener('focus', refresh)
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh) }
+  }, [])
 
   // While restoring the session, render nothing (avoids a flash of the login
   // screen for already-authenticated users).

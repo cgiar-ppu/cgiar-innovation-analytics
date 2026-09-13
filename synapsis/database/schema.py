@@ -196,3 +196,5 @@ async def init_db() -> None:
     # existing row's password hash.
     from synapsis.database.users import init_users_table
     await init_users_table()
+    from synapsis.auth.sso_storage import init_sso_tables
+    await init_sso_tables()

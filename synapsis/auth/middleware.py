@@ -98,8 +98,8 @@ def resolve_user_id(user: Optional[dict]) -> str:
     """Resolve a user payload to the single stable identity claim: ``user_id``.
 
     This is the identity abstraction the rest of the app keys on. It reads the
-    JWT ``sub`` today (the app-password email) and will read the Cognito ``sub``
-    once Entra ID SSO federates — with no change to any caller. Anonymous /
+    app JWT ``sub`` for both login paths. SSO resolves a verified identity to
+    the existing application owner ID; it never substitutes a Cognito subject. Anonymous /
     pre-auth requests resolve to the legacy sentinel so their sessions are not
     silently attributed to a real user.
     """

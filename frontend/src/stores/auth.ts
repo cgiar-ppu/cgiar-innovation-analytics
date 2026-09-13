@@ -10,8 +10,7 @@
  *
  * Identity is deliberately modelled as an abstraction: the rest of the app
  * only ever reads `user.userId` (a stable string claim). Today that claim is
- * the app-password user's email (JWT `sub`); when CGIAR Entra ID SSO is
- * federated via Cognito it becomes the Cognito `sub` — no consumer changes.
+ * the app-password user's email (JWT `sub`); SSO linking preserves that ID; new SSO users receive an opaque application ID.
  *
  * Persistence:
  *  - The token is persisted to localStorage so a page reload stays logged in.
@@ -23,6 +22,9 @@ import { create } from 'zustand'
 
 const TOKEN_KEY = 'ia-auth-token'
 const ACK_KEY_PREFIX = 'ia-disclaimer-ack:'
+const METHOD_KEY = 'ia-auth-method'
+let authEpoch = 0
+let ssoRestore: Promise<void> | null = null
 
 /** The resolved, identity-provider-agnostic user. */
 export interface AuthUser {
@@ -44,6 +46,10 @@ interface AuthState {
   ready: boolean
   /** Whether the backend requires authentication (false in dev-bypass mode). */
   authRequired: boolean
+  ssoLinkEmail: string | null
+  ssoError: string | null
+  refreshSso: () => Promise<void>
+  linkSso: (password: string) => Promise<string | null>
 
   /** Restore token from storage and validate it against /api/auth/me. */
   initialize: () => Promise<void>
@@ -87,8 +93,48 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   disclaimerAcknowledged: false,
   ready: false,
   authRequired: true,
+  ssoLinkEmail: null,
+  ssoError: null,
+
+  refreshSso: async () => {
+    if (!ssoRestore) {
+      ssoRestore = restoreSso().finally(() => { ssoRestore = null })
+    }
+    await ssoRestore
+  },
+
+  linkSso: async (password) => {
+    const epoch = authEpoch
+    try {
+      const response = await fetch("/api/auth/sso/link", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      })
+      const data = await response.json()
+      if (epoch !== authEpoch) return 'Sign-in was canceled.'
+      if (!response.ok) return data.detail ?? "Could not link your account."
+      acceptSso(data)
+      return null
+    } catch { return "Could not reach the server. Please try again." }
+  },
 
   initialize: async () => {
+    const params = new URLSearchParams(window.location.search)
+    if (params.has('sso') || params.has('sso_error')) {
+      window.history.replaceState({}, '', '/')
+      if (params.has('sso_error')) {
+        localStorage.removeItem(TOKEN_KEY)
+        localStorage.removeItem(METHOD_KEY)
+        set({ token: null, user: null, ready: true, authRequired: true,
+          ssoError: 'CGIAR sign-in was canceled or could not be completed. Please try again.' })
+        return
+      }
+      localStorage.setItem(METHOD_KEY, 'sso')
+    }
+    if (localStorage.getItem(METHOD_KEY) === 'sso') {
+      await get().refreshSso()
+      return
+    }
     // Discover whether the backend enforces auth (dev-bypass returns a user
     // from /me with no token). This keeps local dev frictionless while the
     // deployed dev URL requires a real login.
@@ -119,6 +165,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   login: async (email, password) => {
+    authEpoch++
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -131,6 +178,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const data = await res.json()
       const token: string = data.token
       const user = toAuthUser(data.user ?? {})
+      localStorage.setItem(METHOD_KEY, "password")
       localStorage.setItem(TOKEN_KEY, token)
       set({
         token,
@@ -145,6 +193,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   signup: async (name, email, password) => {
+    authEpoch++
     try {
       const res = await fetch('/api/auth/signup', {
         method: 'POST',
@@ -169,6 +218,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const data = await res.json()
       const token: string = data.token
       const user = toAuthUser(data.user ?? {})
+      localStorage.setItem(METHOD_KEY, "password")
       localStorage.setItem(TOKEN_KEY, token)
       set({
         token,
@@ -183,8 +233,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: () => {
+    authEpoch++
+    const wasSso = localStorage.getItem(METHOD_KEY) === 'sso'
     localStorage.removeItem(TOKEN_KEY)
-    set({ token: null, user: null, disclaimerAcknowledged: false })
+    localStorage.removeItem(METHOD_KEY)
+    set({ token: null, user: null, disclaimerAcknowledged: false, ssoLinkEmail: null, ssoError: null })
+    if (wasSso) {
+      fetch('/api/auth/sso/logout', { method: 'POST' })
+        .then(async response => {
+          if (!response.ok) throw new Error('Logout failed')
+          const data = await response.json()
+          window.location.assign(data.logout_url)
+        })
+        .catch(() => set({ ssoError: 'Local sign-out is complete, but the server could not end your CGIAR session. Reconnect and try again.' }))
+    }
   },
 
   acknowledgeDisclaimer: () => {
@@ -197,4 +259,39 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 /** Returns the current bearer token (for attaching to fetch / WebSocket calls). */
 export function getAuthToken(): string | null {
   return useAuthStore.getState().token
+}
+
+
+export function isSsoSession(): boolean {
+  return localStorage.getItem(METHOD_KEY) === 'sso'
+}
+
+function acceptSso(data: { token: string; user: Parameters<typeof toAuthUser>[0] }) {
+  const user = toAuthUser(data.user)
+  localStorage.setItem(METHOD_KEY, 'sso')
+  localStorage.setItem(TOKEN_KEY, data.token)
+  useAuthStore.setState({ token: data.token, user, ready: true, authRequired: true,
+    disclaimerAcknowledged: readAck(user.userId), ssoLinkEmail: null, ssoError: null })
+}
+
+async function restoreSso(): Promise<void> {
+  const epoch = authEpoch
+  try {
+    const response = await fetch('/api/auth/sso/session', { method: 'POST' })
+    const data = await response.json()
+    if (epoch !== authEpoch) return
+    if (response.status === 409 && data.link_required) {
+      localStorage.removeItem(TOKEN_KEY)
+      useAuthStore.setState({ token: null, user: null, ready: true, authRequired: true,
+        ssoLinkEmail: data.email, ssoError: null })
+      return
+    }
+    if (!response.ok) throw new Error('Session unavailable')
+    acceptSso(data)
+  } catch {
+    if (epoch !== authEpoch) return
+    localStorage.removeItem(TOKEN_KEY)
+    useAuthStore.setState({ token: null, user: null, ready: true, authRequired: true,
+      ssoLinkEmail: null, ssoError: 'Your CGIAR session could not be restored. Please sign in again.' })
+  }
 }

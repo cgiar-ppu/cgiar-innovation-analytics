@@ -115,6 +115,15 @@ if not SELECTABLE_MODELS_FILTERED:
 
 APP_VERSION: str = "2.0.0"
 
+# Optional Cognito SSO; all values are explicit per deployment, off by default.
+SSO_ENABLED = os.getenv("IA_SSO_ENABLED", "false").lower() == "true"
+SSO_ISSUER = os.getenv("IA_SSO_ISSUER", "").rstrip("/")
+SSO_CLIENT_ID = os.getenv("IA_SSO_CLIENT_ID", "")
+SSO_DOMAIN = os.getenv("IA_SSO_DOMAIN", "").rstrip("/")
+SSO_ORIGIN = os.getenv("IA_SSO_ORIGIN", "").rstrip("/")
+SSO_ALLOWED_DOMAINS = tuple(d.strip().lower() for d in os.getenv(
+    "IA_SSO_ALLOWED_DOMAINS", "cgiar.org").split(",") if d.strip())
+
 # ---------------------------------------------------------------------------
 # Server settings
 # ---------------------------------------------------------------------------

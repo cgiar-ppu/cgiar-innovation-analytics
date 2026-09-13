@@ -3,10 +3,9 @@ JWT token creation and validation.
 
 Ported from ast-chatbot/synapsis/auth/tokens.py.
 
-The token payload's ``sub`` claim is the stable identity. It is the app-password
-user's email today; it becomes the Cognito ``sub`` when CGIAR Entra ID SSO
-federates — the resolver (:func:`synapsis.auth.middleware.resolve_user_id`)
-reads ``sub`` in both cases, so the swap is transparent.
+The token payload's ``sub`` is the stable application identity. Legacy users
+keep their email owner key after explicit SSO linking; new SSO users get an
+opaque application ID. Cognito subjects are never substituted for owner keys.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -17,21 +16,25 @@ from jose import JWTError, jwt
 from synapsis.config import JWT_SECRET, JWT_ALGORITHM, JWT_EXPIRY_HOURS, logger
 
 
-def create_access_token(user_id: str, user_name: str, user_role: str) -> str:
+def create_access_token(user_id: str, user_name: str, user_role: str,
+                        *, email: str | None = None, lifetime_seconds: int | None = None) -> str:
     """Create a JWT access token for an authenticated user.
 
     Args:
-        user_id:   The stable identity claim (email now, Cognito ``sub`` later).
+        user_id:   The stable application owner ID, independent of identity provider.
         user_name: The user's display name.
         user_role: The user's role (admin, researcher, user).
 
     Returns:
         Encoded JWT string.
     """
-    expire = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRY_HOURS)
+    expire = datetime.now(timezone.utc) + (
+        timedelta(seconds=lifetime_seconds) if lifetime_seconds is not None
+        else timedelta(hours=JWT_EXPIRY_HOURS)
+    )
     payload = {
         "sub": user_id,
-        "email": user_id,
+        "email": email or user_id,
         "name": user_name,
         "role": user_role,
         "exp": expire,
