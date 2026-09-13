@@ -27,6 +27,8 @@ jobs:
           set -euo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = 972793825893
           aws cloudformation validate-template --template-body file://infra/cognito-dev.yaml >/dev/null
+      - name: Prepare protected credential transfer
+        run: python3 -m pip install 'boto3>=1.35,<2'
       - name: Deploy identity only
         env:
           ENTRA_CLIENT_ID: ${{ vars.IA_ENTRA_CLIENT_ID }}
