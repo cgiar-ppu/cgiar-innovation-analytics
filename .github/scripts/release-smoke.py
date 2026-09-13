@@ -45,6 +45,8 @@ async def main():
      assert 'REQUIRES HUMAN VALIDATION' in text
     else:
      assert WATERMARK_BANNER in r.text
+     if fmt=='pdf' and 'claude-sonnet-5' in config.AVAILABLE_MODELS:
+      raise AssertionError('Updated release must return a real PDF, not HTML fallback')
     results.append(fmt+' export watermark verified ('+r.headers.get('content-type','')+')')
    assert (await c.get('/api/history/'+session,headers={'Authorization':'Bearer '+other_token})).status_code==404
    assert (await c.get('/api/export/'+session,params={'token':other_token})).status_code==404
