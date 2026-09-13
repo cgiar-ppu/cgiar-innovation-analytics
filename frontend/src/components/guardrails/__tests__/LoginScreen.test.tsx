@@ -136,11 +136,22 @@ describe('LoginScreen', () => {
     const user = userEvent.setup()
     render(<LoginScreen />)
 
-    await user.type(screen.getByTestId('login-email'), 'alice@cgiar.org')
+    await user.type(await screen.findByTestId('login-email'), 'alice@cgiar.org')
     await user.type(screen.getByTestId('login-password'), 'correct-horse')
     await user.click(screen.getByTestId('login-submit'))
 
     await waitFor(() => expect(loginSpy).toHaveBeenCalledWith('alice@cgiar.org', 'correct-horse'))
     expect(signupSpy).not.toHaveBeenCalled()
   })
+})
+
+it('shows only CGIAR SSO when password login is disabled by the deployment', async () => {
+  resetStore()
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true,
+    json: async () => ({ sso_enabled: true, password_login_enabled: false, self_signup: false }) }))
+  render(<LoginScreen />)
+  expect(await screen.findByTestId('sso-login')).toHaveAttribute('href', '/api/auth/sso/start')
+  expect(screen.queryByTestId('login-password')).not.toBeInTheDocument()
+  expect(screen.queryByTestId('login-email')).not.toBeInTheDocument()
+  expect(screen.queryByTestId('signup-toggle')).not.toBeInTheDocument()
 })

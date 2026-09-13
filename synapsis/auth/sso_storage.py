@@ -1,4 +1,4 @@
-"""Encrypted, expiring OAuth state and explicit stable application identity links."""
+"""Encrypted, expiring OAuth state and stable CGIAR-only application identities."""
 import base64
 import hashlib
 import json
@@ -29,7 +29,7 @@ async def init_sso_tables():
         await db.execute("""CREATE TABLE IF NOT EXISTS sso_identities (
             issuer TEXT NOT NULL, subject TEXT NOT NULL,
             user_id TEXT NOT NULL UNIQUE, email TEXT NOT NULL, name TEXT NOT NULL,
-            legacy INTEGER NOT NULL, created_at REAL NOT NULL,
+            role TEXT NOT NULL DEFAULT 'researcher', created_at REAL NOT NULL,
             PRIMARY KEY (issuer, subject))""")
         await db.commit()
 
@@ -72,38 +72,22 @@ async def delete_session(key: str):
         await db.commit()
 
 
-class LinkRequired(Exception):
-    pass
+async def resolve_identity(claims: dict) -> dict:
+    """Fresh CGIAR identities; never match or migrate password accounts.
 
-
-async def resolve_identity(claims: dict, proven_legacy_email: str | None = None) -> dict:
-    """Email alone NEVER attaches a Microsoft identity to an existing account.
-
-    Legacy linking requires independently verified password ownership. A new
-    researcher gets an opaque owner key; later email changes cannot change it.
+    A stable opaque owner key is bound only to the verified issuer/subject.
+    Roles are assigned in the application DB, never from external role claims.
     """
     issuer, subject, email = claims["iss"], claims["sub"], claims["email"]
     async with get_db() as db:
         await db.execute("BEGIN IMMEDIATE")
-        cursor = await db.execute("SELECT * FROM sso_identities WHERE issuer=? AND subject=?", (issuer, subject))
-        link = await cursor.fetchone()
-        if not link:
-            cursor = await db.execute("SELECT email FROM users WHERE email=?", (email,))
-            existing = await cursor.fetchone()
-            if existing and proven_legacy_email != email:
-                raise LinkRequired()
-            user_id = email if existing else "sso:" + str(uuid.uuid4())
+        cursor = await db.execute("SELECT user_id, role FROM sso_identities WHERE issuer=? AND subject=?", (issuer, subject))
+        identity = await cursor.fetchone()
+        if not identity:
+            identity = {"user_id": "sso:" + str(uuid.uuid4()), "role": "researcher"}
             await db.execute("INSERT INTO sso_identities VALUES (?, ?, ?, ?, ?, ?, ?)", (
-                issuer, subject, user_id, email, str(claims.get("name", "")), bool(existing), time.time(),
+                issuer, subject, identity["user_id"], email, str(claims.get("name", "")), "researcher", time.time(),
             ))
-            link = {"user_id": user_id, "legacy": bool(existing)}
-        user = {"user_id": link["user_id"], "email": email,
-                "name": str(claims.get("name", "")), "role": "researcher"}
-        if link["legacy"]:
-            cursor = await db.execute("SELECT email, name, role FROM users WHERE email=?", (link["user_id"],))
-            existing = await cursor.fetchone()
-            if not existing:
-                raise ValueError("Linked application account is unavailable")
-            user.update(dict(existing))
         await db.commit()
-    return user
+    return {"user_id": identity["user_id"], "email": email,
+            "name": str(claims.get("name", "")), "role": identity["role"]}

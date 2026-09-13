@@ -134,7 +134,7 @@ async def test_callback_replay_and_session_storage(client, signer, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_legacy_link_requires_password_preserves_role_and_owner(client, signer, monkeypatch):
+async def test_matching_legacy_email_never_inherits_role_or_old_chats(client, signer, monkeypatch):
     async with get_db() as db:
         await db.execute("INSERT INTO users VALUES (?, ?, ?, ?, ?)", (
             "person@cgiar.org", "Existing Name", "admin", hash_password("existing-app-password"), time.time()))
@@ -142,16 +142,14 @@ async def test_legacy_link_requires_password_preserves_role_and_owner(client, si
         await db.commit()
     await establish(client, signer, monkeypatch)
     response = await client.post("/api/auth/sso/session")
-    assert response.status_code == 409 and response.json()["link_required"]
-    assert (await client.post("/api/auth/sso/link", json={"password": "wrong"})).status_code == 401
-    response = await client.post("/api/auth/sso/link", json={"password": "existing-app-password"})
     assert response.status_code == 200
     user = verify_token(response.json()["token"])
-    assert user["user_id"] == "person@cgiar.org" and user["role"] == "admin"
+    assert user["user_id"].startswith("sso:") and user["role"] == "researcher"
     async with get_db() as db:
-        assert (await (await db.execute("SELECT user_id FROM sessions WHERE session_id='old-chat'")).fetchone())[0] == user["user_id"]
-    # Subsequent SSO access no longer needs the legacy password.
+        old_owner = (await (await db.execute("SELECT user_id FROM sessions WHERE session_id='old-chat'")).fetchone())[0]
+        assert old_owner == "person@cgiar.org" and old_owner != user["user_id"]
     assert (await client.post("/api/auth/sso/session")).json()["user"]["user_id"] == user["user_id"]
+    assert (await client.post("/api/auth/sso/link", json={"password": "existing-app-password"})).status_code == 404
 
 
 @pytest.mark.asyncio
@@ -170,7 +168,7 @@ async def test_new_users_have_distinct_stable_ids_and_no_admin_claim_trust(clien
 @pytest.mark.asyncio
 async def test_cross_origin_session_link_logout_rejected(client, signer, monkeypatch):
     await establish(client, signer, monkeypatch)
-    for path in ("session", "logout", "link"):
+    for path in ("session", "logout"):
         response = await client.post("/api/auth/sso/" + path, headers={"Origin": "https://evil.example"}, json={"password": "x"})
         assert response.status_code == 403
 
@@ -213,3 +211,17 @@ async def test_disabled_sso_is_closed(client, monkeypatch):
     monkeypatch.setattr(config, "SSO_ENABLED", False)
     assert (await client.get("/api/auth/sso/start")).status_code == 404
     assert (await client.get("/api/auth/sso/config")).json() == {"enabled": False}
+
+
+@pytest.mark.asyncio
+async def test_sso_only_rejects_password_login_and_preexisting_password_tokens(client, monkeypatch):
+    from synapsis.auth.routes import router as password_router
+    from synapsis.auth.tokens import create_access_token
+    monkeypatch.setattr(config, "PASSWORD_LOGIN_ENABLED", False)
+    token = create_access_token("old@cgiar.org", "Old Admin", "admin")
+    assert verify_token(token) is None
+    app = FastAPI()
+    app.include_router(password_router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://ia.test") as http:
+        assert (await http.post("/api/auth/login", json={"email": "old@cgiar.org", "password": "anything"})).status_code == 404
+        assert (await http.post("/api/auth/signup", json={"name": "Old", "email": "old@cgiar.org", "password": "anything-long"})).status_code == 404

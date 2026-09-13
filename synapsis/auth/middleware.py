@@ -99,7 +99,7 @@ def resolve_user_id(user: Optional[dict]) -> str:
 
     This is the identity abstraction the rest of the app keys on. It reads the
     app JWT ``sub`` for both login paths. SSO resolves a verified identity to
-    the existing application owner ID; it never substitutes a Cognito subject. Anonymous /
+    a fresh opaque owner ID without linking historical password accounts. Anonymous /
     pre-auth requests resolve to the legacy sentinel so their sessions are not
     silently attributed to a real user.
     """

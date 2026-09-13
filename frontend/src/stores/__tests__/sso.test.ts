@@ -11,7 +11,7 @@ describe('SSO session lifecycle', () => {
     localStorage.clear()
     window.history.replaceState({}, '', '/')
     useAuthStore.setState({ token: null, user: null, ready: false, authRequired: true,
-      ssoLinkEmail: null, ssoError: null, disclaimerAcknowledged: false })
+      ssoError: null, disclaimerAcknowledged: false })
   })
 
   it('consumes the callback marker and deduplicates simultaneous initialization', async () => {
@@ -26,15 +26,15 @@ describe('SSO session lifecycle', () => {
     expect(useAuthStore.getState().disclaimerAcknowledged).toBe(true)
   })
 
-  it('does not expose the app before a legacy identity has been linked', async () => {
+  it('clears the previous bearer token when the server session expires', async () => {
     localStorage.setItem('ia-auth-method', 'sso')
     localStorage.setItem('ia-auth-token', 'previous-user-token')
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 409,
-      json: async () => ({ link_required: true, email: 'existing@cgiar.org' }) }))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401,
+      json: async () => ({ detail: 'Session expired' }) }))
     await useAuthStore.getState().initialize()
     expect(useAuthStore.getState().user).toBeNull()
     expect(localStorage.getItem('ia-auth-token')).toBeNull()
-    expect(useAuthStore.getState().ssoLinkEmail).toBe('existing@cgiar.org')
+    expect(useAuthStore.getState().ssoError).toMatch(/sign in again/i)
   })
 
   it('shows canceled-login errors and clears any previous app token', async () => {

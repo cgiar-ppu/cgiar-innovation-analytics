@@ -3,21 +3,22 @@ JWT token creation and validation.
 
 Ported from ast-chatbot/synapsis/auth/tokens.py.
 
-The token payload's ``sub`` is the stable application identity. Legacy users
-keep their email owner key after explicit SSO linking; new SSO users get an
-opaque application ID. Cognito subjects are never substituted for owner keys.
+The token payload's ``sub`` is the stable application identity. SSO users get a fresh
+opaque application ID; historical password accounts are not linked. Cognito subjects are never substituted for owner keys.
 """
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from jose import JWTError, jwt
+from synapsis import config
 
 from synapsis.config import JWT_SECRET, JWT_ALGORITHM, JWT_EXPIRY_HOURS, logger
 
 
 def create_access_token(user_id: str, user_name: str, user_role: str,
-                        *, email: str | None = None, lifetime_seconds: int | None = None) -> str:
+                        *, email: str | None = None, lifetime_seconds: int | None = None,
+                        auth_source: str = "password") -> str:
     """Create a JWT access token for an authenticated user.
 
     Args:
@@ -37,6 +38,7 @@ def create_access_token(user_id: str, user_name: str, user_role: str,
         "email": email or user_id,
         "name": user_name,
         "role": user_role,
+        "auth_source": auth_source,
         "exp": expire,
         "iat": datetime.now(timezone.utc),
     }
@@ -51,6 +53,11 @@ def verify_token(token: str) -> Optional[dict]:
     """
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        source = payload.get("auth_source", "password")
+        if source == "sso" and not config.SSO_ENABLED:
+            return None
+        if source != "sso" and not config.PASSWORD_LOGIN_ENABLED:
+            return None
         sub = payload.get("sub", "")
         return {
             "user_id": sub,

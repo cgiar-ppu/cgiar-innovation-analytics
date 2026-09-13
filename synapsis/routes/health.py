@@ -24,6 +24,7 @@ from synapsis.config import (
     SELF_SIGNUP_ENABLED,
     SIGNUP_ALLOWED_DOMAINS,
     SSO_ENABLED,
+    PASSWORD_LOGIN_ENABLED,
 )
 from synapsis.agents import SUBAGENTS
 from synapsis.constants import MEMORY_CATEGORIES
@@ -84,4 +85,5 @@ async def get_config():
         # a hint so users see the rule before submitting.
         "signup_allowed_domains": SIGNUP_ALLOWED_DOMAINS,
         "sso_enabled": SSO_ENABLED,
+        "password_login_enabled": PASSWORD_LOGIN_ENABLED,
     }

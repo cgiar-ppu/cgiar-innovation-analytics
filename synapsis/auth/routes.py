@@ -19,6 +19,7 @@ from synapsis.auth.users import authenticate_user, get_user_by_email, hash_passw
 from synapsis.auth.tokens import create_access_token
 from synapsis.auth.middleware import get_current_user
 from synapsis.config import SELF_SIGNUP_ENABLED, SIGNUP_ALLOWED_DOMAINS, logger
+from synapsis import config
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -72,6 +73,8 @@ async def login(body: LoginRequest):
     Returns a JWT token on success. Only known users (baked-in allow-list or
     self-signed-up) can log in.
     """
+    if not config.PASSWORD_LOGIN_ENABLED:
+        raise HTTPException(404, "Password sign-in is not enabled. Use your CGIAR account.")
     user = await authenticate_user(body.email, body.password)
     if not user:
         raise HTTPException(
@@ -157,7 +160,7 @@ async def signup(body: SignupRequest, request: Request):
     is off so the endpoint's existence isn't advertised in closed deployments
     (e.g. the current prod lineage).
     """
-    if not SELF_SIGNUP_ENABLED:
+    if not SELF_SIGNUP_ENABLED or not config.PASSWORD_LOGIN_ENABLED:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
     client_ip = request.client.host if request.client else "unknown"

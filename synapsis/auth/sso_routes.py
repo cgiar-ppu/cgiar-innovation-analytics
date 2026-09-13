@@ -1,11 +1,10 @@
 """Browser-bound SSO: opaque HttpOnly cookies, encrypted server refresh tokens.
 
-The SPA receives short-lived app tokens with existing stable owner IDs. Raw
+The SPA receives short-lived app tokens with stable CGIAR owner IDs. Raw
 Cognito tokens and refresh credentials never enter JavaScript or redirect URLs.
 """
 import hmac
 import secrets
-import sqlite3
 import time
 from collections import defaultdict
 from urllib.parse import urlencode
@@ -13,12 +12,10 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel, Field
 
 from synapsis import config
 from synapsis.auth import sso_provider as provider, sso_storage as storage
 from synapsis.auth.tokens import create_access_token
-from synapsis.auth.users import authenticate_user
 
 router = APIRouter(tags=["sso"])
 SESSION_COOKIE = "__Host-ia-sso"
@@ -140,7 +137,7 @@ async def session_claims(request: Request):
 def app_session(user: dict, claims: dict):
     lifetime = max(1, min(300, int(claims["exp"] - time.time())))
     token = create_access_token(user["user_id"], user["name"], user["role"],
-                                email=user["email"], lifetime_seconds=lifetime)
+                                email=user["email"], lifetime_seconds=lifetime, auth_source="sso")
     return JSONResponse({"token": token, "user": user, "expires_in": lifetime}, headers=NO_STORE)
 
 
@@ -149,34 +146,8 @@ async def session(request: Request):
     require_enabled()
     require_origin(request)
     claims = await session_claims(request)
-    try:
-        user = await storage.resolve_identity(claims)
-    except storage.LinkRequired:
-        return JSONResponse({"link_required": True, "email": claims["email"]}, status_code=409, headers=NO_STORE)
-    except (ValueError, sqlite3.IntegrityError):
-        raise HTTPException(403, "This CGIAR identity cannot access that application account.") from None
+    user = await storage.resolve_identity(claims)
     return app_session(user, claims)
-
-
-class LinkRequest(BaseModel):
-    password: str = Field(min_length=1, max_length=1024)
-
-
-@router.post("/api/auth/sso/link")
-async def link(body: LinkRequest, request: Request):
-    require_enabled()
-    require_origin(request)
-    rate_limit(request, "link", 5)
-    claims = await session_claims(request)
-    # Email is taken from the validated Microsoft identity, not a submitted account name.
-    user = await authenticate_user(claims["email"], body.password)
-    if not user:
-        raise HTTPException(401, "The existing application password was not accepted.")
-    try:
-        linked = await storage.resolve_identity(claims, proven_legacy_email=user["email"])
-    except (ValueError, sqlite3.IntegrityError):
-        raise HTTPException(409, "This account is already linked to another CGIAR identity.") from None
-    return app_session(linked, claims)
 
 
 @router.post("/api/auth/sso/logout")

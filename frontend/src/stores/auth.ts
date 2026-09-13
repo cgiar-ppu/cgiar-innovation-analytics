@@ -10,7 +10,7 @@
  *
  * Identity is deliberately modelled as an abstraction: the rest of the app
  * only ever reads `user.userId` (a stable string claim). Today that claim is
- * the app-password user's email (JWT `sub`); SSO linking preserves that ID; new SSO users receive an opaque application ID.
+ * the app-password user's email (JWT `sub`); SSO users receive new opaque application IDs and are not linked to legacy accounts.
  *
  * Persistence:
  *  - The token is persisted to localStorage so a page reload stays logged in.
@@ -46,10 +46,8 @@ interface AuthState {
   ready: boolean
   /** Whether the backend requires authentication (false in dev-bypass mode). */
   authRequired: boolean
-  ssoLinkEmail: string | null
   ssoError: string | null
   refreshSso: () => Promise<void>
-  linkSso: (password: string) => Promise<string | null>
 
   /** Restore token from storage and validate it against /api/auth/me. */
   initialize: () => Promise<void>
@@ -93,7 +91,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   disclaimerAcknowledged: false,
   ready: false,
   authRequired: true,
-  ssoLinkEmail: null,
   ssoError: null,
 
   refreshSso: async () => {
@@ -101,21 +98,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       ssoRestore = restoreSso().finally(() => { ssoRestore = null })
     }
     await ssoRestore
-  },
-
-  linkSso: async (password) => {
-    const epoch = authEpoch
-    try {
-      const response = await fetch("/api/auth/sso/link", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
-      })
-      const data = await response.json()
-      if (epoch !== authEpoch) return 'Sign-in was canceled.'
-      if (!response.ok) return data.detail ?? "Could not link your account."
-      acceptSso(data)
-      return null
-    } catch { return "Could not reach the server. Please try again." }
   },
 
   initialize: async () => {
@@ -237,7 +219,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const wasSso = localStorage.getItem(METHOD_KEY) === 'sso'
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(METHOD_KEY)
-    set({ token: null, user: null, disclaimerAcknowledged: false, ssoLinkEmail: null, ssoError: null })
+    set({ token: null, user: null, disclaimerAcknowledged: false, ssoError: null })
     if (wasSso) {
       fetch('/api/auth/sso/logout', { method: 'POST' })
         .then(async response => {
@@ -271,7 +253,7 @@ function acceptSso(data: { token: string; user: Parameters<typeof toAuthUser>[0]
   localStorage.setItem(METHOD_KEY, 'sso')
   localStorage.setItem(TOKEN_KEY, data.token)
   useAuthStore.setState({ token: data.token, user, ready: true, authRequired: true,
-    disclaimerAcknowledged: readAck(user.userId), ssoLinkEmail: null, ssoError: null })
+    disclaimerAcknowledged: readAck(user.userId), ssoError: null })
 }
 
 async function restoreSso(): Promise<void> {
@@ -280,18 +262,12 @@ async function restoreSso(): Promise<void> {
     const response = await fetch('/api/auth/sso/session', { method: 'POST' })
     const data = await response.json()
     if (epoch !== authEpoch) return
-    if (response.status === 409 && data.link_required) {
-      localStorage.removeItem(TOKEN_KEY)
-      useAuthStore.setState({ token: null, user: null, ready: true, authRequired: true,
-        ssoLinkEmail: data.email, ssoError: null })
-      return
-    }
     if (!response.ok) throw new Error('Session unavailable')
     acceptSso(data)
   } catch {
     if (epoch !== authEpoch) return
     localStorage.removeItem(TOKEN_KEY)
     useAuthStore.setState({ token: null, user: null, ready: true, authRequired: true,
-      ssoLinkEmail: null, ssoError: 'Your CGIAR session could not be restored. Please sign in again.' })
+      ssoError: 'Your CGIAR session could not be restored. Please sign in again.' })
   }
 }
