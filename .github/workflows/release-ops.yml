@@ -1,0 +1,34 @@
+name: IA release bootstrap
+on:
+  push:
+    branches: [feat/ia-release-20260914]
+    paths: [.github/release-request.json]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  bootstrap:
+    strategy:
+      matrix:
+        include:
+          - environment: DEV
+            account: '972793825893'
+            operation: identity
+          - environment: TST
+            account: '053142643230'
+            operation: certificate
+          - environment: PRD
+            account: '207258148366'
+            operation: inspect
+    environment: ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ matrix.account }}:role/cicd/github-actions-cgiar-innovation-analytics-${{ matrix.environment }}-deploy
+          aws-region: eu-central-1
+      - run: pip install 'boto3>=1.35,<2'
+      - run: python3 .github/scripts/release-ops.py
+        env:
+          OPERATION: ${{ matrix.operation }}
