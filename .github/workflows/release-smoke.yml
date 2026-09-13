@@ -1,0 +1,40 @@
+name: IA live release verification
+on:
+  push:
+    branches: [feat/ia-release-20260914]
+    paths: [.github/smoke-request.json]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  request:
+    runs-on: ubuntu-latest
+    outputs:
+      stage: ${{ steps.request.outputs.stage }}
+      environment: ${{ steps.request.outputs.environment }}
+      account: ${{ steps.request.outputs.account }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: request
+        run: |
+          python3 - <<'PY'
+          import json,os
+          r=json.load(open('.github/smoke-request.json'))
+          env,account={'dev':('DEV','972793825893'),'staging':('TST','053142643230'),'prod':('PRD','207258148366')}[r['stage']]
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write(f"stage={r['stage']}\nenvironment={env}\naccount={account}\n")
+          PY
+  verify:
+    needs: request
+    environment: ${{ needs.request.outputs.environment }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ needs.request.outputs.account }}:role/cicd/github-actions-cgiar-innovation-analytics-${{ needs.request.outputs.environment }}-deploy
+          aws-region: eu-central-1
+      - run: pip install 'boto3>=1.35,<2'
+      - run: python3 .github/scripts/run-release-smoke.py
+        env:
+          STAGE: ${{ needs.request.outputs.stage }}
+          EXPECTED_ACCOUNT: ${{ needs.request.outputs.account }}
