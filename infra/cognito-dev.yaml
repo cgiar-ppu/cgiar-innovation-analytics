@@ -1,0 +1,91 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Dedicated Innovation Analytics DEV identity, independently deployed.
+Parameters:
+  EnableFederation:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['false', 'true']
+  EntraClientId:
+    Type: String
+    Default: ''
+  EntraSecretArn:
+    Type: String
+    Default: ''
+Conditions:
+  Federated: !Equals [!Ref EnableFederation, 'true']
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: cgiar-ia-dev
+      DeletionProtection: ACTIVE
+      UsernameConfiguration:
+        CaseSensitive: false
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+        - Name: name
+          AttributeDataType: String
+          Mutable: true
+      UserPoolTags:
+        Project: cgiar-innovation-analytics
+        Environment: dev
+  Domain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub 'cgiar-ia-dev-${AWS::AccountId}'
+      UserPoolId: !Ref UserPool
+  AzureAD:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Condition: Federated
+    Properties:
+      UserPoolId: !Ref UserPool
+      ProviderName: AzureAD
+      ProviderType: OIDC
+      ProviderDetails:
+        client_id: !Ref EntraClientId
+        client_secret: !Sub '{{resolve:secretsmanager:${EntraSecretArn}:SecretString}}'
+        attributes_request_method: GET
+        oidc_issuer: https://login.microsoftonline.com/6afa0e00-fa14-40b7-8a2e-22a7f8c357d5/v2.0
+        authorize_scopes: openid email profile
+      AttributeMapping:
+        email: email
+        name: name
+  WebClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: cgiar-ia-dev-web
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile]
+      CallbackURLs: [https://innovation-analytics-dev.synapsis-analytics.com/auth/callback]
+      LogoutURLs: [https://innovation-analytics-dev.synapsis-analytics.com]
+      SupportedIdentityProviders: !If [Federated, [!Ref AzureAD], [COGNITO]]
+      ReadAttributes: [email, name, email_verified]
+      WriteAttributes: [email, name]
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 1
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+  ClientId:
+    Value: !Ref WebClient
+  Domain:
+    Value: !Sub 'https://cgiar-ia-dev-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com'
+  AzureCallback:
+    Value: !Sub 'https://cgiar-ia-dev-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com/oauth2/idpresponse'

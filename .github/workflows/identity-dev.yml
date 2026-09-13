@@ -1,0 +1,59 @@
+name: Innovation Analytics DEV identity
+on:
+  push:
+    branches: [feat/cgiar-sso-dev-20260913]
+    paths: [infra/cognito-dev.yaml, .github/workflows/identity-dev.yml]
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: innovation-analytics-dev-identity
+  cancel-in-progress: false
+jobs:
+  identity:
+    runs-on: ubuntu-latest
+    environment: DEV
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEV }}
+          aws-region: eu-central-1
+      - name: Verify DEV account and template
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = 972793825893
+          aws cloudformation validate-template --template-body file://infra/cognito-dev.yaml >/dev/null
+      - name: Deploy identity only
+        env:
+          ENTRA_CLIENT_ID: ${{ vars.IA_ENTRA_CLIENT_ID }}
+          ENTRA_CLIENT_SECRET: ${{ secrets.IA_ENTRA_CLIENT_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PARAMS=(EnableFederation=false)
+          if [ -n "$ENTRA_CLIENT_ID" ]; then
+            test -n "$ENTRA_CLIENT_SECRET"
+            SECRET_ARN=$(python3 - <<'PY'
+          import boto3, os
+          client = boto3.client('secretsmanager', region_name='eu-central-1')
+          name = 'cgiar-ia-dev-entra-client-secret'
+          try:
+              arn = client.describe_secret(SecretId=name)['ARN']
+              client.put_secret_value(SecretId=arn, SecretString=os.environ['ENTRA_CLIENT_SECRET'])
+          except client.exceptions.ResourceNotFoundException:
+              arn = client.create_secret(Name=name, SecretString=os.environ['ENTRA_CLIENT_SECRET'])['ARN']
+          print(arn)
+          PY
+          )
+            PARAMS=(EnableFederation=true "EntraClientId=$ENTRA_CLIENT_ID" "EntraSecretArn=$SECRET_ARN")
+          fi
+          aws cloudformation deploy --stack-name cgiar-ia-dev-identity \
+            --template-file infra/cognito-dev.yaml --no-fail-on-empty-changeset \
+            --parameter-overrides "${PARAMS[@]}" \
+            --tags Project=cgiar-innovation-analytics Environment=dev
+          aws cloudformation describe-stacks --stack-name cgiar-ia-dev-identity \
+            --query 'Stacks[0].Outputs' >> "$GITHUB_STEP_SUMMARY"
