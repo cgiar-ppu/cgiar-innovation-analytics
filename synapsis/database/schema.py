@@ -198,3 +198,5 @@ async def init_db() -> None:
     await init_users_table()
     from synapsis.auth.sso_storage import init_sso_tables
     await init_sso_tables()
+    from synapsis.auth.invited_storage import init_invited_tables
+    await init_invited_tables()

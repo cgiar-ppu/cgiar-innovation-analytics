@@ -248,6 +248,16 @@ export function isSsoSession(): boolean {
   return localStorage.getItem(METHOD_KEY) === 'sso'
 }
 
+/** Complete a one-use invitation without retaining the invitation credential. */
+export function acceptInvitedSession(data: { token: string; user: Parameters<typeof toAuthUser>[0] }) {
+  authEpoch++
+  const user = toAuthUser(data.user)
+  localStorage.setItem(METHOD_KEY, 'invited')
+  localStorage.setItem(TOKEN_KEY, data.token)
+  useAuthStore.setState({ token: data.token, user, ready: true, authRequired: true,
+    disclaimerAcknowledged: readAck(user.userId), ssoError: null })
+}
+
 function acceptSso(data: { token: string; user: Parameters<typeof toAuthUser>[0] }) {
   const user = toAuthUser(data.user)
   localStorage.setItem(METHOD_KEY, 'sso')

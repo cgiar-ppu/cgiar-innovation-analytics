@@ -118,6 +118,8 @@ APP_VERSION: str = "2.0.0"
 # Optional Cognito SSO; all values are explicit per deployment, off by default.
 SSO_ENABLED = os.getenv("IA_SSO_ENABLED", "false").lower() == "true"
 PASSWORD_LOGIN_ENABLED = os.getenv("IA_PASSWORD_LOGIN_ENABLED", "true").lower() == "true"
+INVITED_LOGIN_ENABLED = os.getenv("IA_INVITED_LOGIN_ENABLED", "false").lower() == "true"
+SSO_ADMIN_SUBJECTS = tuple(s.strip() for s in os.getenv("IA_SSO_ADMIN_SUBJECTS", "").split(",") if s.strip())
 SSO_ISSUER = os.getenv("IA_SSO_ISSUER", "").rstrip("/")
 SSO_CLIENT_ID = os.getenv("IA_SSO_CLIENT_ID", "")
 SSO_DOMAIN = os.getenv("IA_SSO_DOMAIN", "").rstrip("/")

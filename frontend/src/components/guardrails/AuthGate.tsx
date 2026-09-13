@@ -11,17 +11,19 @@
  * visible on every in-app view. This gate only governs entry.
  */
 
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { isSsoSession, useAuthStore } from '../../stores/auth'
 import LoginScreen from './LoginScreen'
 import DisclaimerModal from './DisclaimerModal'
+import InvitationAccept from './InvitationAccept'
 
 export default function AuthGate({ children }: { children: ReactNode }) {
   const { ready, authRequired, user, disclaimerAcknowledged, initialize } = useAuthStore()
+  const [invitationToken] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get('invite'))
 
   useEffect(() => {
-    initialize()
-  }, [initialize])
+    if (!invitationToken) initialize()
+  }, [initialize, invitationToken])
 
   useEffect(() => {
     const refresh = () => {
@@ -34,6 +36,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
 
   // While restoring the session, render nothing (avoids a flash of the login
   // screen for already-authenticated users).
+  if (invitationToken) return <InvitationAccept token={invitationToken} />
   if (!ready) return null
 
   // Step 3 — must be authenticated (unless the backend is in dev-bypass mode).

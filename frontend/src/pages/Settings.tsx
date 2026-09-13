@@ -6,6 +6,7 @@ import GlassCard from '../components/common/GlassCard';
 import Badge from '../components/common/Badge';
 import { api } from '../lib/api';
 import type { AppConfig, HealthStatus } from '../lib/types';
+import InvitationManager from '../components/guardrails/InvitationManager';
 
 export default function Settings() {
   const { theme, setTheme } = useUIStore();
@@ -40,6 +41,7 @@ export default function Settings() {
         <p className="text-sm text-[var(--text-muted)] mt-1">Workspace configuration and system information</p>
       </div>
 
+      {config?.invited_login_enabled && <InvitationManager />}
       {/* Theme */}
       <GlassCard>
         <h3 className="text-sm font-semibold text-[var(--text)] mb-4 flex items-center gap-2">

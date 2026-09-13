@@ -67,12 +67,21 @@ class LoginRequest(BaseModel):
 
 
 @router.post("/login")
-async def login(body: LoginRequest):
+async def login(body: LoginRequest, request: Request):
     """Authenticate with email and password.
 
     Returns a JWT token on success. Only known users (baked-in allow-list or
     self-signed-up) can log in.
     """
+    if config.INVITED_LOGIN_ENABLED:
+        from synapsis.auth.invited_storage import authenticate
+        from synapsis.auth.invited_routes import login_response
+        from synapsis.auth.sso_routes import rate_limit
+        rate_limit(request, "invited-login", 10)
+        user = await authenticate(body.email, body.password)
+        if not user:
+            raise HTTPException(401, "Invalid email or password. Email sign-in is for invited accounts.")
+        return login_response(user)
     if not config.PASSWORD_LOGIN_ENABLED:
         raise HTTPException(404, "Password sign-in is not enabled. Use your CGIAR account.")
     user = await authenticate_user(body.email, body.password)

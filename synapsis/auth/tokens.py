@@ -18,7 +18,7 @@ from synapsis.config import JWT_SECRET, JWT_ALGORITHM, JWT_EXPIRY_HOURS, logger
 
 def create_access_token(user_id: str, user_name: str, user_role: str,
                         *, email: str | None = None, lifetime_seconds: int | None = None,
-                        auth_source: str = "password") -> str:
+                        auth_source: str = "password", credential_version: int | None = None) -> str:
     """Create a JWT access token for an authenticated user.
 
     Args:
@@ -42,6 +42,8 @@ def create_access_token(user_id: str, user_name: str, user_role: str,
         "exp": expire,
         "iat": datetime.now(timezone.utc),
     }
+    if credential_version is not None:
+        payload["credential_version"] = credential_version
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
@@ -56,7 +58,13 @@ def verify_token(token: str) -> Optional[dict]:
         source = payload.get("auth_source", "password")
         if source == "sso" and not config.SSO_ENABLED:
             return None
-        if source != "sso" and not config.PASSWORD_LOGIN_ENABLED:
+        if source == "invited":
+            from synapsis.auth.invited_storage import credential_is_current
+            if not config.INVITED_LOGIN_ENABLED or not credential_is_current(
+                payload.get("sub", ""), payload.get("credential_version", -1)
+            ):
+                return None
+        elif source != "sso" and not config.PASSWORD_LOGIN_ENABLED:
             return None
         sub = payload.get("sub", "")
         return {

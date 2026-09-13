@@ -74,6 +74,7 @@ export interface SelectableModel {
 }
 
 export interface AppConfig {
+  invited_login_enabled?: boolean;
   /** Primary model identifier. */
   model: string
   /** Fallback model used when the primary is unavailable. */

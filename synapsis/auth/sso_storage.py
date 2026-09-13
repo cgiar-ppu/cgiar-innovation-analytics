@@ -79,15 +79,18 @@ async def resolve_identity(claims: dict) -> dict:
     Roles are assigned in the application DB, never from external role claims.
     """
     issuer, subject, email = claims["iss"], claims["sub"], claims["email"]
+    role = "admin" if subject in config.SSO_ADMIN_SUBJECTS else "researcher"
     async with get_db() as db:
         await db.execute("BEGIN IMMEDIATE")
         cursor = await db.execute("SELECT user_id, role FROM sso_identities WHERE issuer=? AND subject=?", (issuer, subject))
         identity = await cursor.fetchone()
         if not identity:
-            identity = {"user_id": "sso:" + str(uuid.uuid4()), "role": "researcher"}
+            identity = {"user_id": "sso:" + str(uuid.uuid4()), "role": role}
             await db.execute("INSERT INTO sso_identities VALUES (?, ?, ?, ?, ?, ?, ?)", (
-                issuer, subject, identity["user_id"], email, str(claims.get("name", "")), "researcher", time.time(),
+                issuer, subject, identity["user_id"], email, str(claims.get("name", "")), role, time.time(),
             ))
+        else:
+            await db.execute("UPDATE sso_identities SET role=? WHERE issuer=? AND subject=?", (role, issuer, subject))
         await db.commit()
     return {"user_id": identity["user_id"], "email": email,
-            "name": str(claims.get("name", "")), "role": identity["role"]}
+            "name": str(claims.get("name", "")), "role": role}

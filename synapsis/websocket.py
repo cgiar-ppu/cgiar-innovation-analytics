@@ -185,6 +185,9 @@ async def ws_chat(websocket: WebSocket, token: Optional[str] = Query(default=Non
     try:
         while True:
             raw = await websocket.receive_text()
+            if user_id.startswith("invited:") and (not token or verify_token(token) is None):
+                await websocket.close(code=1008, reason="Invited access expired or was revoked")
+                break
 
             # --- Parse incoming frame ---
             try:

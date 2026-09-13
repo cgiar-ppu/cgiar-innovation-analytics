@@ -45,6 +45,7 @@ from synapsis.routes import (
 )
 from synapsis.auth.routes import router as auth_router
 from synapsis.auth.sso_routes import router as sso_router
+from synapsis.auth.invited_routes import router as invited_router
 from synapsis.auth.sso_provider import validate_settings as validate_sso_settings
 from synapsis.routes.voice import router as voice_router
 from synapsis.voice import sessions as voice_sessions
@@ -75,6 +76,7 @@ app.add_middleware(
 app.include_router(auth_router)
 validate_sso_settings()
 app.include_router(sso_router)
+app.include_router(invited_router)
 app.include_router(voice_router)
 app.include_router(health_router)
 app.include_router(files_router)
