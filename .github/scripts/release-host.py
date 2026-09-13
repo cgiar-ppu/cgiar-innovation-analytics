@@ -57,7 +57,7 @@ for path in glob.glob('/data/*.db'):
  src=sqlite3.connect('file:'+path+'?mode=ro',uri=True);dst=sqlite3.connect('/backup/'+os.path.basename(path));src.backup(dst);dst.close();src.close()
 """
 os.chown(backup,1000,1000)
-sp.run(['docker','run','--rm','--entrypoint','python','-v',str(root/'synapsis')+':/data:ro','-v',str(backup)+':/backup',image,'-c',backupcode],check=True)
+sp.run(['docker','run','--rm','--user','0:0','--entrypoint','python','-v',str(root/'synapsis')+':/data','-v',str(backup)+':/backup',image,'-c',backupcode],check=True)
 if old: sp.run(['docker','rename',name,name+'-before-'+backup.name],check=True)
 args=['docker','run','-d','--name',name,'--restart','always','--log-driver=awslogs','--log-opt','awslogs-region=eu-central-1','--log-opt',f'awslogs-group=/cgiar-ia/{stage}','--log-opt','awslogs-stream='+name,'--log-opt','awslogs-create-group=true','--log-opt','mode=non-blocking','--log-opt','max-buffer-size=4m','-p','7780:7780','-v',str(root/'synapsis')+':/workspace/.synapsis']
 for folder in ('uploads','outputs','exports','analysis'): args+=['-v',str(root/'workspace-files'/folder)+':/workspace/'+folder]
