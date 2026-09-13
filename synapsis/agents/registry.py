@@ -11,6 +11,7 @@ import re
 from claude_agent_sdk import AgentDefinition
 
 from synapsis.constants import DEFAULT_AGENT_COLOR, ORCHESTRATOR_COLOR
+from synapsis.config import MODEL
 from synapsis.agents.definitions import SUBAGENTS
 
 
@@ -123,7 +124,7 @@ def _build_registry(
             ),
             "type": "builtin",
             "tools": ["All tools + Task delegation"],
-            "model": "opus",
+            "model": MODEL,
             "color": ORCHESTRATOR_COLOR,
             "tags": ["Orchestrator", "Team", "Multi-Agent"],
         },

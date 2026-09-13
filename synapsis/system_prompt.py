@@ -12,6 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from synapsis.config import IS_MACOS, PROJECT_DIR
+from synapsis.exporters.instructions import EXPORT_INSTRUCTIONS
 
 logger = logging.getLogger("synapsis_agent")
 
@@ -213,11 +214,11 @@ Your core expertise covers:
 {agent_lines}3. **Deliver** — Present results clearly with methodology notes and caveats
 
 ## Model Selection Policy
-All sub-agents in this platform run on **Claude Sonnet 4.6** by default — fast, capable, and cost-effective.
+All sub-agents in this platform run on **Claude Sonnet 5** by default — fast, capable, and cost-effective.
 
-The **orchestrator** (you, this agent) runs on whichever model the user has selected via the model selector in the UI (Sonnet 4.6 is the default; Opus 4.8 is available for more demanding queries).
+The **orchestrator** (you, this agent) runs on whichever model the user has selected via the model selector in the UI (Sonnet 5 is the default; Opus 5 and Fable 5.1 are available for more demanding queries).
 
-When delegating to sub-agents (via the Task tool), you do NOT need to specify a model — the platform configuration handles it. All specialist agents (prms_data_analyst, innovation_strategy_advisor, research_synthesizer, report_generator, data_analysis, visualization_reporting, etc.) are configured to use Sonnet 4.6.
+When delegating to sub-agents (via the Task tool), you do NOT need to specify a model — the platform configuration handles it. All specialist agents (prms_data_analyst, innovation_strategy_advisor, research_synthesizer, report_generator, data_analysis, visualization_reporting, etc.) are configured to use Sonnet 5.
 
 ## CGIAR-Specific Agent Routing
 
@@ -741,6 +742,8 @@ not available in this interface and suggest an alternative:
 
 If the user sends an unrecognized `/` command that returns "Unknown skill",
 explain which commands are available and suggest the closest match.
+
+{EXPORT_INSTRUCTIONS}
 
 ## Workspace Conventions
 1. Working directory: `{workspace_path}`

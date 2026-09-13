@@ -145,11 +145,11 @@ MEMORY_CATEGORIES: list[str] = [
 # Default model names (used as fallbacks in config.py)
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL: str = "claude-sonnet-4-6"
-"""Default orchestrator model — Claude Sonnet 4.6 (fast, 1M context).
+DEFAULT_MODEL: str = "claude-sonnet-5"
+"""Default orchestrator model — Claude Sonnet 5 (fast, 1M context).
 
 This is the default selection in the chat model-selector pill. Users can
-switch the active session to Opus 4.8 via the selector (see SELECTABLE_MODELS).
+switch the active session to Opus 5 or Fable 5.1 via the selector (see SELECTABLE_MODELS).
 Override the server-wide default via the ``SYNAPSIS_MODEL`` env var."""
 
 # ---------------------------------------------------------------------------
@@ -157,14 +157,17 @@ Override the server-wide default via the ``SYNAPSIS_MODEL`` env var."""
 # ---------------------------------------------------------------------------
 
 SELECTABLE_MODELS: list[dict[str, str]] = [
+    {"id": "claude-sonnet-5", "label": "Sonnet 5"},
+    {"id": "claude-opus-5", "label": "Opus 5"},
+    {"id": "claude-fable-5-1", "label": "Fable 5.1"},
     {"id": "claude-sonnet-4-6", "label": "Sonnet 4.6"},
     {"id": "claude-opus-4-8[1m]", "label": "Opus 4.8 (1M)"},
 ]
 """Curated models exposed in the chat UI model selector.
 
 Each entry has an ``id`` (passed to the SDK as the model override) and a short
-``label`` for the UI pill/dropdown. Sonnet 4.6 is the default; Opus 4.8 (1M)
-is the more powerful option. Exposed via GET /api/config as
+``label`` for the UI pill/dropdown. Sonnet 5 is the default; Opus 5 and Fable 5.1 support more demanding work.
+Older entries remain available for existing sessions. Exposed via GET /api/config as
 ``selectable_models``."""
 
 SELECTABLE_MODEL_IDS: set[str] = {m["id"] for m in SELECTABLE_MODELS}
@@ -192,7 +195,7 @@ def is_aup_error(error_message: str) -> bool:
     return any(p.lower() in error_message.lower() for p in AUP_ERROR_PATTERNS)
 
 
-DEFAULT_FALLBACK_MODEL: str = "claude-sonnet-4-5-20250929"
+DEFAULT_FALLBACK_MODEL: str = "claude-opus-5"
 
 # ---------------------------------------------------------------------------
 # Available tools for custom agents
@@ -244,7 +247,7 @@ CHAT_SUBSCRIBER_QUEUE_SIZE: int = 1000
 # Agent display values (continued)
 # ---------------------------------------------------------------------------
 
-ALLOWED_MODELS: set[str] = {"sonnet", "opus", DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL}
+ALLOWED_MODELS: set[str] = {"sonnet", "opus", *SELECTABLE_MODEL_IDS}
 """Set of model identifiers accepted by agent create/update endpoints."""
 
 

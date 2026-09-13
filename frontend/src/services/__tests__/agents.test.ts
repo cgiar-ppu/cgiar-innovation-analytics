@@ -35,7 +35,7 @@ describe('agentsService', () => {
 
     const result = await agentsService.getAgents()
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/agents')
+    expect(fetchMock).toHaveBeenCalledWith('/api/agents', expect.objectContaining({ headers: {} }))
     expect(result).toEqual(agents)
   })
 
@@ -55,7 +55,7 @@ describe('agentsService', () => {
     const fetchMock = vi.fn().mockResolvedValue(mockResponse(null, false, 500))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(agentsService.getAgents()).rejects.toThrow('HTTP 500')
+    await expect(agentsService.getAgents()).rejects.toThrow('GET /api/agents: 500')
   })
 
   // -----------------------------------------------------------------------
@@ -104,7 +104,7 @@ describe('agentsService', () => {
       tools: [],
       model: 'sonnet',
       color: '#000',
-    })).rejects.toThrow('HTTP 422')
+    })).rejects.toThrow('POST /api/agents: 422')
   })
 
   // -----------------------------------------------------------------------
@@ -128,7 +128,7 @@ describe('agentsService', () => {
     const fetchMock = vi.fn().mockResolvedValue(mockResponse(null, false, 404))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(agentsService.deleteAgent('ghost')).rejects.toThrow('HTTP 404')
+    await expect(agentsService.deleteAgent('ghost')).rejects.toThrow('DELETE /api/agents/ghost: 404')
   })
 
   // -----------------------------------------------------------------------

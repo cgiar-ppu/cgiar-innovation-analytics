@@ -6,9 +6,9 @@ tool layer (synapsis/tools/agents.py) so the same rules are enforced in both
 places without duplication.
 """
 
-from synapsis.constants import AVAILABLE_TOOLS
+from synapsis.constants import AVAILABLE_TOOLS, ALLOWED_MODELS
 
-_VALID_MODELS = {"sonnet", "opus"}
+_VALID_MODELS = ALLOWED_MODELS
 
 
 def validate_model(model: str) -> None:
@@ -18,10 +18,10 @@ def validate_model(model: str) -> None:
         model: The model identifier to validate.
 
     Raises:
-        ValueError: When *model* is not ``'sonnet'`` or ``'opus'``.
+        ValueError: When model is neither a supported explicit ID nor a legacy tier alias.
     """
     if model not in _VALID_MODELS:
-        raise ValueError(f"model must be 'sonnet' or 'opus', got '{model}'")
+        raise ValueError(f"Unsupported model: {model}")
 
 
 def validate_tools(tools: list) -> None:

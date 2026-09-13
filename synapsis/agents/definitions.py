@@ -1,7 +1,7 @@
 """
 Subagent definitions for the Synapsis multi-agent system.
 
-Defines 9 specialist subagents (all running on Claude Sonnet 4.6 to keep
+Defines 9 specialist subagents (all running on Claude Sonnet 5 to keep
 sub-agent work fast and cost-efficient — the main orchestrator can still run
 on Opus when the user selects it) that the main orchestrator delegates to via
 the Task tool:
@@ -20,16 +20,18 @@ CGIAR domain specialists:
 - report_generator:              Leadership-ready formatted deliverables
 
 Each subagent also has two explicitly-named variants (both now run on Sonnet
-4.6 — the variant names are retained for backward-compatible orchestrator
+5 — the variant names are retained for backward-compatible orchestrator
 routing, but per platform policy every sub-agent uses Sonnet to keep sub-agent
 work fast and cost-efficient):
-- {name}_opus_powerful:     Sonnet 4.6 (legacy name) -- complex, high-stakes tasks
-- {name}_sonnet_efficient:  Sonnet 4.6 -- fast, straightforward tasks
+- {name}_opus_powerful:     Sonnet 5 (legacy name) -- complex, high-stakes tasks
+- {name}_sonnet_efficient:  Sonnet 5 -- fast, straightforward tasks
 """
 
 import os
 
 from claude_agent_sdk import AgentDefinition
+from dataclasses import replace
+from synapsis.exporters.instructions import EXPORT_INSTRUCTIONS
 from synapsis.config import IS_MACOS
 
 
@@ -208,7 +210,7 @@ Use Python with pandas, numpy, scipy, statsmodels, sklearn as needed.
 Write clean, well-commented code. Save scripts to /workspace/scripts/.
 Save analysis results (tables, summaries) to /workspace/analysis/.""",
         tools=_STANDARD_TOOLS,
-        model="sonnet",
+        model="claude-sonnet-5",
     ),
 
     # --- Visualization & Reporting -------------------------------------------
@@ -241,7 +243,7 @@ Save analysis results (tables, summaries) to /workspace/analysis/.""",
 - Include data source and date in report footers
 - Save figures as both PNG and SVG when generating for reports""",
         tools=_STANDARD_TOOLS,
-        model="sonnet",
+        model="claude-sonnet-5",
     ),
 
     # --- Research Methodology ------------------------------------------------
@@ -274,7 +276,7 @@ Save analysis results (tables, summaries) to /workspace/analysis/.""",
 Recommend G*Power, R (pwr, clusterPower), or Python (statsmodels) for power calculations.
 Provide formulas and parameters so the user can run calculations themselves.""",
         tools=_STANDARD_TOOLS,
-        model="sonnet",
+        model="claude-sonnet-5",
     ),
 
     # --- Code & Automation ---------------------------------------------------
@@ -308,7 +310,7 @@ Provide formulas and parameters so the user can run calculations themselves.""",
 - Comment code for maintainability
 - Save outputs to /workspace/outputs/""",
         tools=_STANDARD_TOOLS,
-        model="sonnet",
+        model="claude-sonnet-5",
     ),
 
     # --- Computer Use --------------------------------------------------------
@@ -333,7 +335,7 @@ Provide formulas and parameters so the user can run calculations themselves.""",
                "mcp__computer-use__scroll",
                "mcp__computer-use__wait",
                "mcp__computer-use__left_click_drag"],
-        model="sonnet",
+        model="claude-sonnet-5",
     ),
 
     # =========================================================================
@@ -502,7 +504,7 @@ citation resolver turn it into the correct public URL — do NOT hand-write a
 - CGIAR terminology: `references/cgiar_terminology.md`
 - Reference lists (initiatives, centres, regions): `references/reference_lists.md`""",
         tools=_PRMS_FULL_TOOLS,
-        model="sonnet",
+        model="claude-sonnet-5",
     ),
 
     # --- Innovation Strategy Advisor -----------------------------------------
@@ -604,7 +606,7 @@ Label every claim:
 - Platform context: `references/platform_context.md`
 - PRMS schema (for queries): `references/prms_schema_reference.md`""",
         tools=_PRMS_FULL_TOOLS,
-        model="sonnet",
+        model="claude-sonnet-5",
     ),
 
     # --- Research Synthesizer ------------------------------------------------
@@ -696,7 +698,7 @@ This distinction is critical for maintaining trust with CGIAR stakeholders who n
 - Reference lists (initiatives, centres, regions): `references/reference_lists.md`
 - Platform context and use cases: `references/platform_context.md`""",
         tools=_PRMS_FULL_TOOLS,
-        model="sonnet",
+        model="claude-sonnet-5",
     ),
 
     # --- Report Generator ----------------------------------------------------
@@ -793,7 +795,7 @@ Every deliverable must include:
 - Platform context and audiences: `references/platform_context.md`
 - Innovation framework (for interpreting IRL data): `references/innovation_framework.md`""",
         tools=_STANDARD_TOOLS + ["mcp__synapsis__create_chart"],
-        model="sonnet",
+        model="claude-sonnet-5",
     ),
 }
 
@@ -807,29 +809,33 @@ def _make_variants(subagents: dict[str, AgentDefinition]) -> dict[str, AgentDefi
 
     The orchestrator can select these by name to explicitly control routing.
     Per platform policy, ALL sub-agents (base and both variants) run on
-    Sonnet 4.6 — the orchestrator itself may run on Opus when the user selects
+    Sonnet 5 — the orchestrator itself may run on Opus when the user selects
     it via the model selector pill, but sub-agent work always uses Sonnet to
     keep it fast and cost-efficient. The variant names are retained for
     backward-compatible routing.
     """
     variants: dict[str, AgentDefinition] = {}
     for name, agent in subagents.items():
-        # "Powerful" variant (legacy name) — now Sonnet 4.6 per platform policy
+        # "Powerful" variant (legacy name) — now Sonnet 5 per platform policy
         variants[f"{name}_opus_powerful"] = AgentDefinition(
-            description=f"[Sonnet 4.6] {agent.description}",
+            description=f"[Sonnet 5] {agent.description}",
             prompt=agent.prompt,
             tools=agent.tools,
-            model="sonnet",
+            model="claude-sonnet-5",
         )
         # Sonnet (efficient) variant
         variants[f"{name}_sonnet_efficient"] = AgentDefinition(
             description=f"[EFFICIENT/Sonnet] {agent.description}",
             prompt=agent.prompt,
             tools=agent.tools,
-            model="sonnet",
+            model="claude-sonnet-5",
         )
     return variants
 
 
 _VARIANTS = _make_variants(SUBAGENTS)
 SUBAGENTS.update(_VARIANTS)
+
+# Also covers direct specialist/workflow paths that do not call the loader.
+SUBAGENTS = {key: replace(agent, prompt=agent.prompt + "\n\n" + EXPORT_INSTRUCTIONS)
+             for key, agent in SUBAGENTS.items()}

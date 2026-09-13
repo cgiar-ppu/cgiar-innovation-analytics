@@ -1,5 +1,5 @@
 # Synapsis Analytics Agent – Python dependencies
-claude-agent-sdk>=0.1.0
+claude-agent-sdk==0.2.152
 fastapi>=0.115.0
 uvicorn[standard]>=0.34.0
 websockets>=14.0
@@ -34,3 +34,6 @@ bcrypt>=4.0.0
 # requirements-macos.txt). python-pptx / reportlab are NOT imported anywhere
 # in synapsis/ so they are intentionally left out of this lean prod list.
 python-docx>=1.1.0,<2.0.0
+
+# PDF extraction and verification of generated, watermarked documents.
+pypdf>=6,<7

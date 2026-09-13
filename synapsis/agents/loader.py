@@ -11,6 +11,11 @@ import aiosqlite
 from claude_agent_sdk import AgentDefinition
 
 from synapsis.agents.definitions import SUBAGENTS, _STANDARD_TOOLS
+from synapsis.exporters.instructions import EXPORT_INSTRUCTIONS
+
+def current_agent_model(model: str | None) -> str:
+    """Resolve stored legacy tier aliases without rewriting users' records."""
+    return {"sonnet": "claude-sonnet-5", "opus": "claude-opus-5"}.get(model or "sonnet", model)
 
 
 async def load_all_agents() -> dict[str, AgentDefinition]:
@@ -32,9 +37,9 @@ async def load_all_agents() -> dict[str, AgentDefinition]:
                 tools = json.loads(row["tools"]) if row["tools"] else _STANDARD_TOOLS
                 merged[row["id"]] = AgentDefinition(
                     description=row["description"],
-                    prompt=row["system_prompt"],
+                    prompt=row["system_prompt"] + "\n\n" + EXPORT_INSTRUCTIONS,
                     tools=tools,
-                    model=row["model"] or "sonnet",
+                    model=current_agent_model(row["model"]),
                 )
     except (aiosqlite.OperationalError, aiosqlite.DatabaseError):
         pass  # DB not ready yet -- return builtin agents only

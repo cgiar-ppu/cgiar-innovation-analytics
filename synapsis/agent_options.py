@@ -16,6 +16,7 @@ from synapsis.config import (
     SAFETY_HOOKS_ENABLED, IS_MACOS, logger,
 )
 from synapsis.constants import MAX_BUFFER_SIZE
+from synapsis.exporters.instructions import EXPORT_INSTRUCTIONS
 from synapsis.tools import synapsis_mcp, computer_use_mcp
 from synapsis.hooks import safety_validator, audit_logger, audit_logger_post
 from synapsis.agents import build_system_prompt, load_all_agents
@@ -276,6 +277,8 @@ Available agents:
 - If a task needs multiple agents, run them in sequence
 - Synthesize outputs from different agents into a coherent response
 - You can also handle simple tasks directly without delegation
+
+{EXPORT_INSTRUCTIONS}
 """
 
 
