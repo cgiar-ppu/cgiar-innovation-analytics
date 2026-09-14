@@ -13,6 +13,7 @@ import httpx
 from fastapi import HTTPException
 from synapsis.config import logger
 from synapsis.database import get_db
+from . import health
 from .config import session_config
 
 MAX_SECONDS = 600
@@ -103,14 +104,24 @@ async def create(owner, request_id, sdp):
     return await asyncio.shield(task)
 
 
+def provider_error(status: int) -> str:
+    """Operator-readable, user-safe explanation of a provider HTTP status. Never echoes the provider body."""
+    hints = {401: 'check the API key', 403: 'the API key is not allowed to use this model',
+             404: 'the configured voice model is not available to this key', 429: 'provider quota or rate limit reached'}
+    hint = hints.get(status) or ('provider-side error' if status >= 500 else 'request rejected by the provider')
+    return f'The voice provider rejected the request (HTTP {status} — {hint}); no automatic retry was made.'
+
+
 async def _finish_create(owner, request_id, sdp):
     try:
         response = await provider('sessions', {'session': session_config(), 'transport': {'type': 'webrtc', 'sdp': sdp}})
         if not response.is_success:
             # 5xx outcomes may be uncertain. Never release those leases blindly.
             await update(owner, request_id, status='uncertain' if response.status_code >= 500 else 'rejected')
-            logger.warning('Voice create rejected with HTTP %s', response.status_code)
-            raise HTTPException(502 if response.status_code >= 500 else 503, 'The voice provider could not start this connection. Check model access or quota; no automatic retry was made.')
+            logger.warning('voice_create_rejected owner=%s request_id=%s provider_status=%s', owner, request_id, response.status_code)
+            if response.status_code in (401, 403):
+                health.invalidate()  # let the next /status re-probe so the UI disables voice promptly
+            raise HTTPException(502 if response.status_code >= 500 else 503, provider_error(response.status_code))
         data = response.json()
         provider_id = data.get('session', {}).get('id')
         answer = data.get('transport', {}).get('sdp')

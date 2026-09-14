@@ -89,6 +89,27 @@ async def test_unknown_creation_never_retried(voice_db):
         assert provider.await_count == 1
 
 
+async def test_provider_rejection_names_status_but_never_body(voice_db, caplog):
+    from synapsis.voice import health
+    health._cache.update(ok=True, checked=time.time(), status=200)
+    body = {'error': {'message': 'Incorrect API key provided: sk-live-SECRET'}}
+    with patch.object(s, 'provider', AsyncMock(return_value=httpx.Response(401, json=body))):
+        with caplog.at_level('WARNING', logger='synapsis_agent'):
+            with pytest.raises(HTTPException) as error:
+                await s.create('alice', str(uuid4()), 'v=0\r\noffer')
+    assert error.value.status_code == 503
+    assert 'HTTP 401' in error.value.detail and 'API key' in error.value.detail
+    assert 'SECRET' not in error.value.detail and 'SECRET' not in caplog.text
+    assert any('voice_create_rejected' in r.message and 'provider_status=401' in r.message for r in caplog.records)
+    assert health.snapshot()['provider_ok'] is None  # 401 invalidates the cached probe
+    rid = str(uuid4())
+    with patch.object(s, 'provider', AsyncMock(return_value=httpx.Response(503))):
+        with pytest.raises(HTTPException) as error:
+            await s.create('bob', rid, 'v=0\r\noffer')
+    assert error.value.status_code == 502 and 'HTTP 503' in error.value.detail
+    assert (await s.get('bob', rid))['status'] == 'uncertain'
+
+
 async def test_http_auth_origin_and_config(voice_db, monkeypatch):
     from fastapi import FastAPI
     from synapsis.routes.voice import router
