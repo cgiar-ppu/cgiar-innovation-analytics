@@ -17,16 +17,15 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from synapsis.auth.middleware import get_current_user
 from fastapi.responses import FileResponse
 
 from synapsis.agents import SUBAGENTS, get_agent_display_name
 from synapsis.database import get_db
 from synapsis.utils.db_helpers import dynamic_update, fetch_one_or_404
 
-router = APIRouter(prefix="/api", tags=["workflows"])
-
-
+router = APIRouter(prefix="/api", tags=["workflows"], dependencies=[Depends(get_current_user)])
 def _build_nodes(agent_sequence: list) -> list:
     """Generate ReactFlow nodes from an agent_sequence list."""
     nodes = []

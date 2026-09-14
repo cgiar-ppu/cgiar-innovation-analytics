@@ -14,15 +14,14 @@ import json
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from synapsis.auth.middleware import get_current_user
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
 from synapsis.utils.db_helpers import parse_json_field
 
-router = APIRouter(prefix="/api", tags=["workflow-runs"])
-
-
+router = APIRouter(prefix="/api", tags=["workflow-runs"], dependencies=[Depends(get_current_user)])
 @router.get("/workflows/{workflow_id}/runs")
 async def list_workflow_runs(workflow_id: str, limit: int = 50, offset: int = 0):
     """List all runs for a workflow."""

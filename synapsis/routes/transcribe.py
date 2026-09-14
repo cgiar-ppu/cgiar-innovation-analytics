@@ -12,11 +12,11 @@ import os
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from synapsis.auth.middleware import get_current_user
 from synapsis.config import logger
 
-router = APIRouter()
-
+router = APIRouter(dependencies=[Depends(get_current_user)])
 # Models to try in order. gpt-4o-transcribe is higher quality but stricter
 # about audio format/metadata; whisper-1 is more permissive.
 _TRANSCRIPTION_MODELS = ["gpt-4o-transcribe", "whisper-1"]

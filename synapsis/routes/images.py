@@ -25,14 +25,14 @@ import shutil
 from pathlib import Path
 from io import BytesIO
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from synapsis.auth.middleware import get_current_user
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
 
 from synapsis.config import logger
 
-router = APIRouter()
-
+router = APIRouter(dependencies=[Depends(get_current_user)])
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------

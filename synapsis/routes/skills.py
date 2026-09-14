@@ -10,11 +10,12 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from synapsis.auth.middleware import get_current_user
 
 from synapsis.config import WORKSPACE, PROJECT_DIR
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 logger = logging.getLogger("synapsis_agent")
 
 # ---------------------------------------------------------------------------

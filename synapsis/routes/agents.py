@@ -15,7 +15,8 @@ import json
 import time
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from synapsis.auth.middleware import get_current_user
 from pydantic import BaseModel
 from typing import Optional
 
@@ -29,9 +30,7 @@ from synapsis.validators.agents import validate_model, validate_tools, assert_no
 
 _BUILTIN_IDS = set(SUBAGENTS) | {"orchestrator"}
 
-router = APIRouter(prefix="/api", tags=["agents"])
-
-
+router = APIRouter(prefix="/api", tags=["agents"], dependencies=[Depends(get_current_user)])
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------

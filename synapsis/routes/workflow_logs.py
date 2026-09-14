@@ -11,11 +11,11 @@ Serves run logs stored as JSON files on the filesystem
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from synapsis.auth.middleware import get_current_user
 from fastapi.responses import FileResponse
 
-router = APIRouter(prefix="/api", tags=["workflow-logs"])
-
+router = APIRouter(prefix="/api", tags=["workflow-logs"], dependencies=[Depends(get_current_user)])
 _LOG_DIR = Path.home() / "workspace" / "workflow_logs"
 
 

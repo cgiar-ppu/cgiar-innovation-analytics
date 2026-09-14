@@ -24,7 +24,7 @@ const BASE = ''
  * The token is read from the auth store at call time so it always reflects the
  * current session (login/logout without a reload).
  */
-function authHeaders(extra?: HeadersInit): HeadersInit {
+export function authHeaders(extra?: HeadersInit): HeadersInit {
   const token = getAuthToken()
   const headers: Record<string, string> = { ...(extra as Record<string, string>) }
   if (token) headers.Authorization = `Bearer ${token}`

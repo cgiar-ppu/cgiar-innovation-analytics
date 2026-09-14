@@ -1,3 +1,4 @@
+import { authHeaders } from '../lib/api';
 import { useEffect, useCallback, useRef } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { Plus, GitBranch, AlertTriangle, RefreshCw } from 'lucide-react';
@@ -64,7 +65,7 @@ export default function Workflows() {
   useEffect(() => {
     async function fetchActiveRuns() {
       try {
-        const res = await fetch('/api/workflows/runs/active');
+        const res = await fetch('/api/workflows/runs/active', { headers: authHeaders() });
         if (res.ok) {
           const data = await res.json();
           const runs = data.runs as Array<{
