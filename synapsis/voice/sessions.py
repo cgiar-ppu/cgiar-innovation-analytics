@@ -25,7 +25,13 @@ EXTRA_COLUMNS = {
     'usage_seconds': 'REAL',       # server-observed lease duration: created -> closed
     'provider_seconds': 'REAL',    # provider-reported usage relayed by the browser on session.closed (client claim)
     'provider_status': 'INTEGER',  # HTTP status of the confirming hangup (200/404/410)
+    'attempts': 'INTEGER NOT NULL DEFAULT 0',  # reaper hangup attempts for closing/uncertain leases
+    'attempted': 'REAL NOT NULL DEFAULT 0',    # time of the last reaper hangup attempt (backoff anchor)
 }
+# Lease states. A lease leaves the owner's "one connection" rule only in a TERMINAL state.
+TERMINAL = ('closed', 'rejected', 'closed_unconfirmed')
+MAX_HANGUP_ATTEMPTS = 8            # 60 s, 120, 240, 480, then 600 s apart: ~45 min of retries
+UNCONFIRMED_AFTER_SECONDS = 86400  # hard ceiling for a lease we could not confirm closed
 _reaper = None
 _creates: set[asyncio.Task] = set()
 
@@ -74,13 +80,26 @@ async def _record_closed(row, provider_status, provider_seconds=None):
                 row['owner'], row['request_id'], seconds, 'null' if provider_seconds is None else f'{provider_seconds:.0f}', provider_status)
 
 
+async def _hangup(row):
+    """Ask the provider to end a known session. Returns (confirmed, http_status); never raises."""
+    try:
+        response = await provider('sessions/' + quote(row['provider_id'], safe='') + '/hangup')
+        if response.is_success or response.status_code in (404, 410):
+            return True, response.status_code
+        logger.warning('voice_hangup_unconfirmed owner=%s request_id=%s provider_status=%s', row['owner'], row['request_id'], response.status_code)
+        return False, response.status_code
+    except httpx.HTTPError as exc:
+        logger.warning('voice_hangup_unconfirmed owner=%s request_id=%s error=%s', row['owner'], row['request_id'], type(exc).__name__)
+        return False, None
+
+
 async def close(owner, request_id, provider_seconds=None):
     # Tombstone wins even when End arrives before create or while upstream is pending.
     async with get_db() as db:
         await db.execute('BEGIN IMMEDIATE')
         await db.execute("INSERT OR IGNORE INTO voice_sessions(owner,request_id,status,created,expires,heartbeat) VALUES (?,?,'closed',?,?,?)", (owner, request_id, time.time(), time.time(), time.time()))
         row = dict(await (await db.execute('SELECT * FROM voice_sessions WHERE owner=? AND request_id=?', (owner, request_id))).fetchone())
-        if row['status'] in ('closed', 'rejected'):
+        if row['status'] in TERMINAL:
             if row['status'] == 'closed' and provider_seconds is not None and row.get('provider_seconds') is None and row['sdp_hash']:
                 # The reaper or a second tab already closed it; keep the provider's usage figure.
                 await db.execute('UPDATE voice_sessions SET provider_seconds=? WHERE owner=? AND request_id=?', (provider_seconds, owner, request_id))
@@ -90,14 +109,10 @@ async def close(owner, request_id, provider_seconds=None):
         await db.commit()
     if not row['provider_id']:
         return {'closed': False, 'status': 'awaiting_provider_reconciliation'}
-    try:
-        response = await provider('sessions/' + quote(row['provider_id'], safe='') + '/hangup')
-        if response.is_success or response.status_code in (404, 410):
-            await _record_closed(row, response.status_code, provider_seconds)
-            return {'closed': True}
-        logger.warning('voice_hangup_unconfirmed owner=%s request_id=%s provider_status=%s', owner, request_id, response.status_code)
-    except httpx.HTTPError as exc:
-        logger.warning('voice_hangup_unconfirmed owner=%s request_id=%s error=%s', owner, request_id, type(exc).__name__)
+    confirmed, status = await _hangup(row)
+    if confirmed:
+        await _record_closed(row, status, provider_seconds)
+        return {'closed': True}
     return {'closed': False, 'status': 'cleanup_pending'}
 
 
@@ -111,10 +126,16 @@ async def create(owner, request_id, sdp):
             if old['sdp_hash'] == digest and old['status'] == 'active' and old['expires'] > now and old['heartbeat'] > now:
                 return view(dict(old))
             raise HTTPException(409, 'This connection request is already used or awaiting cleanup. Do not automatically retry.')
-        active = await (await db.execute("SELECT owner FROM voice_sessions WHERE status NOT IN ('closed','rejected')")).fetchall()
-        if any(row['owner'] == owner for row in active):
+        # One lease per owner until it is terminal: an uncertain outcome still blocks ITS owner (a paid
+        # session may exist), but only leases that can really hold a provider session count against the
+        # shared capacity: creating/active, and closing ones whose provider ID we know. 'uncertain' rows
+        # and closing rows without a provider ID are bounded by the reaper (see reap_once) and must not
+        # shrink the pool for everyone else while they wait.
+        mine = await (await db.execute("SELECT 1 FROM voice_sessions WHERE owner=? AND status NOT IN ('closed','rejected','closed_unconfirmed') LIMIT 1", (owner,))).fetchone()
+        if mine:
             raise HTTPException(409, 'Your previous voice connection is active or awaiting cleanup. End it before starting another.')
-        if len(active) >= 6:
+        counted = (await (await db.execute("SELECT COUNT(*) FROM voice_sessions WHERE status IN ('creating','active') OR (status='closing' AND provider_id IS NOT NULL)")).fetchone())[0]
+        if counted >= 6:
             raise HTTPException(429, 'All voice connections are currently in use. Try again in a few minutes.')
         counts = await (await db.execute('SELECT COUNT(*), SUM(owner=?) FROM voice_sessions WHERE created>? AND sdp_hash != \'\'', (owner, now - 86400))).fetchone()
         recent = await (await db.execute('SELECT COUNT(*) FROM voice_sessions WHERE owner=? AND created>?', (owner, now - 60))).fetchone()
@@ -194,17 +215,64 @@ async def usage_today():
     return {'sessions': row[0], 'seconds': round(row[1])}
 
 
+def _backoff(attempts):
+    return 0 if attempts == 0 else min(600, 60 * 2 ** (attempts - 1))
+
+
+async def _give_up(row, now, reason):
+    """Stop retrying but keep the row: an operator can still reconcile it against provider records."""
+    await update(row['owner'], row['request_id'], status='closed_unconfirmed', closed=now, answer=None)
+    logger.warning('voice_lease_unconfirmed owner=%s request_id=%s provider_id=%s attempts=%s age_seconds=%.0f reason=%s',
+                   row['owner'], row['request_id'], row['provider_id'], row['attempts'], now - row['created'], reason)
+
+
+async def _resolve_unconfirmed(row, now):
+    """Bounded resolution of 'closing' and 'uncertain' leases.
+
+    We never release a lease just because the provider answered 5xx or timed out: a paid session may
+    exist. But "never" cannot mean "forever" — before this, one provider hiccup per owner would hold
+    a slot in the six-connection pool until someone edited the database. So:
+    - provider ID known: retry the hangup with backoff (60 s doubling to 600 s); after
+      MAX_HANGUP_ATTEMPTS or UNCONFIRMED_AFTER_SECONDS mark it closed_unconfirmed and log the IDs
+      an operator needs to reconcile against provider records.
+    - no provider ID: nothing can be hung up. The SDP answer never reached the browser, so no media
+      session was ever connected; a provider-side session created for that offer idles out on its
+      own. Once the maximum call length plus a heartbeat window has passed, nothing can still be
+      running, and the row is marked closed_unconfirmed.
+    """
+    if row['provider_id']:
+        if row['attempts'] >= MAX_HANGUP_ATTEMPTS or now - row['created'] > UNCONFIRMED_AFTER_SECONDS:
+            return await _give_up(row, now, 'hangup_attempts_exhausted')
+        if row['attempted'] and now < row['attempted'] + _backoff(row['attempts']):
+            return
+        await update(row['owner'], row['request_id'], attempts=row['attempts'] + 1, attempted=now)
+        confirmed, status = await _hangup(row)
+        if confirmed:
+            await _record_closed(row, status)
+    elif now - row['created'] > MAX_SECONDS + HEARTBEAT_SECONDS:
+        await _give_up(row, now, 'no_provider_id_after_max_call_length')
+
+
 async def reap_once():
+    now = time.time()
     async with get_db() as db:
-        rows = await (await db.execute("SELECT * FROM voice_sessions WHERE status NOT IN ('closed','rejected') AND (expires<? OR heartbeat<? OR status='closing')", (time.time(), time.time()))).fetchall()
+        rows = await (await db.execute("SELECT * FROM voice_sessions WHERE status NOT IN ('closed','rejected','closed_unconfirmed') AND (expires<? OR heartbeat<? OR status IN ('closing','uncertain'))", (now, now))).fetchall()
     for row in rows:
-        if row['provider_id']:
-            await close(row['owner'], row['request_id'])
-        elif row['status'] == 'creating':
-            await update(row['owner'], row['request_id'], status='uncertain')
-    # Bounded metadata retention. Never delete unresolved leases.
+        row = dict(row)
+        if row['status'] in ('creating', 'active'):
+            # Expired or heartbeat lost. A known provider session is ended; an unanswered create is
+            # now of unknown outcome and handed to the bounded resolver on the next pass.
+            if row['provider_id']:
+                await close(row['owner'], row['request_id'])
+            else:
+                await update(row['owner'], row['request_id'], status='uncertain')
+        else:
+            await _resolve_unconfirmed(row, now)
+    # Bounded metadata retention. Unresolved leases are never deleted; closed_unconfirmed rows are
+    # kept for 30 days so an operator can reconcile them against provider records.
     async with get_db() as db:
-        await db.execute("DELETE FROM voice_sessions WHERE status IN ('closed','rejected') AND created<?", (time.time() - 7 * 86400,))
+        await db.execute("DELETE FROM voice_sessions WHERE status IN ('closed','rejected') AND created<?", (now - 7 * 86400,))
+        await db.execute("DELETE FROM voice_sessions WHERE status='closed_unconfirmed' AND created<?", (now - 30 * 86400,))
         await db.commit()
 
 
@@ -230,5 +298,5 @@ async def shutdown():
     if _creates:
         await asyncio.gather(*_creates, return_exceptions=True)
     async with get_db() as db:
-        rows = await (await db.execute("SELECT owner,request_id FROM voice_sessions WHERE status NOT IN ('closed','rejected')")).fetchall()
+        rows = await (await db.execute("SELECT owner,request_id FROM voice_sessions WHERE status NOT IN ('closed','rejected','closed_unconfirmed')")).fetchall()
     await asyncio.gather(*(close(r['owner'], r['request_id']) for r in rows), return_exceptions=True)
