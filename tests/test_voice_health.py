@@ -83,6 +83,30 @@ async def test_unconfigured_returns_none_without_probing(monkeypatch):
     assert calls == []
 
 
+async def test_startup_warms_the_probe_and_logs_the_outcome(initialized_db, monkeypatch, caplog):
+    from synapsis.voice import sessions
+    monkeypatch.setenv('IA_VOICE_ENABLED', 'true')
+    calls = []
+    health._transport = transport(200, calls)
+    with caplog.at_level(logging.INFO, logger='synapsis_agent'):
+        await sessions.startup()
+        for _ in range(20):
+            if calls:
+                break
+            await asyncio.sleep(0.01)
+        await sessions.shutdown()
+    assert len(calls) == 1
+    assert any(r.message == 'voice_provider_probe_ok model=gpt-live-1 provider_status=200' for r in caplog.records)
+    assert health.snapshot()['provider_ok'] is True  # cache warm: the first /status call needs no probe
+    # Disabled voice never probes at startup.
+    monkeypatch.setenv('IA_VOICE_ENABLED', 'false')
+    health.invalidate()
+    await sessions.startup()
+    await asyncio.sleep(0.02)
+    await sessions.shutdown()
+    assert len(calls) == 1
+
+
 async def test_status_route_reports_provider_ok(initialized_db, monkeypatch):
     from fastapi import FastAPI
     from synapsis.routes.voice import router

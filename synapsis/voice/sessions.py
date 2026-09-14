@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from synapsis.config import logger
 from synapsis.database import get_db
 from . import health
-from .config import session_config
+from .config import enabled, session_config
 
 MAX_SECONDS = 600
 HEARTBEAT_SECONDS = 60
@@ -33,6 +33,7 @@ TERMINAL = ('closed', 'rejected', 'closed_unconfirmed')
 MAX_HANGUP_ATTEMPTS = 8            # 60 s, 120, 240, 480, then 600 s apart: ~45 min of retries
 UNCONFIRMED_AFTER_SECONDS = 86400  # hard ceiling for a lease we could not confirm closed
 _reaper = None
+_warmup = None
 _creates: set[asyncio.Task] = set()
 
 
@@ -286,15 +287,22 @@ async def run_reaper():
 
 
 async def startup():
-    global _reaper
+    global _reaper, _warmup
     await init()
     _reaper = asyncio.create_task(run_reaper())
+    if enabled() and health.configured():
+        # Warm the provider probe in the background so the first user gets an instant answer and every
+        # container start leaves a voice_provider_probe_ok/failed line in the log group (deploy evidence).
+        _warmup = asyncio.create_task(health.provider_ok())
 
 
 async def shutdown():
     if _reaper:
         _reaper.cancel()
         await asyncio.gather(_reaper, return_exceptions=True)
+    if _warmup:
+        _warmup.cancel()
+        await asyncio.gather(_warmup, return_exceptions=True)
     if _creates:
         await asyncio.gather(*_creates, return_exceptions=True)
     async with get_db() as db:

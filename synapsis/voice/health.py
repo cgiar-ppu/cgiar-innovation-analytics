@@ -60,7 +60,9 @@ async def provider_ok() -> bool | None:
         except (httpx.HTTPError, ValueError, OSError) as exc:
             ok = False
             logger.warning('voice_provider_probe_failed model=%s error=%s', model(), type(exc).__name__)
-        if not ok and status is not None:
+        if ok:
+            logger.info('voice_provider_probe_ok model=%s provider_status=%s', model(), status)
+        elif status is not None:
             logger.warning('voice_provider_probe_failed model=%s provider_status=%s', model(), status)
         _cache.update(ok=ok, checked=time.time(), status=status)
         return ok
