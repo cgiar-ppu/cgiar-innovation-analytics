@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from synapsis.auth.middleware import get_current_user, resolve_user_id
-from synapsis.voice import sessions
+from synapsis.voice import health, sessions
 from synapsis.voice.config import enabled
 from synapsis.voice.knowledge import lookup, data_catalog
 
@@ -36,7 +36,10 @@ class Knowledge(BaseModel):
 
 @router.get('/status')
 async def status(user=Depends(get_current_user)):
-    return {'enabled': enabled(), 'configured': bool(os.getenv('OPENAI_API_KEY')), 'max_seconds': sessions.MAX_SECONDS}
+    # provider_ok: True/False from a cached real provider probe, None when no key is configured.
+    # A non-empty key string ("configured") is not proof the provider accepts it.
+    return {'enabled': enabled(), 'configured': health.configured(), 'provider_ok': await health.provider_ok(),
+            'max_seconds': sessions.MAX_SECONDS}
 
 
 @router.post('/sessions', status_code=201)
