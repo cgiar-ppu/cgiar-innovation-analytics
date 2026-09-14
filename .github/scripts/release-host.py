@@ -14,7 +14,7 @@ env={'AWS_REGION':'eu-central-1','LITESTREAM_S3_BUCKET':f'cgiar-ia-artifacts-{ac
  'IA_PASSWORD_LOGIN_ENABLED':'false','IA_INVITED_LOGIN_ENABLED':'true','IA_SSO_ENABLED':'true',
  'IA_SSO_ISSUER':cfg['issuer'],'IA_SSO_CLIENT_ID':cfg['client'],'IA_SSO_DOMAIN':cfg['domain'],
  'IA_SSO_ORIGIN':cfg['origin'],'IA_SSO_ADMIN_SUBJECTS':cfg['admins'],
- 'IA_VOICE_ENABLED':'true','SYNAPSIS_PORT':'7780','SYNAPSIS_HOST':'0.0.0.0','SYNAPSIS_PLATFORM':'linux',
+ 'IA_VOICE_ENABLED':'true','IA_VOICE_ORIGINS':cfg['origin'],'SYNAPSIS_PORT':'7780','SYNAPSIS_HOST':'0.0.0.0','SYNAPSIS_PLATFORM':'linux',
  'PRMS_DB_PATH':'/app/data/prdb.sqlite','SYNAPSIS_WORKSPACE':'/workspace','SYNAPSIS_MAX_TURNS':'200',
  'SYNAPSIS_MODEL':cfg.get('model','claude-sonnet-4-6'),
  'SYNAPSIS_FALLBACK_MODEL':cfg.get('fallback','claude-opus-4-8'),

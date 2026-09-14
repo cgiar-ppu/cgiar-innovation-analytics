@@ -28,6 +28,10 @@ async def main():
    assert (await c.get('/api/sessions',headers=uh)).json()['sessions']==[]
    assert (await c.post('/api/auth/login',headers={'Origin':config.SSO_ORIGIN},json={'email':email,'password':pw})).status_code==200
    results.append('invitation activation, single-use, email login and empty private history')
+   r=await c.get('/api/voice/status',headers=uh);assert r.status_code==200,('voice origin',r.status_code)
+   assert r.json()['enabled'] and r.json()['configured']
+   assert (await c.get('/api/voice/status',headers={**uh,'Origin':'https://untrusted.example'})).status_code==403
+   results.append('voice enabled/configured for target origin; foreign origin rejected')
    # Synthetic fixture only; exercise real export and privacy routes against it.
    session=run_id
    async with get_db() as db:
