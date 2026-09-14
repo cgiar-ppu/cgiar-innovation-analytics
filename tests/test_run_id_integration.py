@@ -4,7 +4,7 @@ Validates that every WebSocket event carries a run_id scoped to the turn
 that produced it, preventing stale events from corrupting state across turns.
 
 Requirements:
-    - The v16 server must be running on http://localhost:7778
+    - Set TEST_BASE_URL and TEST_WS_URL to an isolated Innovation Analytics test server
     - pip install websockets pytest pytest-asyncio pytest-timeout
 """
 
@@ -20,8 +20,17 @@ import websockets
 # Constants
 # ---------------------------------------------------------------------------
 
-BASE_URL = os.environ.get("TEST_BASE_URL", "http://localhost:7778")
-WS_URL = os.environ.get("TEST_WS_URL", "ws://localhost:7778/ws/chat")
+# Live integration is opt-in and must never target the agent system's ports.
+from urllib.parse import urlparse
+BASE_URL = os.environ.get("TEST_BASE_URL", "")
+WS_URL = os.environ.get("TEST_WS_URL", "")
+_live_url = urlparse(WS_URL)
+pytestmark = pytest.mark.skipif(
+    not WS_URL or (_live_url.hostname in ("localhost", "127.0.0.1", "::1")
+                   and _live_url.port in (7777, 7778)),
+    reason="Set TEST_WS_URL to an explicitly prepared Innovation Analytics test server",
+)
+
 
 # Timeout for collecting events from a single turn (seconds).
 COLLECT_TIMEOUT = 45

@@ -63,7 +63,7 @@ def _index_names(path: str) -> set[str]:
         conn.close()
 
 
-def test_creates_all_five_indexes(temp_db):
+def test_creates_all_seven_indexes(temp_db):
     before = _index_names(temp_db)
     expected = {idx["name"] for idx in RESULT_TABLE_INDEXES}
     assert not (expected & before)  # none present yet
@@ -72,7 +72,7 @@ def test_creates_all_five_indexes(temp_db):
 
     after = _index_names(temp_db)
     assert expected.issubset(after)
-    assert len(expected) == 5
+    assert len(expected) == 7
 
 
 def test_idempotent(temp_db):

@@ -11,7 +11,7 @@ Tests the hard edge cases:
 7. Broadcast session_complete carries run_id
 8. Cross-turn guard with real server handles
 
-All tests run against the live v16 server on port 7778.
+Tests require an explicitly configured Innovation Analytics test server.
 """
 
 import asyncio
@@ -23,8 +23,17 @@ import httpx
 import pytest
 import websockets
 
-BASE_URL = os.environ.get("TEST_BASE_URL", "http://localhost:7778")
-WS_URL = os.environ.get("TEST_WS_URL", "ws://localhost:7778/ws/chat")
+# Live integration is opt-in and must never target the agent system's ports.
+from urllib.parse import urlparse
+BASE_URL = os.environ.get("TEST_BASE_URL", "")
+WS_URL = os.environ.get("TEST_WS_URL", "")
+_live_url = urlparse(WS_URL)
+pytestmark = pytest.mark.skipif(
+    not WS_URL or (_live_url.hostname in ("localhost", "127.0.0.1", "::1")
+                   and _live_url.port in (7777, 7778)),
+    reason="Set TEST_WS_URL to an explicitly prepared Innovation Analytics test server",
+)
+
 TIMEOUT = 60
 
 

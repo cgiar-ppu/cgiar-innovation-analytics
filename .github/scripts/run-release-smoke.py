@@ -5,7 +5,8 @@ stage=os.environ['STAGE'];cf=boto3.client('cloudformation');ssm=boto3.client('ss
 stack=cf.describe_stacks(StackName='cgiar-ia-'+stage)['Stacks'][0]
 instance=next(x['OutputValue'] for x in stack['Outputs'] if x['OutputKey']=='InstanceId')
 request=json.loads(Path('.github/smoke-request.json').read_text())
-script='.github/scripts/release-model-smoke.py' if request.get('models') else '.github/scripts/release-smoke.py'
+script=('.github/scripts/release-chat-smoke.py' if request.get('chat') else
+        '.github/scripts/release-model-smoke.py' if request.get('models') else '.github/scripts/release-smoke.py')
 encoded=base64.b64encode(Path(script).read_bytes()).decode()
 command='docker exec cgiar-innovation-analytics python -c '+shlex.quote('import base64;exec(base64.b64decode('+repr(encoded)+'))')
 cid=ssm.send_command(InstanceIds=[instance],DocumentName='AWS-RunShellScript',Parameters={'commands':[command]},TimeoutSeconds=900)['Command']['CommandId']

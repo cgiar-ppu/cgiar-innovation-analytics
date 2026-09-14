@@ -107,16 +107,16 @@ class TestEnsureLimit:
 
     def test_adds_limit_when_missing(self):
         result = _ensure_limit("SELECT * FROM result")
-        assert "LIMIT 100" in result
+        assert "LIMIT 5000" in result
 
     def test_preserves_existing_limit(self):
         result = _ensure_limit("SELECT * FROM result LIMIT 10")
         assert "LIMIT 10" in result
-        assert "LIMIT 100" not in result
+        assert "LIMIT 5000" not in result
 
     def test_handles_trailing_semicolon(self):
         result = _ensure_limit("SELECT * FROM result;")
-        assert "LIMIT 100" in result
+        assert "LIMIT 5000" in result
 
 
 class TestExtractTables:
@@ -280,7 +280,7 @@ class TestQueryFeatures:
         result = run_query("SELECT id FROM result WHERE is_active = 1;")
         assert not is_error(result)
         text = get_text(result)
-        assert "LIMIT 100" in text
+        assert "LIMIT 5000" in text
 
     def test_existing_limit_preserved(self, check_db):
         """Queries with existing LIMIT should keep it."""
