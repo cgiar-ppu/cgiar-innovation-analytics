@@ -53,7 +53,7 @@ export class LiveClient {
   private async closeOnServer(id = this.requestId) {
     if (!id) return;
     try {
-      const result = await voicePost(`sessions/${id}/close`, {}, { keepalive: true, token: this.authToken });
+      const result = await voicePost(`sessions/${id}/close`, {}, { keepalive: true, token: getAuthToken() ?? this.authToken });
       if (!result.closed) this.cb.task('Voice stopped locally. Server cleanup is pending; its retry watchdog remains active.');
     } catch { this.cb.task('Voice stopped locally. Server cleanup could not be confirmed; the heartbeat lease will expire.'); }
   }
@@ -120,7 +120,10 @@ export class LiveClient {
       const result = await voicePost('sessions', { request_id: requestId, sdp: peer.localDescription?.sdp }, { signal: this.abort.signal });
       if (generation !== this.generation) { void this.closeOnServer(requestId); return; }
       this.heartbeatTimer = setInterval(() => {
-        void voicePost(`sessions/${requestId}/heartbeat`, {}, { token: this.authToken }).catch(() => {
+        // SSO app tokens live at most 5 minutes and are refreshed by AuthGate; a voice session lasts up to 10.
+        // Always heartbeat with the CURRENT token (fall back to the start-time token only if the store is empty,
+        // e.g. during logout/unload), otherwise every SSO voice session dies with a 401 mid-conversation.
+        void voicePost(`sessions/${requestId}/heartbeat`, {}, { token: getAuthToken() ?? this.authToken }).catch(() => {
           if (generation === this.generation && !this.closing) this.fail('Voice authorization or heartbeat was lost. Please reconnect.');
         });
       }, 20000);
