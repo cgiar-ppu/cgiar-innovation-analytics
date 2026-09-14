@@ -18,6 +18,14 @@ from .config import session_config
 
 MAX_SECONDS = 600
 HEARTBEAT_SECONDS = 60
+# Columns added after the first release. init() adds any that are missing, so an
+# older replicated database upgrades in place (SQLite ALTER TABLE ADD COLUMN only).
+EXTRA_COLUMNS = {
+    'closed': 'REAL',              # when the lease was confirmed closed
+    'usage_seconds': 'REAL',       # server-observed lease duration: created -> closed
+    'provider_seconds': 'REAL',    # provider-reported usage relayed by the browser on session.closed (client claim)
+    'provider_status': 'INTEGER',  # HTTP status of the confirming hangup (200/404/410)
+}
 _reaper = None
 _creates: set[asyncio.Task] = set()
 
@@ -28,6 +36,11 @@ async def init():
             owner TEXT NOT NULL, request_id TEXT NOT NULL, sdp_hash TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL, provider_id TEXT, answer TEXT, created REAL NOT NULL,
             expires REAL NOT NULL, heartbeat REAL NOT NULL, PRIMARY KEY(owner, request_id))''')
+        present = {row[1] for row in await (await db.execute('PRAGMA table_info(voice_sessions)')).fetchall()}
+        for name, kind in EXTRA_COLUMNS.items():
+            if name not in present:
+                # Names come from the constant above, never from input.
+                await db.execute(f'ALTER TABLE voice_sessions ADD COLUMN {name} {kind}')
         await db.execute('CREATE INDEX IF NOT EXISTS voice_session_status ON voice_sessions(status, expires)')
         await db.commit()
 
@@ -51,13 +64,26 @@ async def provider(path, body=None):
                                  headers={'Authorization': 'Bearer ' + os.getenv('OPENAI_API_KEY', '')}, json=body or {})
 
 
-async def close(owner, request_id):
+async def _record_closed(row, provider_status, provider_seconds=None):
+    """Mark a lease closed with the usage evidence we have and emit one CloudWatch-friendly line."""
+    now = time.time()
+    seconds = max(0.0, now - row['created'])
+    await update(row['owner'], row['request_id'], status='closed', answer=None, closed=now, usage_seconds=seconds,
+                 provider_seconds=provider_seconds, provider_status=provider_status)
+    logger.info('voice_session_closed owner=%s request_id=%s seconds=%.0f provider_seconds=%s provider_status=%s',
+                row['owner'], row['request_id'], seconds, 'null' if provider_seconds is None else f'{provider_seconds:.0f}', provider_status)
+
+
+async def close(owner, request_id, provider_seconds=None):
     # Tombstone wins even when End arrives before create or while upstream is pending.
     async with get_db() as db:
         await db.execute('BEGIN IMMEDIATE')
         await db.execute("INSERT OR IGNORE INTO voice_sessions(owner,request_id,status,created,expires,heartbeat) VALUES (?,?,'closed',?,?,?)", (owner, request_id, time.time(), time.time(), time.time()))
         row = dict(await (await db.execute('SELECT * FROM voice_sessions WHERE owner=? AND request_id=?', (owner, request_id))).fetchone())
         if row['status'] in ('closed', 'rejected'):
+            if row['status'] == 'closed' and provider_seconds is not None and row.get('provider_seconds') is None and row['sdp_hash']:
+                # The reaper or a second tab already closed it; keep the provider's usage figure.
+                await db.execute('UPDATE voice_sessions SET provider_seconds=? WHERE owner=? AND request_id=?', (provider_seconds, owner, request_id))
             await db.commit()
             return {'closed': True}
         await db.execute("UPDATE voice_sessions SET status='closing' WHERE owner=? AND request_id=?", (owner, request_id))
@@ -67,11 +93,11 @@ async def close(owner, request_id):
     try:
         response = await provider('sessions/' + quote(row['provider_id'], safe='') + '/hangup')
         if response.is_success or response.status_code in (404, 410):
-            await update(owner, request_id, status='closed', answer=None)
+            await _record_closed(row, response.status_code, provider_seconds)
             return {'closed': True}
-    except httpx.HTTPError:
-        pass
-    logger.warning('Voice hangup unconfirmed; durable lease retained for retry')
+        logger.warning('voice_hangup_unconfirmed owner=%s request_id=%s provider_status=%s', owner, request_id, response.status_code)
+    except httpx.HTTPError as exc:
+        logger.warning('voice_hangup_unconfirmed owner=%s request_id=%s error=%s', owner, request_id, type(exc).__name__)
     return {'closed': False, 'status': 'cleanup_pending'}
 
 
@@ -94,7 +120,8 @@ async def create(owner, request_id, sdp):
         recent = await (await db.execute('SELECT COUNT(*) FROM voice_sessions WHERE owner=? AND created>?', (owner, now - 60))).fetchone()
         if counts[0] >= 100 or (counts[1] or 0) >= 20 or recent[0] >= 4:
             raise HTTPException(429, 'The voice start limit has been reached for now. Try again later.')
-        await db.execute("INSERT INTO voice_sessions VALUES (?,?,?,'creating',NULL,NULL,?,?,?)", (owner, request_id, digest, now, now + MAX_SECONDS, now + HEARTBEAT_SECONDS))
+        await db.execute("INSERT INTO voice_sessions(owner,request_id,sdp_hash,status,provider_id,answer,created,expires,heartbeat) VALUES (?,?,?,'creating',NULL,NULL,?,?,?)",
+                         (owner, request_id, digest, now, now + MAX_SECONDS, now + HEARTBEAT_SECONDS))
         await db.commit()
     # Shield upstream completion from browser cancellation so the provider ID is
     # recorded and compensated rather than losing an active paid session.
@@ -139,6 +166,7 @@ async def _finish_create(owner, request_id, sdp):
         if row['status'] != 'active':
             await close(owner, request_id)
             raise HTTPException(409, 'This voice start was cancelled or expired.')
+        logger.info('voice_session_started owner=%s request_id=%s provider_id=%s', owner, request_id, provider_id)
         return view(row)
     except (httpx.HTTPError, ValueError):
         await update(owner, request_id, status='uncertain')
@@ -157,6 +185,13 @@ async def heartbeat(owner, request_id):
         if result.rowcount != 1:
             raise HTTPException(409, 'Voice connection expired or is closing.')
     return {'ok': True}
+
+
+async def usage_today():
+    """Rolling 24 h total of closed sessions; provider-reported seconds win over the server-observed duration."""
+    async with get_db() as db:
+        row = await (await db.execute("SELECT COUNT(*), COALESCE(SUM(COALESCE(provider_seconds, usage_seconds)), 0) FROM voice_sessions WHERE status='closed' AND sdp_hash != '' AND closed>?", (time.time() - 86400,))).fetchone()
+    return {'sessions': row[0], 'seconds': round(row[1])}
 
 
 async def reap_once():

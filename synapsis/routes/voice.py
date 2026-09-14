@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
-from synapsis.auth.middleware import get_current_user, resolve_user_id
+from synapsis.auth.middleware import get_current_user, resolve_role, resolve_user_id
 from synapsis.voice import health, sessions
 from synapsis.voice.config import enabled
 from synapsis.voice.knowledge import lookup, data_catalog
@@ -27,6 +27,12 @@ class Start(BaseModel):
     sdp: str = Field(min_length=10, max_length=60000, pattern=r'^v=0')
 
 
+class Close(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    # Provider-reported usage relayed by the browser from session.closed. A client claim, stored as such.
+    usage_seconds: float | None = Field(default=None, ge=0, le=86400)
+
+
 class Knowledge(BaseModel):
     model_config = ConfigDict(extra='forbid')
     query: str = Field(max_length=300)
@@ -38,8 +44,11 @@ class Knowledge(BaseModel):
 async def status(user=Depends(get_current_user)):
     # provider_ok: True/False from a cached real provider probe, None when no key is configured.
     # A non-empty key string ("configured") is not proof the provider accepts it.
-    return {'enabled': enabled(), 'configured': health.configured(), 'provider_ok': await health.provider_ok(),
+    body = {'enabled': enabled(), 'configured': health.configured(), 'provider_ok': await health.provider_ok(),
             'max_seconds': sessions.MAX_SECONDS}
+    if resolve_role(user) == 'admin':
+        body['usage_today'] = await sessions.usage_today()
+    return body
 
 
 @router.post('/sessions', status_code=201)
@@ -50,8 +59,8 @@ async def start(payload: Start, user=Depends(get_current_user)):
 
 
 @router.post('/sessions/{request_id}/close')
-async def close(request_id: UUID, user=Depends(get_current_user)):
-    return await sessions.close(resolve_user_id(user), str(request_id))
+async def close(request_id: UUID, payload: Close | None = None, user=Depends(get_current_user)):
+    return await sessions.close(resolve_user_id(user), str(request_id), provider_seconds=payload.usage_seconds if payload else None)
 
 
 @router.post('/sessions/{request_id}/heartbeat')

@@ -89,6 +89,68 @@ async def test_unknown_creation_never_retried(voice_db):
         assert provider.await_count == 1
 
 
+async def test_init_upgrades_legacy_table_in_place(initialized_db):
+    from synapsis.database import get_db
+    async with get_db() as db:
+        await db.execute('''CREATE TABLE voice_sessions (owner TEXT NOT NULL, request_id TEXT NOT NULL, sdp_hash TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL, provider_id TEXT, answer TEXT, created REAL NOT NULL, expires REAL NOT NULL, heartbeat REAL NOT NULL, PRIMARY KEY(owner, request_id))''')
+        await db.execute("INSERT INTO voice_sessions VALUES ('old','r1','h','closed',NULL,NULL,1,2,3)")
+        await db.commit()
+    await s.init()
+    await s.init()  # idempotent
+    async with get_db() as db:
+        columns = {row[1] for row in await (await db.execute('PRAGMA table_info(voice_sessions)')).fetchall()}
+    assert set(s.EXTRA_COLUMNS) <= columns
+    assert (await s.get('old', 'r1'))['status'] == 'closed'
+    # Old rows and the create path both work with the widened schema.
+    with patch.object(s, 'provider', AsyncMock(return_value=answer())):
+        assert (await s.create('old', str(uuid4()), 'v=0\r\noffer'))['max_seconds'] == 600
+
+
+async def test_close_records_usage_and_emits_structured_line(voice_db, caplog):
+    rid = str(uuid4())
+    with patch.object(s, 'provider', AsyncMock(return_value=answer())), caplog.at_level('INFO', logger='synapsis_agent'):
+        await s.create('alice', rid, 'v=0\r\noffer')
+        await s.update('alice', rid, created=time.time() - 42)
+        assert (await s.close('alice', rid, provider_seconds=40.4))['closed']
+    row = await s.get('alice', rid)
+    assert row['status'] == 'closed' and row['closed'] > row['created'] and row['answer'] is None
+    assert 41 <= row['usage_seconds'] <= 45 and row['provider_seconds'] == 40.4 and row['provider_status'] == 201
+    line = next(r.message for r in caplog.records if r.message.startswith('voice_session_closed'))
+    assert f'owner=alice request_id={rid} seconds=4' in line and 'provider_seconds=40' in line and 'provider_status=201' in line
+    assert any(r.message.startswith(f'voice_session_started owner=alice request_id={rid} provider_id=live_test') for r in caplog.records)
+    assert await s.usage_today() == {'sessions': 1, 'seconds': 40}
+    # A late client report after the reaper already closed the lease is kept; tombstones never count.
+    rid2 = str(uuid4())
+    with patch.object(s, 'provider', AsyncMock(return_value=answer())):
+        await s.create('bob', rid2, 'v=0\r\noffer')
+        await s.close('bob', rid2)
+        await s.close('bob', rid2, provider_seconds=12)
+    assert (await s.get('bob', rid2))['provider_seconds'] == 12
+    await s.close('carol', str(uuid4()), provider_seconds=999)
+    assert (await s.usage_today())['sessions'] == 2
+
+
+async def test_status_daily_usage_is_admin_only(voice_db, monkeypatch):
+    from fastapi import FastAPI
+    from synapsis.routes.voice import router
+    from synapsis.auth import middleware
+    from synapsis.voice import health
+    health._cache.update(ok=True, checked=time.time(), status=200)
+    app = FastAPI()
+    app.include_router(router)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        app.dependency_overrides[middleware.get_current_user] = lambda: {'user_id': 'alice', 'role': 'user'}
+        assert 'usage_today' not in (await client.get('/api/voice/status')).json()
+        app.dependency_overrides[middleware.get_current_user] = lambda: {'user_id': 'root', 'role': 'admin'}
+        assert (await client.get('/api/voice/status')).json()['usage_today'] == {'sessions': 0, 'seconds': 0}
+        rid = str(uuid4())
+        assert (await client.post(f'/api/voice/sessions/{rid}/close', json={'usage_seconds': -1})).status_code == 422
+        assert (await client.post(f'/api/voice/sessions/{rid}/close', json={'extra': 1})).status_code == 422
+        assert (await client.post(f'/api/voice/sessions/{rid}/close', json={})).json() == {'closed': True}
+        assert (await client.post(f'/api/voice/sessions/{rid}/close')).json() == {'closed': True}
+
+
 async def test_limit_messages_are_environment_neutral(voice_db):
     # Per-user burst limit: four starts within a minute; the fifth is refused.
     with patch.object(s, 'provider', AsyncMock(return_value=answer())):
