@@ -11,6 +11,8 @@ script=('.github/scripts/release-data-smoke.py' if request.get('data') else
 scripts=['.github/scripts/release-file-integrity.py'] if request.get('integrity') else [script]
 if request.get('all'):
  scripts=['.github/scripts/release-model-smoke.py','.github/scripts/release-chat-smoke.py','.github/scripts/release-smoke.py']
+if request.get('data'):
+ scripts.append('.github/scripts/release-smoke.py')
 commands=['set -e']
 for script in scripts:
  encoded=base64.b64encode(Path(script).read_bytes()).decode()

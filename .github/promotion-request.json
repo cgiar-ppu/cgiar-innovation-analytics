@@ -1,7 +1,7 @@
 {
-  "stage": "prod",
-  "sha": "6c837276ce1bce4b497e247cae9e2310120b97b7",
-  "sequence": 9,
+  "stage": "staging",
+  "sha": "c7c9c9c7cbc81d3902a60c151540be1a2e82672a",
+  "sequence": 10,
   "models_config": {
     "model": "claude-sonnet-5",
     "fallback": "claude-opus-5",

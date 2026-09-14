@@ -15,6 +15,11 @@ async def main():
  headers={'Origin':config.SSO_ORIGIN,'Authorization':'Bearer '+admin_token}
  results=[]
  async with httpx.AsyncClient(base_url='http://localhost:7780',timeout=90) as c:
+  try:
+   from synapsis.prms_snapshot import get_snapshot_info
+   expected_date=get_snapshot_info().extracted_on
+  except ImportError:
+   expected_date=None
   for path in ('/api/sessions','/api/auth/invitations'):
    assert (await c.get(path)).status_code in (401,403);results.append('anonymous '+path+' denied')
   # An administrator must not inherit any old or other-user history.
@@ -66,6 +71,9 @@ async def main():
      assert WATERMARK_BANNER in r.text
      if fmt=='pdf' and 'claude-sonnet-5' in config.AVAILABLE_MODELS:
       raise AssertionError('Updated release must return a real PDF, not HTML fallback')
+    if expected_date:
+     exported_text=text if fmt=='docx' or (fmt=='pdf' and r.content.startswith(b'%PDF')) else r.text
+     assert expected_date in exported_text,(fmt,'snapshot date absent from export')
     results.append(fmt+' export watermark verified ('+r.headers.get('content-type','')+')')
    assert (await c.get('/api/history/'+session,headers={'Authorization':'Bearer '+other_token})).status_code==404
    assert (await c.get('/api/export/'+session,params={'token':other_token})).status_code==404
