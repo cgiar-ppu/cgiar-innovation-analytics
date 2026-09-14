@@ -439,11 +439,12 @@ async def test_agent_history_tools_are_owner_scoped(auth_client_legacy):
 @pytest.mark.asyncio
 async def test_private_database_and_paid_query_are_not_public(auth_client_legacy, tmp_path):
     from synapsis.routes import files
-    hidden = tmp_path / '.synapsis'
-    hidden.mkdir()
+    file_root = tmp_path / 'file-workspace'
+    hidden = file_root / '.synapsis'
+    hidden.mkdir(parents=True)
     (hidden / 'chat.db').write_bytes(b'private database fixture')
     admin = {'Authorization': f'Bearer {_token_for("admin@cgiar.org", role="admin")}'}
-    with patch.object(files, 'WORKSPACE', tmp_path), patch.object(files, 'AUTH_DISABLED', False):
+    with patch.object(files, 'WORKSPACE', file_root), patch.object(files, 'AUTH_DISABLED', False):
         assert (await auth_client_legacy.get('/api/files/.synapsis/chat.db', headers=admin)).status_code == 404
     assert (await auth_client_legacy.post('/api/query', json={'message':'must not invoke a model'})).status_code == 401
     assert (await auth_client_legacy.get('/api/dashboard/prms-stats')).status_code == 401

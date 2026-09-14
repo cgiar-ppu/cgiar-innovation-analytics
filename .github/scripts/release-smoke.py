@@ -17,6 +17,21 @@ async def main():
  async with httpx.AsyncClient(base_url='http://localhost:7780',timeout=90) as c:
   for path in ('/api/sessions','/api/auth/invitations'):
    assert (await c.get(path)).status_code in (401,403);results.append('anonymous '+path+' denied')
+  # An administrator must not inherit any old or other-user history.
+  r=await c.get('/api/sessions',headers=headers);assert r.status_code==200 and r.json()['sessions']==[]
+  async with get_db() as db:
+   legacy=run_id+'-legacy';unowned=run_id+'-unowned'
+   for sid,owner in ((legacy,config.LEGACY_USER_ID),(unowned,None)):
+    await db.execute('INSERT INTO sessions(session_id,title,created_at,updated_at,model,user_id) VALUES(?,?,?,?,?,?)',(sid,'[QA] inaccessible ownership fixture',time.time(),time.time(),config.MODEL,owner))
+    await db.execute('INSERT INTO messages(session_id,type,data,ts) VALUES(?,?,?,?)',(sid,'text',json.dumps({'content':run_id+' PRIVATE_OWNERSHIP_FIXTURE'}),time.time()))
+   await db.commit()
+  for sid in (legacy,unowned):
+   assert (await c.get('/api/history/'+sid,headers=headers)).status_code==404
+   assert (await c.get('/api/export/'+sid,params={'token':admin_token})).status_code==404
+  assert (await c.get('/api/search',params={'q':run_id},headers=headers)).json()['results']==[]
+  assert (await c.get('/api/search',params={'q':run_id})).status_code==401
+  assert (await c.get('/api/files/.synapsis/chat.db',headers=headers)).status_code==404
+  results.append('admin cannot list/search/read/export legacy or unowned chats; hidden database blocked')
   email=run_id+'@example.com';body={'email':email,'name':'Release QA (synthetic, revoked after test)'}
   r=await c.post('/api/auth/invitations',headers=headers,json=body);assert r.status_code==200,r.status_code
   invite=r.json()['invitation_url'].split('#invite=')[1]
