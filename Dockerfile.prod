@@ -59,6 +59,8 @@ RUN chmod +x /entrypoint.prod.sh
 
 # PRMS database (must be present in build context at data/prdb.sqlite)
 COPY data/prdb.sqlite /app/data/prdb.sqlite
+COPY data/prdb.manifest.json /app/data/prdb.manifest.json
+COPY data/search_index/ /app/data/search_index/
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -68,6 +70,7 @@ ENV PYTHONUNBUFFERED=1 \
     SYNAPSIS_LOG_LEVEL=INFO \
     SYNAPSIS_PLATFORM=linux \
     PRMS_DB_PATH=/app/data/prdb.sqlite \
+    PRMS_SNAPSHOT_MANIFEST=/app/data/prdb.manifest.json \
     SYNAPSIS_WORKSPACE=/workspace \
     CLAUDECODE=""
 

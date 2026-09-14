@@ -1,0 +1,22 @@
+name: Publish verified PRMS snapshot
+on:
+  push:
+    branches: [feat/ia-release-20260914]
+    paths: [.github/prms-publish-request.json]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    environment: DEV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::972793825893:role/cicd/github-actions-cgiar-innovation-analytics-DEV-deploy
+          aws-region: eu-central-1
+      - run: pip install boto3 cryptography requests
+      - run: python3 .github/scripts/publish-prms.py
+        env:
+          IA_PRMS_TRANSFER_KEY: ${{ secrets.IA_PRMS_TRANSFER_KEY }}

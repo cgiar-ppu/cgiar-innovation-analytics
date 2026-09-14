@@ -73,7 +73,7 @@ def resolve_db_path() -> str:
 
 
 def latest_json_path() -> str:
-    return os.path.join(prms_db_root(), "LATEST.json")
+    return os.getenv("PRMS_SNAPSHOT_MANIFEST", os.path.join(prms_db_root(), "LATEST.json"))
 
 
 # ---------------------------------------------------------------------------
