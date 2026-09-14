@@ -1,0 +1,32 @@
+name: IA retain rollback containers safely
+on:
+  push:
+    branches: [feat/ia-release-20260914]
+    paths: [.github/retention-request.json]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  retain:
+    strategy:
+      matrix:
+        include:
+          - environment: TST
+            stage: staging
+            account: '053142643230'
+          - environment: PRD
+            stage: prod
+            account: '207258148366'
+    environment: ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ matrix.account }}:role/cicd/github-actions-cgiar-innovation-analytics-${{ matrix.environment }}-deploy
+          aws-region: eu-central-1
+      - run: pip install 'boto3>=1.35,<2'
+      - run: python3 .github/scripts/release-retention.py
+        env:
+          STAGE: ${{ matrix.stage }}
+          EXPECTED_ACCOUNT: ${{ matrix.account }}

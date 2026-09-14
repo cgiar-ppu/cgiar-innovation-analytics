@@ -1,0 +1,1 @@
+{"purpose":"Retain stopped rollback containers without allowing them to restart on host reboot","sequence":1}
