@@ -5,7 +5,8 @@ stage=os.environ['STAGE'];cf=boto3.client('cloudformation');ssm=boto3.client('ss
 stack=cf.describe_stacks(StackName='cgiar-ia-'+stage)['Stacks'][0]
 instance=next(x['OutputValue'] for x in stack['Outputs'] if x['OutputKey']=='InstanceId')
 request=json.loads(Path('.github/smoke-request.json').read_text())
-script=('.github/scripts/release-chat-smoke.py' if request.get('chat') else
+script=('.github/scripts/release-data-smoke.py' if request.get('data') else
+        '.github/scripts/release-chat-smoke.py' if request.get('chat') else
         '.github/scripts/release-model-smoke.py' if request.get('models') else '.github/scripts/release-smoke.py')
 scripts=['.github/scripts/release-file-integrity.py'] if request.get('integrity') else [script]
 if request.get('all'):
