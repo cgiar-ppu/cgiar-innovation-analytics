@@ -8,7 +8,8 @@ management.  Requires OPENAI_API_KEY environment variable.
 import os
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from synapsis.auth.middleware import get_current_user
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional
@@ -17,8 +18,7 @@ from synapsis.config import (
     logger, TTS_MODEL, TTS_VOICE, TTS_INSTRUCTIONS, TTS_SPEED,
 )
 
-router = APIRouter()
-
+router = APIRouter(dependencies=[Depends(get_current_user)])
 # ---------------------------------------------------------------------------
 # Runtime-mutable settings (initialised from config, updated via API)
 # ---------------------------------------------------------------------------

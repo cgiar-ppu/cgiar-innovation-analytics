@@ -8,7 +8,8 @@ This reuses the agent resolution and option-building logic from the workflow
 step runner, so any agent that works in a workflow pipeline also works here.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from synapsis.auth.middleware import get_current_user
 from pydantic import BaseModel, Field
 from typing import Optional
 
@@ -23,9 +24,7 @@ from synapsis.config import logger
 from synapsis.services.workflow_step_helpers import resolve_step_agent, build_step_options
 
 
-router = APIRouter(prefix="/api", tags=["agent-query"])
-
-
+router = APIRouter(prefix="/api", tags=["agent-query"], dependencies=[Depends(get_current_user)])
 class AgentQueryRequest(BaseModel):
     """POST /api/agents/{agent_id}/query — direct agent query."""
     message: str = Field(..., min_length=1, max_length=50000)

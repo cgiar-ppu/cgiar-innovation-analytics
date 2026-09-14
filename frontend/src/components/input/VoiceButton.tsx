@@ -1,3 +1,4 @@
+import { getAuthToken } from '../../stores/auth'
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { Mic, MicOff, Loader2 } from 'lucide-react'
 
@@ -99,7 +100,8 @@ export function VoiceButton({ onTranscription, disabled }: Props) {
           const fd = new FormData()
           fd.append('file', file)
 
-          const res = await fetch('/api/transcribe', { method: 'POST', body: fd })
+          const token = getAuthToken()
+          const res = await fetch('/api/transcribe', { method: 'POST', body: fd, headers: token ? { Authorization: `Bearer ${token}` } : {} })
 
           if (!res.ok) {
             const errData = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }))

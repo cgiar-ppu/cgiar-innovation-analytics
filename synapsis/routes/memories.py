@@ -11,14 +11,13 @@ memory operations. These REST endpoints are for the UI sidebar.
 
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from synapsis.auth.middleware import get_current_user
 
 from synapsis.database import get_db
 from synapsis.models import MemoryCreate
 
-router = APIRouter(prefix="/api", tags=["memories"])
-
-
+router = APIRouter(prefix="/api", tags=["memories"], dependencies=[Depends(get_current_user)])
 @router.get("/memories")
 async def list_memories():
     """List all active memories sorted by importance."""

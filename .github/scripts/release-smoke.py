@@ -22,6 +22,20 @@ async def main():
    expected_date=None
   for path in ('/api/sessions','/api/auth/invitations'):
    assert (await c.get(path)).status_code in (401,403);results.append('anonymous '+path+' denied')
+  # Anonymous sweep: every API route must deny unauthenticated callers unless it is deliberately public.
+  # (2026-09-14: 46 of 93 routes were open in production because auth is a per-router dependency.)
+  public={'/api/health','/api/config','/api/activity','/api/auth/sso/config','/api/auth/sso/start','/auth/callback'}
+  schema=(await c.get('/openapi.json')).json()['paths'];open_routes=[]
+  for path,ops in schema.items():
+   if path in public or path.startswith('/api/auth/'):continue
+   probe=path
+   for k in ('session_id','agent_id','workflow_id','run_id','fleet_id','memory_id','filename','request_id'):probe=probe.replace('{'+k+'}','probe-none')
+   if '{' in probe:continue
+   for method in ops:
+    r=await c.request(method.upper(),probe,headers={'Origin':config.SSO_ORIGIN},json={} if method!='get' else None)
+    if r.status_code not in (401,403):open_routes.append(method.upper()+' '+path+' -> '+str(r.status_code))
+  assert not open_routes,('unauthenticated routes',open_routes)
+  results.append('anonymous sweep: all '+str(len(schema))+' schema paths deny unauthenticated access (public allow-list excepted)')
   # An administrator must not inherit any old or other-user history.
   r=await c.get('/api/sessions',headers=headers);assert r.status_code==200 and r.json()['sessions']==[]
   async with get_db() as db:

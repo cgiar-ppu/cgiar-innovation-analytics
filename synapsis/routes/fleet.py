@@ -21,15 +21,14 @@ Fleet management REST API routes.
 import asyncio
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from synapsis.auth.middleware import get_current_user
 from pydantic import BaseModel
 from typing import Optional
 
 from synapsis.config import logger
 
-router = APIRouter(prefix="/api/fleet", tags=["fleet"])
-
-
+router = APIRouter(prefix="/api/fleet", tags=["fleet"], dependencies=[Depends(get_current_user)])
 # ---------------------------------------------------------------------------
 # Pydantic request models
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-import { api } from '../lib/api';
+import { api, authHeaders } from '../lib/api';
 import type {
   Workflow,
   StepConfig,
@@ -62,7 +62,7 @@ export const workflowsService = {
   // downloadRunLog streams a binary blob for client-side download. The api
   // helper always calls .json(), so raw fetch is kept here for this one method.
   async downloadRunLog(workflowId: string, filename: string): Promise<void> {
-    const res = await fetch(`/api/workflows/${workflowId}/logs/${filename}`);
+    const res = await fetch(`/api/workflows/${workflowId}/logs/${filename}`, { headers: authHeaders() });
     if (!res.ok) throw new Error(`GET /api/workflows/${workflowId}/logs/${filename}: ${res.status}`);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -84,7 +84,7 @@ export const workflowsService = {
   },
 
   async downloadWorkflowRun(workflowId: string, runId: string, format: string = 'json'): Promise<void> {
-    const res = await fetch(`/api/workflows/${workflowId}/runs/${runId}/download?format=${format}`);
+    const res = await fetch(`/api/workflows/${workflowId}/runs/${runId}/download?format=${format}`, { headers: authHeaders() });
     if (!res.ok) throw new Error('Failed to download run');
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);

@@ -8,14 +8,13 @@ Dashboard statistics API — aggregate metrics from the database.
 import time
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
+from synapsis.auth.middleware import get_current_user
 
 from synapsis.agents import SUBAGENTS
 from synapsis.database import get_db
 
-router = APIRouter(prefix="/api", tags=["dashboard"])
-
-
+router = APIRouter(prefix="/api", tags=["dashboard"], dependencies=[Depends(get_current_user)])
 @router.get("/dashboard/stats")
 async def dashboard_stats():
     """Return dashboard statistics from the database."""

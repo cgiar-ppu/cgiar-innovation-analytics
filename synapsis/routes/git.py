@@ -12,13 +12,12 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
+from synapsis.auth.middleware import get_current_user
 
 from synapsis.config import WORKSPACE, logger
 
-router = APIRouter(prefix="/api/git", tags=["git"])
-
-
+router = APIRouter(prefix="/api/git", tags=["git"], dependencies=[Depends(get_current_user)])
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
