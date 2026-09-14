@@ -7,7 +7,8 @@ Full-text conversation search endpoint.
 import json
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from synapsis.auth.middleware import get_current_user, resolve_user_id
 
 from synapsis.database import get_db
 
@@ -15,7 +16,7 @@ router = APIRouter(prefix="/api", tags=["search"])
 
 
 @router.get("/search")
-async def search_conversations(q: str = "", limit: int = 50):
+async def search_conversations(q: str = "", limit: int = 50, user=Depends(get_current_user)):
     """Search across all conversation messages."""
     if not q.strip():
         return {"results": []}
@@ -29,9 +30,10 @@ async def search_conversations(q: str = "", limit: int = 50):
             LEFT JOIN sessions s ON m.session_id = s.session_id
             WHERE m.type IN ('user', 'text')
               AND m.data LIKE ?
+              AND s.user_id = ?
             ORDER BY m.ts DESC
             LIMIT ?
-        """, (search_term, limit))
+        """, (search_term, resolve_user_id(user), min(max(limit, 1), 100)))
 
         rows = await cursor.fetchall()
         results = []

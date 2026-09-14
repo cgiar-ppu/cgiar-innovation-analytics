@@ -7,7 +7,9 @@ Unlike the WebSocket endpoint, this creates a fresh agent for each request
 and does not maintain session state.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from synapsis.auth.middleware import get_current_user, resolve_user_id, resolve_role
+from synapsis.auth.context import set_current_user_id
 
 from claude_agent_sdk import (
     query,
@@ -35,7 +37,7 @@ router = APIRouter(prefix="/api", tags=["query"])
 
 
 @router.post("/query")
-async def api_query(payload: QueryRequest):
+async def api_query(payload: QueryRequest, user=Depends(get_current_user)):
     """Process a single query and return the complete response.
 
     Honours the optional ``scope`` object (year / programme filters) and the
@@ -67,6 +69,7 @@ async def api_query(payload: QueryRequest):
         apply_scope_to_message(payload.message.strip(), scope), persona
     )
 
+    set_current_user_id(resolve_user_id(user), resolve_role(user))
     options = await build_agent_options()
 
     texts: list[str] = []

@@ -17,6 +17,13 @@ from datetime import datetime
 import aiosqlite
 
 from synapsis.config import logger
+from synapsis import config
+from synapsis.auth.context import get_current_user_id
+
+def _history_owner():
+    owner = get_current_user_id()
+    return None if not config.AUTH_DISABLED and owner == config.LEGACY_USER_ID else owner
+
 from synapsis.database.connection import get_db, _get_shared_db
 
 
@@ -199,7 +206,8 @@ async def index_all_sessions(force: bool = False) -> dict:
     async with get_db() as db:
         # Get all sessions
         cursor = await db.execute(
-            "SELECT session_id, updated_at FROM sessions ORDER BY updated_at DESC"
+            "SELECT session_id, updated_at FROM sessions WHERE user_id = ? ORDER BY updated_at DESC",
+            (_history_owner(),)
         )
         all_sessions = await cursor.fetchall()
 
@@ -266,9 +274,10 @@ async def search_history(
                 FROM history_fts fts
                 WHERE history_fts MATCH ?
                   AND fts.session_id = ?
+                  AND fts.session_id IN (SELECT session_id FROM sessions WHERE user_id = ?)
                 ORDER BY rank
                 LIMIT ?
-            """, (query, session_filter, limit))
+            """, (query, session_filter, _history_owner(), limit))
         else:
             cursor = await db.execute("""
                 SELECT
@@ -278,9 +287,10 @@ async def search_history(
                     rank
                 FROM history_fts fts
                 WHERE history_fts MATCH ?
+                  AND fts.session_id IN (SELECT session_id FROM sessions WHERE user_id = ?)
                 ORDER BY rank
                 LIMIT ?
-            """, (query, limit))
+            """, (query, _history_owner(), limit))
 
         fts_rows = await cursor.fetchall()
         if not fts_rows:
@@ -347,8 +357,8 @@ async def retrieve_conversation(
     async with get_db() as db:
         # Get session info
         cursor = await db.execute(
-            "SELECT title, created_at, updated_at, message_count FROM sessions WHERE session_id = ?",
-            (session_id,),
+            "SELECT title, created_at, updated_at, message_count FROM sessions WHERE session_id = ? AND user_id = ?",
+            (session_id, _history_owner()),
         )
         session_row = await cursor.fetchone()
         if not session_row:
@@ -445,9 +455,10 @@ async def list_indexed_sessions(limit: int = 50) -> list[dict]:
             SELECT session_id, title, first_prompt, created_at, updated_at,
                    message_count, clean_text_length, indexed_at
             FROM history_sessions
+            WHERE session_id IN (SELECT session_id FROM sessions WHERE user_id = ?)
             ORDER BY updated_at DESC
             LIMIT ?
-        """, (limit,))
+        """, (_history_owner(), limit))
         rows = await cursor.fetchall()
 
     return [

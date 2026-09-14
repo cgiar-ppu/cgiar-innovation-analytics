@@ -172,12 +172,12 @@ async def test_user_cannot_delete_another_users_session(auth_client):
 # Admin-legacy-chat exception (2026-07-20): synapsis/auth/scoping.py
 # ---------------------------------------------------------------------------
 
-def test_allowed_user_ids_admin_widens_to_legacy():
+def test_allowed_user_ids_admin_own_only():
     from synapsis.auth.scoping import allowed_user_ids
     from synapsis.config import LEGACY_USER_ID
 
     assert allowed_user_ids("jose@synapsis-analytics.com", "admin") == [
-        "jose@synapsis-analytics.com", LEGACY_USER_ID,
+        "jose@synapsis-analytics.com",
     ]
     # Admin identity that IS the sentinel (e.g. dev-bypass) -> no duplicate.
     assert allowed_user_ids(LEGACY_USER_ID, "admin") == [LEGACY_USER_ID]
@@ -191,17 +191,17 @@ def test_allowed_user_ids_non_admin_own_only():
     assert allowed_user_ids("ppt.tester@cgiar.org", "user") == ["ppt.tester@cgiar.org"]
 
 
-def test_is_visible_to_admin_legacy_exception():
+def test_is_visible_to_fails_closed_for_legacy_and_missing_owners():
     from synapsis.auth.scoping import is_visible_to
     from synapsis.config import LEGACY_USER_ID
 
-    assert is_visible_to(LEGACY_USER_ID, "jose@synapsis-analytics.com", "admin") is True
+    assert is_visible_to(LEGACY_USER_ID, "jose@synapsis-analytics.com", "admin") is False
     assert is_visible_to(LEGACY_USER_ID, "ppt.tester@cgiar.org", "researcher") is False
     assert is_visible_to("bob@cgiar.org", "alice@cgiar.org", "admin") is False
     assert is_visible_to("alice@cgiar.org", "alice@cgiar.org", "researcher") is True
     # Falsy owner (pre-migration edge case) -- visible regardless of role.
-    assert is_visible_to(None, "alice@cgiar.org", "researcher") is True
-    assert is_visible_to("", "alice@cgiar.org", "researcher") is True
+    assert is_visible_to(None, "alice@cgiar.org", "researcher") is False
+    assert is_visible_to("", "alice@cgiar.org", "researcher") is False
 
 
 # ---------------------------------------------------------------------------
@@ -235,50 +235,45 @@ async def auth_client_legacy(initialized_db):
 
 
 @pytest.mark.asyncio
-async def test_admin_sees_own_and_legacy_sessions(auth_client_legacy):
+async def test_admin_sees_only_own_sessions(auth_client_legacy):
     admin = {"Authorization": f"Bearer {_token_for('admin@cgiar.org', role='admin')}"}
     resp = await auth_client_legacy.get("/api/sessions", headers=admin)
     assert resp.status_code == 200
     sessions = resp.json()["sessions"]
     ids = {s["session_id"] for s in sessions}
-    assert ids == {"s-admin", "s-legacy"}
+    assert ids == {"s-admin"}
     assert "s-researcher" not in ids
 
-    legacy_entry = next(s for s in sessions if s["session_id"] == "s-legacy")
-    admin_entry = next(s for s in sessions if s["session_id"] == "s-admin")
-    assert legacy_entry["is_legacy"] is True
-    assert admin_entry["is_legacy"] is False
 
 
 @pytest.mark.asyncio
-async def test_admin_can_open_and_export_legacy_session(auth_client_legacy):
+async def test_admin_cannot_open_or_export_legacy_session(auth_client_legacy):
     admin_headers = {"Authorization": f"Bearer {_token_for('admin@cgiar.org', role='admin')}"}
 
     hist = await auth_client_legacy.get("/api/history/s-legacy", headers=admin_headers)
-    assert hist.status_code == 200
-    assert hist.json()["messages"], "admin should see the legacy session's messages"
+    assert hist.status_code == 404
 
     admin_token = _token_for("admin@cgiar.org", role="admin")
     export = await auth_client_legacy.get(f"/api/export/s-legacy?format=md&token={admin_token}")
-    assert export.status_code == 200
+    assert export.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_admin_can_rename_pin_and_delete_legacy_session(auth_client_legacy):
+async def test_admin_cannot_rename_pin_or_delete_legacy_session(auth_client_legacy):
     admin = {"Authorization": f"Bearer {_token_for('admin@cgiar.org', role='admin')}"}
 
     rename = await auth_client_legacy.patch(
         "/api/sessions/s-legacy", json={"title": "Renamed by admin"}, headers=admin,
     )
-    assert rename.status_code == 200
+    assert rename.status_code == 404
 
     pin = await auth_client_legacy.post(
         "/api/sessions/s-legacy/pin", json={"pinned": True}, headers=admin,
     )
-    assert pin.status_code == 200
+    assert pin.status_code == 404
 
     delete = await auth_client_legacy.delete("/api/sessions/s-legacy", headers=admin)
-    assert delete.status_code == 200
+    assert delete.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -389,8 +384,8 @@ async def test_ws_switch_session_admin_legacy_ok_researcher_blocked(initialized_
         ])
         await ws_chat(ws_admin, token=admin_token)
 
-        assert not any(f.get("type") == "error" for f in ws_admin.sent), ws_admin.sent
-        assert any(
+        assert any(f.get("type") == "error" for f in ws_admin.sent), ws_admin.sent
+        assert not any(
             f.get("type") == "session" and f.get("session_id") == "s-ws-legacy"
             for f in ws_admin.sent
         ), ws_admin.sent
@@ -409,3 +404,46 @@ async def test_ws_switch_session_admin_legacy_ok_researcher_blocked(initialized_
             f.get("type") == "session" and f.get("session_id") == "s-ws-legacy"
             for f in ws_researcher.sent
         ), ws_researcher.sent
+
+@pytest.mark.asyncio
+async def test_search_requires_auth_and_never_returns_others(auth_client_legacy):
+    assert (await auth_client_legacy.get('/api/search?q=question')).status_code == 401
+    for user, role, expected in [('admin@cgiar.org','admin','s-admin'),('researcher@cgiar.org','researcher','s-researcher')]:
+        response = await auth_client_legacy.get('/api/search?q=question', headers={'Authorization':f'Bearer {_token_for(user, role=role)}'})
+        assert response.status_code == 200
+        assert {r['session_id'] for r in response.json()['results']} == {expected}
+
+@pytest.mark.asyncio
+async def test_agent_history_tools_are_owner_scoped(auth_client_legacy):
+    from synapsis.database.history import init_history_tables, index_session, search_history, retrieve_conversation, list_indexed_sessions, index_all_sessions
+    from synapsis.auth.context import set_current_user_id
+    from synapsis.config import LEGACY_USER_ID
+    await init_history_tables()
+    for sid in ('s-admin','s-researcher','s-legacy'):
+        await index_session(sid)
+    try:
+        for owner,role,sid in [('admin@cgiar.org','admin','s-admin'),('researcher@cgiar.org','researcher','s-researcher')]:
+            set_current_user_id(owner,role)
+            assert {r['session_id'] for r in await search_history('question')} == {sid}
+            assert {r['session_id'] for r in await list_indexed_sessions()} == {sid}
+            assert 'error' in await retrieve_conversation('s-legacy')
+            assert 'messages' in await retrieve_conversation(sid)
+            assert (await index_all_sessions())['total'] == 1
+        set_current_user_id(LEGACY_USER_ID)
+        assert await search_history('question') == []
+        assert await list_indexed_sessions() == []
+        assert 'error' in await retrieve_conversation('s-legacy')
+    finally:
+        set_current_user_id(LEGACY_USER_ID)
+
+@pytest.mark.asyncio
+async def test_private_database_and_paid_query_are_not_public(auth_client_legacy, tmp_path):
+    from synapsis.routes import files
+    hidden = tmp_path / '.synapsis'
+    hidden.mkdir()
+    (hidden / 'chat.db').write_bytes(b'private database fixture')
+    admin = {'Authorization': f'Bearer {_token_for("admin@cgiar.org", role="admin")}'}
+    with patch.object(files, 'WORKSPACE', tmp_path), patch.object(files, 'AUTH_DISABLED', False):
+        assert (await auth_client_legacy.get('/api/files/.synapsis/chat.db', headers=admin)).status_code == 404
+    assert (await auth_client_legacy.post('/api/query', json={'message':'must not invoke a model'})).status_code == 401
+    assert (await auth_client_legacy.get('/api/dashboard/prms-stats')).status_code == 401

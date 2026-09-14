@@ -22,12 +22,13 @@ from datetime import datetime, timezone
 from collections.abc import Sequence
 from typing import Any, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
+from synapsis.auth.middleware import get_current_user
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger("synapsis.routes.prms_dashboard")
 
-router = APIRouter(prefix="/api", tags=["prms-dashboard"])
+router = APIRouter(prefix="/api", tags=["prms-dashboard"], dependencies=[Depends(get_current_user)])
 
 # Years the year filter accepts. "All years" is represented by an empty
 # selection.

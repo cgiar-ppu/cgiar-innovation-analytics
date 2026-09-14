@@ -23,7 +23,8 @@ from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 
 from synapsis.config import WORKSPACE, AUTH_DISABLED, logger
-from synapsis.auth.middleware import get_current_user, get_optional_user
+from synapsis.auth.middleware import get_current_user, get_optional_user, resolve_user_id
+from synapsis.database import get_db
 from synapsis.auth.tokens import verify_token
 
 router = APIRouter(prefix="/api", tags=["files"])
@@ -48,6 +49,14 @@ async def _require_bearer_or_query_token(
         detail="Not authenticated",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+async def _owned_chat_export(path, user):
+    """Chat export files retain the same owner check as /api/export."""
+    async with get_db() as db:
+        cursor = await db.execute("SELECT session_id FROM sessions WHERE user_id = ?", (resolve_user_id(user),))
+        ids = [row[0] for row in await cursor.fetchall()]
+    return any(path.stem.endswith("_" + sid) or path.stem.endswith("_" + sid + "_temp") for sid in ids)
 
 
 @router.post("/upload")
@@ -78,6 +87,13 @@ async def list_files(_user: dict = Depends(get_current_user)):
             continue
         rel = p.relative_to(WORKSPACE)
         # Skip dotfiles and hidden directories
+        resolved = p.resolve()
+        if not resolved.is_relative_to(WORKSPACE.resolve()):
+            continue
+        if any(part.startswith(".") for part in resolved.relative_to(WORKSPACE.resolve()).parts):
+            continue
+        if rel.parts[0] == "exports" and not await _owned_chat_export(p, _user):
+            continue
         if any(part.startswith(".") for part in rel.parts):
             continue
         files.append({
@@ -117,6 +133,12 @@ async def download_file(
     # directory whose name happens to share the same string prefix).
     if path != workspace_resolved and workspace_resolved not in path.parents:
         raise HTTPException(403, "Access denied: path outside workspace")
+    relative = path.relative_to(workspace_resolved)
+    if any(part.startswith(".") for part in PurePosixPath(filename).parts + relative.parts):
+        raise HTTPException(404, "File not found")
+    user = header_user or (verify_token(token) if token else None)
+    if relative.parts and relative.parts[0] == "exports" and not await _owned_chat_export(path, user):
+        raise HTTPException(404, "File not found")
     if not path.exists() or not path.is_file():
         raise HTTPException(404, "File not found")
     if path.suffix.lower() in _INLINE_EXTENSIONS:

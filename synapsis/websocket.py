@@ -211,17 +211,12 @@ async def ws_chat(websocket: WebSocket, token: Optional[str] = Query(default=Non
 
             # --- Switch to / resume a different session ---
             if msg_type == "switch_session":
-                # Enforce per-user ownership: a user may only resume their own
-                # sessions (admins may ALSO resume sentinel-owned "legacy"
-                # sessions -- see synapsis.auth.scoping.is_visible_to). Unknown
-                # sessions are allowed (they'll be created on first message and
-                # owned by this user); sessions owned by a DIFFERENT,
-                # non-visible user are rejected.
+                # Existing sessions must belong to this user, including for admins.
                 requested_sid = payload.get("session_id", "")
                 if requested_sid and not AUTH_DISABLED:
                     from synapsis.database import get_session_owner
                     owner = await get_session_owner(requested_sid)
-                    if owner is not None and not is_visible_to(owner, user_id, role):
+                    if not is_visible_to(owner, user_id, role):
                         logger.warning(
                             "Blocked cross-user session access: user %s (role=%s) -> session %s (owner %s)",
                             user_id, role, requested_sid, owner,
