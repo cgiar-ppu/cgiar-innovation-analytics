@@ -89,6 +89,21 @@ async def test_unknown_creation_never_retried(voice_db):
         assert provider.await_count == 1
 
 
+async def test_limit_messages_are_environment_neutral(voice_db):
+    # Per-user burst limit: four starts within a minute; the fifth is refused.
+    with patch.object(s, 'provider', AsyncMock(return_value=answer())):
+        for _ in range(4):
+            rid = str(uuid4())
+            await s.create('carol', rid, 'v=0\r\noffer')
+            await s.close('carol', rid)
+        with pytest.raises(HTTPException) as error:
+            await s.create('carol', str(uuid4()), 'v=0\r\noffer')
+    assert error.value.status_code == 429
+    assert 'development' not in error.value.detail.lower()
+    import inspect
+    assert 'development' not in inspect.getsource(s.create).lower()
+
+
 async def test_provider_rejection_names_status_but_never_body(voice_db, caplog):
     from synapsis.voice import health
     health._cache.update(ok=True, checked=time.time(), status=200)

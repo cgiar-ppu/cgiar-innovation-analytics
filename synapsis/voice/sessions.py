@@ -89,11 +89,11 @@ async def create(owner, request_id, sdp):
         if any(row['owner'] == owner for row in active):
             raise HTTPException(409, 'Your previous voice connection is active or awaiting cleanup. End it before starting another.')
         if len(active) >= 6:
-            raise HTTPException(429, 'All development voice connections are in use. Try again later.')
+            raise HTTPException(429, 'All voice connections are currently in use. Try again in a few minutes.')
         counts = await (await db.execute('SELECT COUNT(*), SUM(owner=?) FROM voice_sessions WHERE created>? AND sdp_hash != \'\'', (owner, now - 86400))).fetchone()
         recent = await (await db.execute('SELECT COUNT(*) FROM voice_sessions WHERE owner=? AND created>?', (owner, now - 60))).fetchone()
         if counts[0] >= 100 or (counts[1] or 0) >= 20 or recent[0] >= 4:
-            raise HTTPException(429, 'The development voice start limit has been reached. Try later.')
+            raise HTTPException(429, 'The voice start limit has been reached for now. Try again later.')
         await db.execute("INSERT INTO voice_sessions VALUES (?,?,?,'creating',NULL,NULL,?,?,?)", (owner, request_id, digest, now, now + MAX_SECONDS, now + HEARTBEAT_SECONDS))
         await db.commit()
     # Shield upstream completion from browser cancellation so the provider ID is
