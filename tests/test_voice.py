@@ -108,7 +108,7 @@ async def test_http_auth_origin_and_config(voice_db, monkeypatch):
 
 
 def test_knowledge_is_shipped_grounded_and_bounded():
-    data = lookup('COUNT DISTINCT result_code', 'dashboard_sql', 60)
+    data = lookup('COUNT DISTINCT result_code', 'dashboard_sql')
     assert data['excerpts'][0]['file'] == 'synapsis/routes/prms_dashboard.py'
     assert 'COUNT(DISTINCT result_code)' in data['excerpts'][0]['text']
     assert len(data['excerpts']) <= 4

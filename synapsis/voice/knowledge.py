@@ -53,6 +53,8 @@ def data_catalog() -> dict:
     with sqlite3.connect(path.as_uri() + '?mode=ro', uri=True) as db:
         tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
         versions = [dict(zip([c[0] for c in cur.description], row)) for cur in [db.execute('SELECT id, phase_name, phase_year FROM version ORDER BY id')] for row in cur.fetchall()] if 'version' in tables else []
+    from synapsis.prms_snapshot import get_snapshot_info
+    snapshot = get_snapshot_info(str(path))
     return {'available': True, 'table_count': len(tables), 'tables': tables, 'reporting_phases': versions,
-            'snapshot_file_bytes': path.stat().st_size, 'snapshot_date': 'Not independently recorded in this deployment',
+            'snapshot_file_bytes': path.stat().st_size, 'snapshot_date': snapshot.extracted_on, 'data_as_of': snapshot.data_as_of,
             'coverage_note': 'A phase in the database does not mean all its records are QA approved. Use the analytics chat to query actual coverage, totals and evidence. File modification time is not snapshot freshness.'}
