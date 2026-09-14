@@ -7,8 +7,14 @@ instance=next(x['OutputValue'] for x in stack['Outputs'] if x['OutputKey']=='Ins
 request=json.loads(Path('.github/smoke-request.json').read_text())
 script=('.github/scripts/release-chat-smoke.py' if request.get('chat') else
         '.github/scripts/release-model-smoke.py' if request.get('models') else '.github/scripts/release-smoke.py')
-encoded=base64.b64encode(Path(script).read_bytes()).decode()
-command='docker exec cgiar-innovation-analytics python -c '+shlex.quote('import base64;exec(base64.b64decode('+repr(encoded)+'))')
+scripts=[script]
+if request.get('all'):
+ scripts=['.github/scripts/release-model-smoke.py','.github/scripts/release-chat-smoke.py','.github/scripts/release-smoke.py']
+commands=['set -e']
+for script in scripts:
+ encoded=base64.b64encode(Path(script).read_bytes()).decode()
+ commands.append('docker exec cgiar-innovation-analytics python -c '+shlex.quote('import base64;exec(base64.b64decode('+repr(encoded)+'))'))
+command='\n'.join(commands)
 cid=ssm.send_command(InstanceIds=[instance],DocumentName='AWS-RunShellScript',Parameters={'commands':[command]},TimeoutSeconds=900)['Command']['CommandId']
 for _ in range(180):
  try:r=ssm.get_command_invocation(CommandId=cid,InstanceId=instance)

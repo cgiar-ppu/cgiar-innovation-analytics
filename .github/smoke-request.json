@@ -1,4 +1,1 @@
-{
-  "stage": "prod",
-  "sequence": 2
-}
+{"stage":"dev","all":true,"sequence":3}
