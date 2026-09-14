@@ -11,11 +11,18 @@ except Exception:
  s3.create_bucket(Bucket=bucket,CreateBucketConfiguration={'LocationConstraint':region})
  s3.put_public_access_block(Bucket=bucket,PublicAccessBlockConfiguration={k:True for k in ('BlockPublicAcls','IgnorePublicAcls','BlockPublicPolicy','RestrictPublicBuckets')})
  s3.put_bucket_versioning(Bucket=bucket,VersioningConfiguration={'Status':'Enabled'})
+request=json.loads(Path('.github/promotion-request.json').read_text())
+# Secrets: a missing parameter is created from the environment secret. Existing values are kept unless the
+# promotion request explicitly lists the key under "rotate_secrets" (API keys only; the JWT secret is never
+# rotated by a promotion because that would invalidate every live login).
+rotate=set(request.get('rotate_secrets',[]));assert rotate<={'anthropic-api-key','openai-api-key'},'Only API keys may be rotated by a promotion'
 for key,value in [('anthropic-api-key',os.environ['RELEASE_ANTHROPIC_KEY']),('openai-api-key',os.environ.get('RELEASE_OPENAI_KEY','')),('jwt-secret',secrets.token_hex(32))]:
  name=f'/cgiar-ia-{stage}/{key}'
- try:r=ssm.get_parameter(Name=name,WithDecryption=True);exists=bool(r['Parameter']['Value'])
- except ssm.exceptions.ParameterNotFound:exists=False
- if not exists and value:ssm.put_parameter(Name=name,Type='SecureString',Value=value,Overwrite=True)
+ try:current=ssm.get_parameter(Name=name,WithDecryption=True)['Parameter']['Value']
+ except ssm.exceptions.ParameterNotFound:current=''
+ if key in rotate:assert value,f'rotate_secrets lists {key} but the target environment secret is empty'
+ if value and (not current or (key in rotate and current!=value)):
+  ssm.put_parameter(Name=name,Type='SecureString',Value=value,Overwrite=True);print('ssm',name,'rotated' if current else 'created')
 name='cgiar-ia-'+stage
 try:stack=cf.describe_stacks(StackName=name)['Stacks'][0]
 except cf.exceptions.ClientError as e:
@@ -30,7 +37,6 @@ for _ in range(90):
  time.sleep(5)
 else:raise TimeoutError('SSM unavailable; instance not rebooted automatically')
 config={'stage':stage,'account':account,'sha':os.environ['SOURCE_SHA'],'issuer':os.environ['SSO_ISSUER'],'client':os.environ['SSO_CLIENT'],'domain':os.environ['SSO_DOMAIN'],'origin':os.environ['SSO_ORIGIN'],'admins':os.environ['SSO_ADMINS']}
-request=json.loads(Path('.github/promotion-request.json').read_text())
 config.update(request.get('models_config',{}))
 script=base64.b64encode(Path('.github/scripts/release-host.py').read_bytes()).decode()
 command='set -e\nsystemctl enable --now docker\npython3 -c '+shlex.quote('import base64;exec(base64.b64decode('+repr(script)+'))')+' '+shlex.quote(json.dumps(config))
