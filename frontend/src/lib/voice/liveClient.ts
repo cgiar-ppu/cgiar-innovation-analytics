@@ -1,6 +1,6 @@
 import { EFFECTS, type Adapter } from './actions';
 import { isVoiceDispatch } from '../chatCommands';
-import { voicePost } from './http';
+import { voicePost, voiceStart } from './http';
 import { getAuthToken } from '../../stores/auth';
 export type VoiceStatus = 'idle' | 'connecting' | 'connected' | 'closing' | 'error';
 export interface Caption { id: string; speaker: 'user' | 'assistant'; delta: string; start: number; end: number }
@@ -50,10 +50,12 @@ export class LiveClient {
   private send(event: Record<string, unknown>) {
     if (this.channel?.readyState === 'open') this.channel.send(JSON.stringify(event));
   }
-  private async closeOnServer(id = this.requestId) {
+  private async closeOnServer(id = this.requestId, usageSeconds?: number) {
     if (!id) return;
     try {
-      const result = await voicePost(`sessions/${id}/close`, {}, { keepalive: true, token: getAuthToken() ?? this.authToken });
+      // Relay the provider's final usage figure when we have it; the server records it as a client claim.
+      const body = usageSeconds === undefined ? {} : { usage_seconds: usageSeconds };
+      const result = await voicePost(`sessions/${id}/close`, body, { keepalive: true, token: getAuthToken() ?? this.authToken });
       if (!result.closed) this.cb.task('Voice stopped locally. Server cleanup is pending; its retry watchdog remains active.');
     } catch { this.cb.task('Voice stopped locally. Server cleanup could not be confirmed; the heartbeat lease will expire.'); }
   }
@@ -117,7 +119,9 @@ export class LiveClient {
       if (generation !== this.generation) return;
       this.requestId = crypto.randomUUID();
       const requestId = this.requestId;
-      const result = await voicePost('sessions', { request_id: requestId, sdp: peer.localDescription?.sdp }, { signal: this.abort.signal });
+      // One retry only for a network-level failure (no HTTP response), replaying the same request id + offer.
+      // Any HTTP answer, including 5xx, is final: the server never auto-retries an uncertain provider outcome.
+      const result = await voiceStart({ request_id: requestId, sdp: peer.localDescription?.sdp }, { signal: this.abort.signal });
       if (generation !== this.generation) { void this.closeOnServer(requestId); return; }
       this.heartbeatTimer = setInterval(() => {
         // SSO app tokens live at most 5 minutes and are refreshed by AuthGate; a voice session lasts up to 10.
@@ -128,7 +132,8 @@ export class LiveClient {
         });
       }, 20000);
       await peer.setRemoteDescription({ type: 'answer', sdp: result.transport.sdp });
-      this.limitTimer = setTimeout(() => { this.cb.task('The 10-minute voice session has ended. Start again to continue.'); this.end(); }, Math.max(0, result.expires_at * 1000 - Date.now() - 2000));
+      const minutes = Math.max(1, Math.round((Number(result.max_seconds) || 600) / 60));
+      this.limitTimer = setTimeout(() => { this.cb.task(`The ${minutes}-minute voice session limit was reached. Start again to continue.`); this.end(); }, Math.max(0, result.expires_at * 1000 - Date.now() - 2000));
     } catch (error) {
       if (generation !== this.generation) return;
       const message = error instanceof DOMException && error.name === 'NotAllowedError' ? 'Microphone permission was denied. Allow microphone access in the browser and retry.' : error instanceof Error ? error.message : 'Voice connection failed.';
@@ -199,8 +204,9 @@ export class LiveClient {
     } else if (event.type === 'session.instructions.appended' && event.client_event_id === 'ia_greeting' && !this.closing) {
       this.send({ type: 'session.commentary.append', delegation_id: null, content: 'Begin the conversation now, following the greeting instructions.' });
     } else if (event.type === 'session.closed') {
-      this.cb.usage(Number((event.usage as { seconds?: number })?.seconds || 0), true);
-      this.generation++; this.epoch++; void this.closeOnServer(); this.cleanup(); this.closing = false; this.cb.status('idle', 'Conversation ended.');
+      const seconds = Number((event.usage as { seconds?: number })?.seconds || 0);
+      this.cb.usage(seconds, true);
+      this.generation++; this.epoch++; void this.closeOnServer(this.requestId, seconds); this.cleanup(); this.closing = false; this.cb.status('idle', 'Conversation ended.');
     } else if (event.type === 'session.usage.updated') {
       this.cb.usage(Number((event.usage as { seconds?: number })?.seconds || 0), false);
     } else if (event.type === 'session.input_transcript.delta' || event.type === 'session.output_transcript.delta') {
