@@ -8,6 +8,15 @@ from synapsis import config
 from synapsis.database.connection import get_db,close_db
 from synapsis.exporters.watermark import WATERMARK_BANNER
 
+def check_voice_status(payload):
+ """Promotion gate for voice. 'configured' is only a non-empty-key check; on 2026-09-14 a dead key
+ passed this smoke and shipped a voice button that could only 503. When voice is enabled the server's
+ real provider probe (provider_ok) must be True, otherwise the promotion fails here."""
+ assert payload.get('configured'),('voice key not configured',payload)
+ if payload.get('enabled'):
+  assert payload.get('provider_ok') is True,('voice provider probe failed: the configured OpenAI key/model is not accepted (provider_ok=%r)'%payload.get('provider_ok'))
+ return 'voice enabled=%s configured provider_ok=%s'%(payload.get('enabled'),payload.get('provider_ok'))
+
 async def main():
  run_id='release-qa-'+str(int(time.time()))
  admin_token=create_access_token(run_id,'Release QA operator','admin',auth_source='sso',lifetime_seconds=300)
@@ -63,9 +72,10 @@ async def main():
    assert (await c.post('/api/auth/login',headers={'Origin':config.SSO_ORIGIN},json={'email':email,'password':pw})).status_code==200
    results.append('invitation activation, single-use, email login and empty private history')
    r=await c.get('/api/voice/status',headers=uh);assert r.status_code==200,('voice origin',r.status_code)
-   assert r.json()['enabled'] and r.json()['configured']
+   assert r.json()['enabled'],('voice must be enabled on every release target',r.json())
+   voice=check_voice_status(r.json())
    assert (await c.get('/api/voice/status',headers={**uh,'Origin':'https://untrusted.example'})).status_code==403
-   results.append('voice enabled/configured for target origin; foreign origin rejected')
+   results.append(voice+' for target origin; foreign origin rejected')
    # Synthetic fixture only; exercise real export and privacy routes against it.
    session=run_id
    async with get_db() as db:
@@ -98,4 +108,5 @@ async def main():
    results.append('QA invitation revoked; issued token rejected')
  await close_db()
  print(json.dumps({'checks':results,'synthetic_session':run_id,'real_sso_login':'not exercised; requires Microsoft user/MFA'}))
-asyncio.run(main())
+# run-release-smoke.py execs this file inside `python -c`, where __name__ is '__main__'; tests import it instead.
+if __name__=='__main__':asyncio.run(main())
