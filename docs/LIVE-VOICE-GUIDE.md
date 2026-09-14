@@ -21,11 +21,11 @@ The selected code files are an explicit application-owned allowlist, not the ent
 
 ## Configuration and deployment
 
-Use the existing DEV workflow, `feature/innovation-platform-foundation`, account 972793825893. The development container sets `IA_VOICE_ENABLED=true`; other stages leave it disabled. Do not push main or deploy production for this feature.
+DEV deploys from `feature/innovation-platform-foundation` via `deploy.yml` (account 972793825893), which sets `IA_VOICE_ENABLED=true` only for the dev stage. Staging and production are deployed by `release-promote` + `.github/scripts/release-host.py`, which enables voice on every release target and reads the key from that stage's SSM parameter `/cgiar-ia-<stage>/openai-api-key`. Do not push main directly; promotions go through the release lane.
 
 Server-only settings:
 
-- `OPENAI_API_KEY`: the DEV GitHub environment secret, installed into existing DEV SSM parameter by CI.
+- `OPENAI_API_KEY`: per-stage GitHub environment secret, installed into that stage's SSM parameter by CI. A non-empty value is not proof of validity (see the provider probe below).
 - `IA_VOICE_ENABLED`: false by default.
 - `IA_VOICE_MODEL`: defaults to `gpt-live-1`.
 - `IA_VOICE_BACKEND_MODEL`: defaults to `gpt-5.6-terra`.
@@ -33,15 +33,27 @@ Server-only settings:
 
 Model, prompt, tools and permitted provider commands are server-fixed. Browser requests carry the existing application JWT. Audio goes directly to OpenAI via WebRTC. No key is sent to the browser. The host keeps its existing FastAPI/EC2 deployment, avoiding a second voice stack.
 
+### Provider health (`provider_ok`)
+
+`GET /api/voice/status` returns `enabled`, `configured` (key present), `provider_ok` and `max_seconds`. `provider_ok` comes from a server-side probe `GET https://api.openai.com/v1/models/{IA_VOICE_MODEL}` with the configured key (`synapsis/voice/health.py`): 5 s timeout, cached 10 minutes (failures cached too), one probe in flight at a time, never raises, `null` when no key is configured. A successful probe logs `voice_provider_probe_ok model=… provider_status=200`, a failed one `voice_provider_probe_failed model=… provider_status=…` (never the key). When voice is enabled and a key is present, `sessions.startup()` warms the probe in the background, so every container start leaves one of those lines in `/cgiar-ia/<stage>` — deploy-time evidence that the stage's key is accepted. A 401/403 from session creation invalidates the cache so the next status call re-probes.
+
+The panel hides the voice button only when `enabled` is false. When `configured` is false or `provider_ok` is false it renders a disabled button titled "Voice is temporarily unavailable" and re-checks the status every 60 s until the provider recovers. The hosted release smoke (`.github/scripts/release-smoke.py::check_voice_status`) fails a promotion whose `provider_ok` is not `true` while voice is enabled — this is what would have caught the dead production key on 2026-09-14.
+
+Administrators (JWT role `admin`) additionally receive `usage_today: {sessions, seconds}` — the rolling 24 h total of closed sessions, using the provider-reported seconds when the browser relayed them and the server-observed lease duration otherwise.
+
 ## Connection lifecycle
 
-`voice_sessions` is a new additive table in the existing persisted/replicated chat SQLite database. It stores owner, client request UUID, offer hash, provider ID, temporary SDP answer, state, expiry and heartbeat deadline. It does not store voice audio or captions. Completed/rejected metadata is retained seven days; unresolved records are retained for reconciliation.
+`voice_sessions` is an additive table in the existing persisted/replicated chat SQLite database. It stores owner, client request UUID, offer hash, provider ID, temporary SDP answer, state, expiry and heartbeat deadline, plus (added 2026-09-14 by a guarded `PRAGMA table_info`/`ALTER TABLE ADD COLUMN` migration in `sessions.init()`) `closed`, `usage_seconds` (server-observed created→closed), `provider_seconds` (the provider's `usage.seconds` relayed by the browser on `session.closed`, stored as a client claim), `provider_status` (HTTP status of the confirming hangup), `attempts` and `attempted` (reaper retry bookkeeping). It does not store voice audio or captions. Closed/rejected metadata is retained seven days, `closed_unconfirmed` rows thirty days; unresolved records are retained for reconciliation.
 
-One connection per user, six concurrently, twenty start attempts per user per rolling day, one hundred globally per rolling day, four attempts per user per minute. These are admission limits, not a dollar budget. Mute leaves the paid call connected. Maximum duration is ten minutes; browser heartbeats every twenty seconds renew a sixty-second lease. A server reaper checks leases every ten seconds and retries failed hangups. Lease deadlines survive restart. While the entire host is offline, its reaper cannot execute; recovery resumes cleanup.
+One connection per user, six concurrently, twenty start attempts per user per rolling day, one hundred globally per rolling day, four attempts per user per minute. These are admission limits, not a dollar budget; the refusal messages are environment-neutral. Mute leaves the paid call connected. Maximum duration is `max_seconds` (600 s) — the panel and the in-call limit notice derive their wording from the server value, not a hard-coded figure. Browser heartbeats every twenty seconds renew a sixty-second lease with the current app token. A server reaper checks leases every ten seconds. Lease deadlines survive restart. While the entire host is offline, its reaper cannot execute; recovery resumes cleanup.
 
-Start IDs are idempotent for the same active offer. End before or during creation leaves a cancellation tombstone. HTTP creation is shielded from browser cancellation so provider IDs can be recorded and compensated. Known calls are closed via the provider hangup endpoint. Unknown creation outcomes retain an `uncertain` lease and block additional starts for that owner; they are never blindly retried. An operator must reconcile unknown provider IDs with provider records before resolving that lease. Do not simply delete unresolved rows.
+Start IDs are idempotent for the same active offer. End before or during creation leaves a cancellation tombstone. HTTP creation is shielded from browser cancellation so provider IDs can be recorded and compensated. Known calls are closed via the provider hangup endpoint. A provider rejection is reported as `503`/`502` with the provider HTTP status and a safe hint (e.g. "HTTP 401 — check the API key"), never the provider body, and logged as `voice_create_rejected owner=… request_id=… provider_status=…`.
 
-End captures the original auth token for cleanup after logout/unmount. It stops the mic immediately, waits briefly for provider finalization, and falls back to authenticated server hangup. Heartbeat and duration expiry cover tab crashes. A failed close remains visible as unconfirmed cleanup. Live recording storage is disabled (`store:false`); this is not a promise of Zero Data Retention.
+Unknown creation outcomes (provider timeout, 5xx, incomplete answer) retain an `uncertain` lease that blocks additional starts for that owner; they are never blindly retried. Since 2026-09-14 such leases no longer count against the shared six-connection pool (only `creating`/`active` leases and `closing` leases with a known provider ID do), and the reaper resolves them within bounds (`sessions._resolve_unconfirmed`): with a known provider ID it retries the hangup with backoff (60 s doubling to 600 s) up to eight attempts or 24 h; without one — the SDP answer never reached the browser, so no media session could have connected — it waits the maximum call length plus one heartbeat window. Either way the row then becomes `closed_unconfirmed` and a `voice_lease_unconfirmed owner=… request_id=… provider_id=… attempts=… reason=…` warning names what an operator needs to reconcile against provider records. Do not simply delete unresolved rows.
+
+The browser retries a start at most once, and only when the `POST /api/voice/sessions` request produced no HTTP response at all (network failure): it replays the same request ID and offer, which the server treats idempotently (unseen → created; already active → same answer; still in flight → 409 and the client stops). Any HTTP answer, including 5xx, is final.
+
+End reads the current auth token for cleanup (falling back to the start-time token after logout/unload). It stops the mic immediately, waits briefly for provider finalization, and falls back to authenticated server hangup, relaying the provider's final usage seconds. Heartbeat and duration expiry cover tab crashes. A failed close remains visible as unconfirmed cleanup. Every confirmed close emits one CloudWatch-friendly line `voice_session_closed owner=… request_id=… seconds=… provider_seconds=… provider_status=…` (with `voice_session_started` and `voice_hangup_unconfirmed` as companions) in the container's `/cgiar-ia/<stage>` log group; no AWS resources were added. Live recording storage is disabled (`store:false`); this is not a promise of Zero Data Retention.
 
 ## Manual edits and acceptance
 
@@ -49,8 +61,8 @@ Voice uses the normal stores/router/WebSocket, without a second chat state. Sour
 
 ## Verification
 
-Backend: `python -m pytest tests/test_voice.py tests/test_auth_scoping.py tests/test_scope.py tests/test_prms_dashboard.py tests/test_export_dependencies.py`.
-Frontend: `npm test -- src/lib/voice/__tests__`, `npm run build`, and the existing frontend suite. The baseline has four agent-service error-text expectation failures; compare against the pre-change branch.
-Hosted checks: authenticated/unauthenticated voice endpoints, forbidden origin and unknown source; actual panel on desktop/mobile; synthetic transport/action/lifecycle checks; a short real audio/semantic-action test only with paid API test authorization. Human microphone/accent/interruption quality is a separate usability check.
+Backend: `python -m pytest tests/test_voice.py tests/test_voice_health.py tests/test_release_smoke.py tests/test_auth_scoping.py tests/test_scope.py tests/test_prms_dashboard.py tests/test_export_dependencies.py` (provider probe caching/failure, provider-status error detail, usage recording and migration, uncertain-lease resolution and capacity, admin-only usage, smoke gate).
+Frontend: `npm test -- src/lib/voice src/components/voice` (protocol, actions, network-only start retry, disabled/unavailable panel state and recovery re-check), `npm run build`, and the existing frontend suite.
+Hosted checks: authenticated/unauthenticated voice endpoints, forbidden origin and unknown source, `provider_ok` true on the target; actual panel on desktop/mobile; synthetic transport/action/lifecycle checks; a short real audio/semantic-action test only with paid API test authorization. Human microphone/accent/interruption quality is a separate usability check.
 
 Official protocol references checked 2026-09-11: https://developers.openai.com/api/docs/guides/live, https://developers.openai.com/api/docs/guides/voice-webrtc?api=live, https://developers.openai.com/api/docs/guides/live-delegation, https://developers.openai.com/api/docs/guides/live-conversations.

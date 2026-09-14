@@ -9,6 +9,11 @@ import { useTTSStore } from '../../stores/tts'
 import { useSessionsStore } from '../../stores/sessions'
 
 type Source = { file: string; start_line: number; end_line: number; text: string }
+/** Server truth about the voice service. provider_ok is a cached real provider probe; null = no key configured. */
+export type ServiceStatus = { enabled: boolean; configured: boolean; provider_ok: boolean | null; max_seconds: number }
+export const UNAVAILABLE_MESSAGE = 'Voice is temporarily unavailable'
+export const isUnavailable = (service: ServiceStatus | null) => !!service && (!service.configured || service.provider_ok === false)
+const RECHECK_MS = 60000
 const examples = ['What is this app for?', 'What data can I explore?', 'Open my next chat', 'How are innovations counted?']
 
 /** Mounted above routes: changing chats/pages keeps the opt-in voice call alive. */
@@ -19,7 +24,7 @@ export default function VoiceGuide() {
   const current = useRef({ path: location.pathname, connected: isConnected, send, navigate })
   current.current = { path: location.pathname, connected: isConnected, send, navigate }
   const client = useRef<LiveClient | null>(null)
-  const [available, setAvailable] = useState(false)
+  const [service, setService] = useState<ServiceStatus | null>(null)
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<VoiceStatus>('idle')
   const [message, setMessage] = useState('Your guide to the app, data and chats')
@@ -36,10 +41,18 @@ export default function VoiceGuide() {
   const title = useSessionsStore(s => s.sessions.find(chat => chat.session_id === activeId)?.title)
   const running = status === 'connected' || status === 'connecting' || status === 'closing'
   const isLive = status === 'connected'
+  const available = !!service?.enabled
+  const unavailable = isUnavailable(service)
+  const minutes = Math.max(1, Math.round((service?.max_seconds || 600) / 60))
+  const serviceRef = useRef(service)
+  serviceRef.current = service
 
   useEffect(() => {
     let mounted = true
-    api.get<{ enabled: boolean; configured: boolean }>('/api/voice/status').then(s => { if (mounted) setAvailable(s.enabled) }).catch(() => {})
+    const refresh = () => api.get<ServiceStatus>('/api/voice/status').then(s => { if (mounted) setService(s) }).catch(() => {})
+    void refresh()
+    // While the provider is unavailable, re-check so recovery shows without a reload (the server caches its probe).
+    const timer = setInterval(() => { if (isUnavailable(serviceRef.current)) void refresh() }, RECHECK_MS)
     const adapter = makeAdapter(message => current.current.send(message), path => current.current.navigate(path), () => current.current.path, () => current.current.connected)
     const instance = new LiveClient({
       status: (state, text) => { if (mounted) { setStatus(state); setMessage(text); if (state === 'connected') setStartedAt(Date.now()); if (state === 'idle' || state === 'error') setStartedAt(null) } },
@@ -52,7 +65,7 @@ export default function VoiceGuide() {
     client.current = instance
     const unload = () => instance.dispose()
     window.addEventListener('pagehide', unload)
-    return () => { mounted = false; window.removeEventListener('pagehide', unload); instance.dispose(); client.current = null }
+    return () => { mounted = false; clearInterval(timer); window.removeEventListener('pagehide', unload); instance.dispose(); client.current = null }
   }, [])
   useEffect(() => { client.current?.contextChanged() }, [location.pathname])
   useEffect(() => {
@@ -63,6 +76,7 @@ export default function VoiceGuide() {
 
   if (!available) return null
   const start = () => {
+    if (unavailable) return
     useTTSStore.getState().setEnabled(false)
     setMuted(false); setPaused(false); setCaptions([]); setActivity([]); setSources([]); setElapsed(0)
     void client.current?.start()
@@ -76,9 +90,13 @@ export default function VoiceGuide() {
     else grouped.push({ id: caption.id, speaker: caption.speaker, text: caption.delta, end: caption.end })
   }
   return <>
-    {!open && <button onClick={() => setOpen(true)} className="fixed bottom-12 right-5 z-40 flex items-center gap-2 rounded-full bg-accent px-4 py-3 text-white shadow-lg hover:brightness-110 focus-visible:outline focus-visible:outline-2" aria-label="Open voice guide">
-      <AudioLines size={19} /> {running ? 'Voice is on' : 'Voice guide'}
-    </button>}
+    {!open && (unavailable && !running
+      ? <button disabled title={UNAVAILABLE_MESSAGE} className="fixed bottom-12 right-5 z-40 flex items-center gap-2 rounded-full bg-surface-2 px-4 py-3 text-text-muted shadow-lg cursor-not-allowed opacity-80" aria-label={UNAVAILABLE_MESSAGE}>
+        <AudioLines size={19} /> Voice unavailable
+      </button>
+      : <button onClick={() => setOpen(true)} className="fixed bottom-12 right-5 z-40 flex items-center gap-2 rounded-full bg-accent px-4 py-3 text-white shadow-lg hover:brightness-110 focus-visible:outline focus-visible:outline-2" aria-label="Open voice guide">
+        <AudioLines size={19} /> {running ? 'Voice is on' : 'Voice guide'}
+      </button>)}
     {open && <section role="region" aria-label="Voice guide" className="fixed z-40 bottom-10 right-3 sm:right-5 w-[calc(100%-1.5rem)] sm:w-[390px] max-h-[calc(100dvh-6rem)] flex flex-col rounded-2xl border border-border bg-surface-1 text-text-primary shadow-2xl overflow-hidden" style={{ background: 'var(--bg)' }}>
       <header className="flex items-center gap-3 p-4 border-b border-border">
         <span className="rounded-xl bg-accent/15 p-2 text-accent"><AudioLines size={20} /></span>
@@ -86,12 +104,12 @@ export default function VoiceGuide() {
         <button className="p-2 rounded-lg hover:bg-surface-2" onClick={() => setOpen(false)} aria-label={running ? 'Minimize voice guide (call continues)' : 'Close voice guide panel'}>{running ? <ChevronDown size={18} /> : <X size={18} />}</button>
       </header>
       <div className="p-4 space-y-3 overflow-y-auto min-h-0">
-        <p className="text-sm" role="status">{message}</p>
+        <p className="text-sm" role="status">{unavailable && !running ? `${UNAVAILABLE_MESSAGE}. The voice service is not accepting connections right now; the rest of the app is unaffected.` : message}</p>
         {!running && <>
           <p className="text-sm text-text-muted">Ask how the app works, explore data definitions, move between chats, or send an analysis question.</p>
           <div className="grid grid-cols-2 gap-2">{examples.map(text => <div key={text} className="rounded-xl border border-border p-2 text-xs text-text-muted">“{text}”</div>)}</div>
-          <p className="text-xs text-text-muted leading-relaxed">Starting voice shares your audio and relevant chat or methodology excerpts with OpenAI. Voice recording is off. Questions sent to Chat are saved there as usual. Calls end after 10 minutes.</p>
-          <button onClick={start} className="w-full rounded-xl bg-accent py-3 text-sm font-medium text-white flex gap-2 justify-center"><Mic size={17} />{status === 'error' ? 'Retry voice' : 'Start voice conversation'}</button>
+          <p className="text-xs text-text-muted leading-relaxed">Starting voice shares your audio and relevant chat or methodology excerpts with OpenAI. Voice recording is off. Questions sent to Chat are saved there as usual. Calls end after {minutes} minutes.</p>
+          <button onClick={start} disabled={unavailable} title={unavailable ? UNAVAILABLE_MESSAGE : undefined} className="w-full rounded-xl bg-accent py-3 text-sm font-medium text-white flex gap-2 justify-center disabled:opacity-50 disabled:cursor-not-allowed"><Mic size={17} />{unavailable ? 'Voice unavailable' : status === 'error' ? 'Retry voice' : 'Start voice conversation'}</button>
         </>}
         {running && <>
           <div className="rounded-xl bg-accent/10 px-3 py-2 text-xs"><span className="text-text-muted">Current chat</span><p className="font-medium truncate">{title || (activeId ? 'Untitled chat' : 'No chat selected')}</p></div>
