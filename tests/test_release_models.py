@@ -7,7 +7,7 @@ from synapsis.exporters.watermark import WATERMARK_BANNER
 from synapsis.system_prompt import build_system_prompt
 from synapsis.validators.agents import validate_model
 
-@pytest.mark.parametrize('model',['claude-sonnet-5','claude-opus-5','claude-fable-5-1'])
+@pytest.mark.parametrize('model',['claude-sonnet-5','claude-opus-5-5','claude-opus-5','claude-fable-5-1'])
 def test_requested_model_is_selectable_and_valid_for_custom_agent(model):
  assert model in SELECTABLE_MODEL_IDS
  validate_model(model)

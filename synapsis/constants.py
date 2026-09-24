@@ -149,7 +149,7 @@ DEFAULT_MODEL: str = "claude-sonnet-5"
 """Default orchestrator model — Claude Sonnet 5 (fast, 1M context).
 
 This is the default selection in the chat model-selector pill. Users can
-switch the active session to Opus 5 or Fable 5.1 via the selector (see SELECTABLE_MODELS).
+switch the active session to Opus 5.5, Opus 5 or Fable 5.1 via the selector (see SELECTABLE_MODELS).
 Override the server-wide default via the ``SYNAPSIS_MODEL`` env var."""
 
 # ---------------------------------------------------------------------------
@@ -158,6 +158,7 @@ Override the server-wide default via the ``SYNAPSIS_MODEL`` env var."""
 
 SELECTABLE_MODELS: list[dict[str, str]] = [
     {"id": "claude-sonnet-5", "label": "Sonnet 5"},
+    {"id": "claude-opus-5-5", "label": "Opus 5.5"},
     {"id": "claude-opus-5", "label": "Opus 5"},
     {"id": "claude-fable-5-1", "label": "Fable 5.1"},
     {"id": "claude-sonnet-4-6", "label": "Sonnet 4.6"},
@@ -166,7 +167,11 @@ SELECTABLE_MODELS: list[dict[str, str]] = [
 """Curated models exposed in the chat UI model selector.
 
 Each entry has an ``id`` (passed to the SDK as the model override) and a short
-``label`` for the UI pill/dropdown. Sonnet 5 is the default; Opus 5 and Fable 5.1 support more demanding work.
+``label`` for the UI pill/dropdown. Sonnet 5 is the default; Opus 5.5, Opus 5 and Fable 5.1 support more demanding work.
+Opus 5.5 (``claude-opus-5-5``, native 1M context, no ``[1m]`` suffix) is only served to Claude Code
+CLI >= 2.1.280, i.e. claude-agent-sdk >= 0.2.159 (bundled CLI 2.1.281) — see requirements.txt.
+Which curated entries a deployment actually exposes is decided by ``SYNAPSIS_AVAILABLE_MODELS``
+(set per stage in .github/workflows/deploy.yml; Opus 5.5 is listed on DEV only for now).
 Older entries remain available for existing sessions. Exposed via GET /api/config as
 ``selectable_models``."""
 
