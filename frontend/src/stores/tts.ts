@@ -6,8 +6,9 @@
  * playback status, available voices, current settings, and an internal
  * audio queue for sentence-level streaming.
  *
- * Voice, instructions, and speed settings are persisted to localStorage under
- * `synapsis-tts`. The `enabled` flag is NOT persisted — it defaults to false
+ * Voice, instructions, and speed settings are the user's own preference:
+ * persisted to localStorage under `synapsis-tts` and sent with each request
+ * (never written to the server-wide defaults). The `enabled` flag is NOT persisted — it defaults to false
  * on every page load/tab, preventing TTS from auto-playing on reconnection.
  */
 
@@ -163,21 +164,13 @@ export const useTTSStore = create<TTSState>((set, get) => ({
   },
 
   updateSettings: async (partial) => {
-    // Optimistically apply locally.
-    const prev = get().settings
-    const next = { ...prev, ...partial }
+    // The user's voice, speed and instructions are THEIR preference: kept in
+    // this browser and sent with every read-aloud request. They are no longer
+    // posted to /api/tts/settings, which changed the voice for every user of
+    // the server (review L6-06) and is now administrator-only.
+    const next = { ...get().settings, ...partial }
     set({ settings: next })
     persistSettings(next)
-
-    try {
-      const { settings: confirmed } = await api.updateTTSSettings(partial)
-      set({ settings: confirmed })
-      persistSettings(confirmed)
-    } catch {
-      // Revert on failure.
-      set({ settings: prev })
-      persistSettings(prev)
-    }
   },
 
   enqueueText: (text, messageId) =>
