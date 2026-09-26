@@ -10,6 +10,7 @@ import Badge from '../components/common/Badge';
 import { InfoPopover } from '../components/common/InfoPopover';
 import { InteractiveChart } from '../components/chat/InteractiveChart';
 import type { PRMSDashboardData } from '../lib/types-extended';
+import { useIsAdmin } from '../stores/appConfig';
 
 // Reporting-year selection (F7). An empty array means the all-years portfolio
 // view; one or more years request the alive-in-ANY-of union for those years
@@ -23,6 +24,9 @@ const fmt = (n: number | null | undefined): string =>
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  // The specialist-agents page is administrator-only (Lane E); researchers
+  // reach specialists through the persona picker in a new chat (QA-4 D6).
+  const isAdmin = useIsAdmin();
 
   const [selectedYears, setSelectedYears] = useState<number[]>(DEFAULT_YEARS);
   // Keep the latest selection available to the (memoized) fetcher.
@@ -237,7 +241,7 @@ export default function Dashboard() {
       </div>
 
       {/* Quick Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className={`grid grid-cols-1 ${isAdmin ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-4`}>
         <div
           className="bg-[var(--surface-solid)] rounded-xl border border-[var(--border)] p-5 cursor-pointer transition-shadow hover:shadow-lg"
           style={{ borderLeftWidth: '4px', borderLeftColor: '#427730' }}
@@ -270,10 +274,12 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {isAdmin && (
         <div
           className="bg-[var(--surface-solid)] rounded-xl border border-[var(--border)] p-5 cursor-pointer transition-shadow hover:shadow-lg"
           style={{ borderLeftWidth: '4px', borderLeftColor: '#7AB800' }}
           onClick={() => navigate('/agents')}
+          data-testid="quick-action-agents"
         >
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-[#7AB800]/15 flex items-center justify-center">
@@ -285,6 +291,7 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+        )}
       </div>
 
       {/* Footer: last updated timestamp */}

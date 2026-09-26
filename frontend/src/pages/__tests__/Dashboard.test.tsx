@@ -24,6 +24,8 @@ vi.mock('../../components/chat/InteractiveChart', () => ({
 }))
 
 import Dashboard from '../Dashboard'
+import { useAppConfigStore } from '../../stores/appConfig'
+import type { AppConfig } from '../../lib/types'
 
 const chart = (title: string) => ({ chartType: 'bar', title, data: [], series: [], xAxisKey: 'x' })
 
@@ -151,5 +153,23 @@ describe('Dashboard', () => {
     fireEvent.click(screen.getByText('Refresh'))
     await screen.findByTestId('dashboard-stale')
     await waitFor(() => expect(screen.getByTestId('dashboard-headline').textContent).toMatch(/1,185 innovations/))
+  })
+
+  it('hides the admin-only "Research Agents" card from researchers (QA-4 D6)', async () => {
+    useAppConfigStore.setState({ config: { model_policy: { role: 'researcher' } } as unknown as AppConfig })
+    getPRMSStats.mockResolvedValue(payload())
+    renderDashboard()
+    await screen.findByTestId('dashboard-headline')
+    expect(screen.queryByText('Research Agents')).toBeNull()
+    expect(screen.getByText('New Analysis')).toBeInTheDocument()
+  })
+
+  it('keeps the "Research Agents" card for administrators', async () => {
+    useAppConfigStore.setState({ config: { model_policy: { role: 'admin' } } as unknown as AppConfig })
+    getPRMSStats.mockResolvedValue(payload())
+    renderDashboard()
+    await screen.findByTestId('dashboard-headline')
+    expect(screen.getByTestId('quick-action-agents')).toBeInTheDocument()
+    useAppConfigStore.setState({ config: null })
   })
 })
