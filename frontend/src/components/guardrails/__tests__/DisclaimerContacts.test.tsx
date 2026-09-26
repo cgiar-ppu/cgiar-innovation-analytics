@@ -76,13 +76,13 @@ describe('configurable contact (R-09, 2026-09-26)', () => {
 
   it('modal and footer follow the contacts served by /api/config', () => {
     useAppConfigStore.setState({
-      config: { model: 'm', contacts: [{ name: 'IA support desk', email: 'ia-support@cgiar.org', remit: 'technical' }] } as unknown as AppConfig,
+      config: { model: 'm', contacts: [{ name: 'IA support desk', email: 'ia-support@example.org', remit: 'technical' }] } as unknown as AppConfig,
       loadedFor: 'anonymous',
     })
     render(<><DisclaimerModal /><DisclaimerFooter /></>)
     for (const id of ['disclaimer-contact', 'disclaimer-footer-contact']) {
       const line = screen.getByTestId(id)
-      expect(within(line).getByRole('link', { name: 'IA support desk' })).toHaveAttribute('href', 'mailto:ia-support@cgiar.org')
+      expect(within(line).getByRole('link', { name: 'IA support desk' })).toHaveAttribute('href', 'mailto:ia-support@example.org')
       expect(within(line).queryByRole('link', { name: 'Marc Schut' })).toBeNull()
     }
   })

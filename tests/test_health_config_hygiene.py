@@ -109,8 +109,8 @@ async def test_config_serves_default_contacts(http, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_config_contacts_are_env_configurable(http, monkeypatch):
-    monkeypatch.setenv("IA_CONTACT_TECHNICAL_EMAIL", "ia-support@cgiar.org")
+    monkeypatch.setenv("IA_CONTACT_TECHNICAL_EMAIL", "ia-support@example.org")
     monkeypatch.setenv("IA_CONTACT_TECHNICAL_NAME", "IA support desk")
     monkeypatch.setenv("IA_CONTACT_SCOPE_EMAIL", "")
     contacts = (await http.get("/api/config")).json()["contacts"]
-    assert contacts == [{"name": "IA support desk", "email": "ia-support@cgiar.org", "remit": "technical"}]
+    assert contacts == [{"name": "IA support desk", "email": "ia-support@example.org", "remit": "technical"}]

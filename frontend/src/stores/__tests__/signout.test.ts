@@ -66,10 +66,10 @@ describe('sign-out wipes the previous user (L4-04)', () => {
 
   it('a different user signing in on the same tab never sees the previous chat', () => {
     seedAliceState()
-    acceptInvitedSession({ token: 'bob-token', user: { user_id: 'bob@worldbank.org', email: 'bob@worldbank.org', name: 'Bob', role: 'researcher' } })
+    acceptInvitedSession({ token: 'bob-token', user: { user_id: 'bob@example.org', email: 'bob@example.org', name: 'Bob', role: 'researcher' } })
     expect(useChatStore.getState().messages).toEqual([])
     expect(useSessionsStore.getState().activeSessionId).toBeNull()
-    expect(localStorage.getItem(STATE_OWNER_KEY)).toBe('bob@worldbank.org')
+    expect(localStorage.getItem(STATE_OWNER_KEY)).toBe('bob@example.org')
   })
 
   it('the same user signing in again keeps their open chat', () => {
