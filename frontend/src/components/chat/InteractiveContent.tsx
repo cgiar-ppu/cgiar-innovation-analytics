@@ -9,7 +9,7 @@
 import { useState, useMemo, Component, type ReactNode, type ErrorInfo } from 'react'
 import { Globe, ChevronDown, ChevronUp, Code2 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { detectChartData } from './chartDetector'
+import { detectCharts, type ChartData } from './chartDetector'
 import { InteractiveChart } from './InteractiveChart'
 
 // ---------------------------------------------------------------------------
@@ -87,15 +87,48 @@ interface InteractiveContentProps {
   className?: string
 }
 
-export function InteractiveContent({ content, className = '' }: InteractiveContentProps) {
+/** One chart plus its "Show raw data" toggle. */
+function ChartWithRaw({ chartData }: { chartData: ChartData }) {
   const [showRaw, setShowRaw] = useState(false)
+  return (
+    <>
+      <InteractiveChart data={chartData} className="my-2" />
 
-  // Memoize detection so we don't re-parse on every render
-  const chartData = useMemo(() => detectChartData(content), [content])
+      {/* Raw data toggle */}
+      <button
+        onClick={() => setShowRaw(prev => !prev)}
+        className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] hover:text-[var(--text)] transition-colors px-1 mt-1"
+      >
+        <Code2 size={11} />
+        {showRaw ? 'Hide' : 'Show'} raw data
+        {showRaw ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+      </button>
+
+      <AnimatePresence>
+        {showRaw && (
+          <motion.pre
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="text-xs bg-[var(--surface-3)] rounded-lg p-2.5 mt-1 overflow-x-auto text-[var(--text-muted)] font-mono border border-[var(--border)] whitespace-pre-wrap break-words"
+          >
+            {JSON.stringify(chartData.data, null, 2)}
+          </motion.pre>
+        )}
+      </AnimatePresence>
+    </>
+  )
+}
+
+export function InteractiveContent({ content, className = '' }: InteractiveContentProps) {
+  // Memoize detection so we don't re-parse on every render. Every explicit
+  // <chart> block renders (the parent strips their JSON from the text body).
+  const charts = useMemo(() => detectCharts(content), [content])
   const isHtml = useMemo(() => isHtmlDocument(content), [content])
 
   // Nothing interactive detected — return null so parent renders normally
-  if (!chartData && !isHtml) return null
+  if (charts.length === 0 && !isHtml) return null
 
   return (
     <ChartErrorBoundary>
@@ -103,36 +136,10 @@ export function InteractiveContent({ content, className = '' }: InteractiveConte
         {/* HTML dashboard */}
         {isHtml && <HtmlDashboard content={content} />}
 
-        {/* Chart */}
-        {chartData && (
-          <>
-            <InteractiveChart data={chartData} className="my-2" />
-
-            {/* Raw data toggle */}
-            <button
-              onClick={() => setShowRaw(prev => !prev)}
-              className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] hover:text-[var(--text)] transition-colors px-1 mt-1"
-            >
-              <Code2 size={11} />
-              {showRaw ? 'Hide' : 'Show'} raw data
-              {showRaw ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-            </button>
-
-            <AnimatePresence>
-              {showRaw && (
-                <motion.pre
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.15 }}
-                  className="text-xs bg-[var(--surface-3)] rounded-lg p-2.5 mt-1 overflow-x-auto text-[var(--text-muted)] font-mono border border-[var(--border)] whitespace-pre-wrap break-words"
-                >
-                  {JSON.stringify(chartData.data, null, 2)}
-                </motion.pre>
-              )}
-            </AnimatePresence>
-          </>
-        )}
+        {/* Charts */}
+        {charts.map((chartData, i) => (
+          <ChartWithRaw key={i} chartData={chartData} />
+        ))}
       </div>
     </ChartErrorBoundary>
   )

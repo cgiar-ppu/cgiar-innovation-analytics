@@ -31,7 +31,7 @@ describe('getHistory de-duplicates the result_text copy of the answer', () => {
     const { messages } = await api.getHistory('s1')
     const answers = messages.filter((m) => m.role === 'assistant')
     expect(answers).toHaveLength(1)
-    expect(answers[0].content).toBe(LINKED)
+    expect(answers[0]!.content).toBe(LINKED)
     expect(messages.some((m) => m.role === 'result')).toBe(true)
   })
 
