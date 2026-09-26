@@ -6,6 +6,7 @@
  * undefined-field errors.
  */
 import { describe, it, expect } from 'vitest'
+import * as mockModule from '../mockData'
 import {
   mockAgents,
   mockWorkflows,
@@ -131,5 +132,12 @@ describe('mockData', () => {
       expect(point).toHaveProperty('messages')
       expect(typeof point.messages).toBe('number')
     }
+  })
+
+  // -----------------------------------------------------------------------
+  // L2-13 / L4-02: no invented PRMS dashboard figures anywhere
+  // -----------------------------------------------------------------------
+  it('test_no_mock_PRMS_dashboard_is_exported', () => {
+    expect('mockPRMSDashboard' in mockModule).toBe(false)
   })
 })

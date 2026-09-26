@@ -165,16 +165,26 @@ export interface SettingsConfig {
 }
 
 // PRMS Dashboard
+// A KPI whose backend query failed is null (never a stand-in 0) — see
+// `kpi_errors` — so the UI can say "unavailable" instead of showing a number.
 export interface PRMSKPIs {
-  total_results: number;
-  total_innovations: number;
-  innovation_uses: number;
-  active_initiatives: number;
-  countries_covered: number;
-  innovation_packages: number;
-  // Per-year only (absent in all-years response):
-  total_innovations_w1w2?: number;
-  total_innovations_bilateral?: number;
+  total_results: number | null;
+  total_innovations: number | null;
+  innovation_uses: number | null;
+  active_initiatives: number | null;
+  countries_covered: number | null;
+  innovation_packages: number | null;
+  // W1/W2 and W3/bilateral components of total_innovations (all views).
+  total_innovations_w1w2?: number | null;
+  total_innovations_bilateral?: number | null;
+}
+
+/** Plain-language method notes returned with every dashboard payload. */
+export interface PRMSMethodNotes {
+  data_source: string;
+  quality_gate: string;
+  bilateral_qa: string;
+  scope: string;
 }
 
 /** Which PRMS snapshot the backend read (mirrors synapsis/prms_snapshot.py). */
@@ -209,6 +219,10 @@ export interface PRMSDashboardData {
   /** Server-rendered label for the selection, e.g. "2024–2025" / "All years". */
   years_label?: string;
   last_updated: string;
-  /** Snapshot provenance; absent only on very old backends / mock data. */
+  /** Snapshot provenance; absent only on very old backends. */
   snapshot?: PRMSSnapshotInfo;
+  /** How the figures were counted (source, quality gate, bilateral QA, scope). */
+  method?: PRMSMethodNotes;
+  /** KPI keys whose query failed; their value is null. */
+  kpi_errors?: string[];
 }

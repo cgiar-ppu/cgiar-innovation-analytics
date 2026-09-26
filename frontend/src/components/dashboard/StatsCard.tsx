@@ -3,19 +3,21 @@ import { motion } from 'framer-motion';
 
 interface StatsCardProps {
   label: string;
-  value: number;
+  /** null = the backend could not compute this figure; shown as "—", never 0. */
+  value: number | null;
   icon: ReactNode;
   color?: string;
   suffix?: string;
   sublabel?: string;   // small helper text under the number
   tooltip?: string;    // optional title attribute on the card
+  info?: ReactNode;    // optional ⓘ explainer rendered next to the label
 }
 
-export default function StatsCard({ label, value, icon, color = 'var(--accent)', suffix = '', sublabel, tooltip }: StatsCardProps) {
+export default function StatsCard({ label, value, icon, color = 'var(--accent)', suffix = '', sublabel, tooltip, info }: StatsCardProps) {
   const [displayed, setDisplayed] = useState(0);
 
   useEffect(() => {
-    if (value === 0) { setDisplayed(0); return; }
+    if (value === null || value === 0) { setDisplayed(0); return; }
     const duration = 600;
     const steps = 30;
     const increment = value / steps;
@@ -45,11 +47,20 @@ export default function StatsCard({ label, value, icon, color = 'var(--accent)',
           <div className="flex items-center gap-2 mb-2">
             <div style={{ color }} className="opacity-70">{icon}</div>
             <p className="text-sm font-medium text-[var(--text-muted)]">{label}</p>
+            {info}
           </div>
-          <p className="text-3xl font-bold text-[var(--text)]">
-            {displayed.toLocaleString()}{suffix}
-          </p>
-          {sublabel && (
+          {value === null ? (
+            <p className="text-3xl font-bold text-[var(--text-muted)]" data-testid="stats-card-unavailable">
+              —
+            </p>
+          ) : (
+            <p className="text-3xl font-bold text-[var(--text)]">
+              {displayed.toLocaleString()}{suffix}
+            </p>
+          )}
+          {value === null ? (
+            <p className="text-xs text-[var(--text-muted)] mt-1 leading-tight">Unavailable right now</p>
+          ) : sublabel && (
             <p className="text-xs text-[var(--text-muted)] mt-1 leading-tight">{sublabel}</p>
           )}
         </div>
