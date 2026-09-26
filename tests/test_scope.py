@@ -189,7 +189,9 @@ async def test_message_to_sdk_carries_the_preamble_when_scope_is_set():
     # The user's OWN message is persisted unmodified — the preamble is a
     # server-side wrapper, not something the user appears to have typed.
     user_rows = [d for (_, t, d) in persisted if t == "user"]
-    assert user_rows == [{"content": "how many innovations?"}]
+    # The scope is kept beside the text for answer feedback (Lane H), never in it.
+    assert user_rows == [{"content": "how many innovations?",
+                          "scope": {"years": [2024], "programs": ["SP09 — Scaling for Impact"]}}]
 
 
 @pytest.mark.asyncio

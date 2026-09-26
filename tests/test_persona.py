@@ -324,7 +324,8 @@ async def test_sdk_message_carries_the_block_when_an_agent_is_picked():
 
     # The user's OWN message is persisted unmodified.
     user_rows = [d for (_, t, d) in persisted if t == "user"]
-    assert user_rows == [{"content": "how many innovations in 2024?"}]
+    # The text is unmodified; the selection is kept beside it for answer feedback (Lane H).
+    assert user_rows == [{"content": "how many innovations in 2024?", "agent": "prms_data_analyst"}]
 
 
 @pytest.mark.asyncio
@@ -412,4 +413,4 @@ async def test_audience_persona_wiring_keeps_the_persisted_message_clean():
     assert "subagent_type" not in sdk_message
     assert sdk_message.endswith("which innovations are ready to scale?")
     user_rows = [d for (_, t, d) in persisted if t == "user"]
-    assert user_rows == [{"content": "which innovations are ready to scale?"}]
+    assert user_rows == [{"content": "which innovations are ready to scale?", "agent": "funder_investor"}]
