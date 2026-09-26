@@ -369,3 +369,13 @@ def test_owner_block_seconds_rules():
     assert s.owner_block_seconds({'status': 'uncertain', 'provider_id': None, 'created': now - 30}, now) == 60
     assert s.owner_block_seconds({'status': 'uncertain', 'provider_id': None, 'created': now - 91}, now) == 0
     assert s.owner_block_seconds({'status': 'closing', 'provider_id': 'x', 'created': now - 60}, now) == 600
+
+
+def test_navigate_does_not_offer_the_admin_only_agents_page():
+    """Wave 3b: the Agents page is admin-only, so the guide never proposes it (the
+    browser adapter still refuses it for non-admins). submit_feedback (Lane H) stays."""
+    tools = session_config()['delegation']['responses']['tools']
+    navigate = next(t for t in tools if t['name'] == 'navigate')
+    assert navigate['parameters']['properties']['page']['enum'] == ['dashboard', 'chat', 'settings']
+    assert 'submit_feedback' in [t['name'] for t in tools]
+    assert 'navigate Dashboard, Chat, Agents' not in session_config()['instructions']

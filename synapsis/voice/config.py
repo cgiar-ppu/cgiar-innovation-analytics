@@ -30,7 +30,9 @@ TOOLS = [
     tool('open_chat', 'Open one exact chat ID returned by list_chats; never guess an ID or choose an ambiguous title.', {'session_id': TEXT}),
     tool('cycle_chats', 'Open the next or previous chat in current sidebar order.', {'direction': {'type': 'string', 'enum': ['next', 'previous']}}),
     tool('new_chat', 'Create and open an empty analytics chat when explicitly requested.'),
-    tool('navigate', 'Open an application page.', {'page': {'type': 'string', 'enum': ['dashboard', 'chat', 'agents', 'settings']}}),
+    # 'agents' is not offered: the Agents page is administrator-only since wave 3b (L4-03) and the
+    # browser adapter refuses it for everyone else, so the guide must not propose it.
+    tool('navigate', 'Open an application page.', {'page': {'type': 'string', 'enum': ['dashboard', 'chat', 'settings']}}),
     tool('read_chat', 'Read bounded recent user questions and assistant answers from the currently selected chat; includes whether more text exists. Do not treat an unfinished answer as final.', {'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}),
     tool('send_query', 'Send the user-requested analytics question or verification request into the current chat, preserving its filters and specialist. Wait for acceptance, then read_chat for the eventual answer. Never auto-retry an uncertain submission. Does not cancel an existing query.', {'session_id': TEXT, 'message': {'type': 'string', 'minLength': 1, 'maxLength': 6000}}),
     tool('read_knowledge', 'Retrieve source-grounded explanations of methods, formulas and implementation. Cite file and lines; historical example counts are not current data. source may be empty to search all. start_line=0 searches; a positive line reads that source location.', {'query': TEXT, 'source': {'type': 'string', 'enum': ['', 'product', 'methodology', 'dashboard_sql', 'scope_rules', 'scope_options', 'citations']}, 'start_line': {'type': 'integer', 'minimum': 0, 'maximum': 10000}}),
