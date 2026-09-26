@@ -38,15 +38,20 @@ async def _insert_custom_agent(db_path: Path, agent_id: str = "my_custom_agent",
 
 @pytest.mark.asyncio
 async def test_list_agents_includes_builtins(test_client, initialized_db: Path):
-    """GET /api/agents includes all 5 builtin agents and the orchestrator."""
+    """GET /api/agents includes the IA builtin agents and the orchestrator.
+
+    The Synapsis GUI/shell specialists (computer_use, code_automation) are no
+    longer part of the IA roster (sandbox 2026-09-26).
+    """
     resp = await test_client.get("/api/agents")
 
     assert resp.status_code == 200
     data = resp.json()
     agent_ids = {a["id"] for a in data["agents"]}
     expected = {"data_analysis", "visualization_reporting", "research_methodology",
-                "code_automation", "computer_use", "orchestrator"}
+                "prms_data_analyst", "orchestrator"}
     assert expected.issubset(agent_ids), f"Missing agents: {expected - agent_ids}"
+    assert not agent_ids & {"computer_use", "code_automation"}
 
 
 @pytest.mark.asyncio
@@ -225,7 +230,7 @@ async def test_delete_agent_soft_delete(test_client, initialized_db: Path):
 @pytest.mark.asyncio
 async def test_delete_builtin_blocked(test_client):
     """DELETE /api/agents/<builtin_id> must return HTTP 403."""
-    resp = await test_client.delete("/api/agents/code_automation")
+    resp = await test_client.delete("/api/agents/data_analysis")
 
     assert resp.status_code == 403
 
@@ -295,3 +300,68 @@ async def test_test_agent_invalid_config(test_client, initialized_db: Path):
     data = resp.json()
     assert data["valid"] is False
     assert len(data["issues"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# Access control (2026-09-26, review L1-06 / L7-03): writes are admin-only;
+# reading the roster and the persona picker stays open to every signed-in user.
+# ---------------------------------------------------------------------------
+
+def _bearer(user_id: str, role: str) -> dict:
+    from synapsis.auth.tokens import create_access_token
+    return {"Authorization": f"Bearer {create_access_token(user_id, user_id.split('@')[0], role)}"}
+
+
+@pytest.fixture
+async def enforced_client(initialized_db: Path):
+    from httpx import AsyncClient, ASGITransport
+    with (
+        patch("synapsis.config.AUTH_DISABLED", False),
+        patch("synapsis.auth.middleware.AUTH_DISABLED", False),
+        patch("synapsis.database.DB_PATH", initialized_db),
+    ):
+        from synapsis.server import app
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            yield client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,path,body", [
+    ("post", "/api/agents", {"name": "x", "description": "d", "system_prompt": "p"}),
+    ("put", "/api/agents/my_custom_agent", {"description": "hijack"}),
+    ("delete", "/api/agents/my_custom_agent", None),
+    ("post", "/api/agents/data_analysis/clone", None),
+    ("post", "/api/agents/data_analysis/test", {}),
+])
+async def test_agent_writes_are_admin_only(enforced_client, initialized_db: Path, method, path, body):
+    await _insert_custom_agent(initialized_db)
+    call = getattr(enforced_client, method)
+    kwargs = {"headers": _bearer("researcher@cgiar.org", "researcher")}
+    if body is not None:
+        kwargs["json"] = body
+    resp = await call(path, **kwargs)
+    assert resp.status_code == 403
+    # anonymous callers are not even authenticated
+    anon_kwargs = {"json": body} if body is not None else {}
+    assert (await call(path, **anon_kwargs)).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_admin_can_still_create_an_agent_record(enforced_client):
+    resp = await enforced_client.post(
+        "/api/agents",
+        headers=_bearer("admin@cgiar.org", "admin"),
+        json={"name": "Admin Agent", "description": "d", "system_prompt": "p"},
+    )
+    assert resp.status_code in (200, 201)
+
+
+@pytest.mark.asyncio
+async def test_researcher_can_read_personas_and_roster(enforced_client):
+    headers = _bearer("researcher@cgiar.org", "researcher")
+    personas = await enforced_client.get("/api/personas", headers=headers)
+    assert personas.status_code == 200
+    ids = {p["id"] for p in personas.json()["personas"]}
+    assert "prms_data_analyst" in ids
+    assert not ids & {"computer_use", "code_automation"}
+    assert (await enforced_client.get("/api/agents", headers=headers)).status_code == 200

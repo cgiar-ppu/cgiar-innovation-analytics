@@ -60,9 +60,9 @@ def _coerce_sections(raw: Any) -> list[dict] | None:
     "table row MUST come from REAL data you obtained by running "
     "mcp__synapsis__prms_query FIRST — never pass placeholder, mock, estimated, "
     "or remembered numbers. Query PRMS for all the data, then build the sections "
-    "from those query results. The tool saves the file to "
-    "~/workspace/outputs/exports/ and returns the absolute path; include that "
-    "path in your reply so the user gets a download link.",
+    "from those query results. The tool saves the file in this user's own "
+    "output folder and returns the absolute path; include that path in your "
+    "reply so the user gets a download link (only this user can open it).",
     {
         "title": str,
         "sections": list,
@@ -96,7 +96,12 @@ async def html_dashboard(args: dict[str, Any]) -> dict[str, Any]:
         )
 
     try:
-        output_dir = WORKSPACE / "outputs" / "exports"
+        # Per-owner, unguessable folder (review L4-03, 2026-09-26): only the
+        # user whose chat created the dashboard can list or download it.
+        from synapsis.auth.context import get_current_user_id
+        from synapsis.user_files import new_output_dir
+
+        output_dir = new_output_dir(get_current_user_id())
         path = generate_html_dashboard(title, sections, output_dir=output_dir)
     except Exception as exc:  # noqa: BLE001 — surface any render failure to the agent
         logger.error("html_dashboard generation failed: %s", exc)

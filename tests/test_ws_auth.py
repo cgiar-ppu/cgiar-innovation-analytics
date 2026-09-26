@@ -31,10 +31,23 @@ EXPECTED_WS_PATHS = {"/ws/chat"}
 REMOVED_WS_PATHS = ["/ws/agent/orchestrator", "/ws/workflow/x", "/ws/fleet/x"]
 
 
+def iter_routes(routes, prefix=""):
+    """Yield (full_path, route) for every route, descending into included
+    routers (FastAPI >= 0.13x keeps them as lazy ``_IncludedRouter`` entries
+    whose own ``path`` is empty, so a flat ``app.routes`` scan misses them)."""
+    for r in routes:
+        ctx = getattr(r, "include_context", None)
+        inner = getattr(r, "original_router", None)
+        if ctx is not None and inner is not None:
+            yield from iter_routes(inner.routes, prefix + (ctx.prefix or ""))
+        else:
+            yield prefix + getattr(r, "path", ""), r
+
+
 def _ws_paths(app) -> set[str]:
     return {
-        r.path
-        for r in app.routes
+        path
+        for path, r in iter_routes(app.routes)
         if isinstance(r, (WebSocketRoute, APIWebSocketRoute))
     }
 
@@ -43,6 +56,14 @@ def test_only_the_chat_websocket_is_registered():
     from synapsis.server import app
 
     assert _ws_paths(app) == EXPECTED_WS_PATHS
+
+
+def test_route_walker_sees_included_routers():
+    """Guard the walker itself: HTTP routes from included routers are visible."""
+    from synapsis.server import app
+
+    paths = {p for p, _ in iter_routes(app.routes)}
+    assert "/api/personas" in paths and "/api/files/{filename:path}" in paths
 
 
 @pytest.mark.parametrize("path", sorted(EXPECTED_WS_PATHS))

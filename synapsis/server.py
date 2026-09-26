@@ -12,7 +12,7 @@ This is the central module that:
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.cors import CORSMiddleware
 
@@ -25,22 +25,13 @@ from synapsis.routes import (
     health_router,
     files_router,
     sessions_router,
-    memories_router,
     query_router,
     export_router,
     search_router,
     agents_router,
-    dashboard_router,
-    workflows_router,
-    workflow_runs_router,
     transcribe_router,
     tts_router,
-    git_router,
-    agent_query_router,
-    skills_router,
-    fleet_router,
     prms_dashboard_router,
-    images_router,
     scope_router,
 )
 from synapsis.auth.routes import router as auth_router
@@ -80,23 +71,19 @@ app.include_router(voice_router)
 app.include_router(health_router)
 app.include_router(files_router)
 app.include_router(sessions_router)
-app.include_router(memories_router)
 app.include_router(query_router)
 app.include_router(export_router)
 app.include_router(search_router)
 app.include_router(agents_router)
-app.include_router(dashboard_router)
-app.include_router(workflows_router)
-app.include_router(workflow_runs_router)
 app.include_router(transcribe_router)
 app.include_router(tts_router)
-app.include_router(git_router)
-app.include_router(agent_query_router)
-app.include_router(skills_router)
-app.include_router(fleet_router)
 app.include_router(prms_dashboard_router)
-app.include_router(images_router)
 app.include_router(scope_router)
+# Deliberately NOT registered (Synapsis-agent leftovers, review 2026-09-23
+# L7-05/L1-04/L1-06/L6-07): memories, workflows, workflow_runs, workflow_logs,
+# git, agent_query, skills, fleet, images, dashboard (/api/dashboard/stats).
+# They were global across users and, for agent_query/workflows, replaced the
+# IA system prompt. tests/test_leftover_routes.py pins their absence.
 
 # -- Register WebSocket endpoints --
 # /ws/chat is the ONLY WebSocket. The Synapsis-era /ws/agent, /ws/workflow and
@@ -169,13 +156,29 @@ if _static_dir.is_dir():
 _index_html = _static_dir / "index.html"
 
 
+#: Prefixes that belong to the backend, never to the SPA. An unknown path
+#: under them is a clean JSON 404 (removed Synapsis routes must not "succeed"
+#: with index.html, and API clients must not parse HTML).
+_BACKEND_PREFIXES = ("api", "ws")
+
+
 @app.get("/{full_path:path}")
 async def spa_catch_all(request: Request, full_path: str):
     """Serve index.html for all frontend routes (SPA catch-all)."""
-    # If the path points to an actual file in static/, serve it directly
-    candidate = _static_dir / full_path
-    if candidate.is_file():
+    first = full_path.split("/", 1)[0]
+    if first in _BACKEND_PREFIXES:
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    # If the path points to an actual file INSIDE static/, serve it directly.
+    # Resolve first: uvicorn does not normalise ``..`` segments, so a raw
+    # request for ``/../<file>`` would otherwise escape static/ (found
+    # 2026-09-26; the DEV nginx front rejects such paths, this is the app-side
+    # guard).
+    static_root = _static_dir.resolve()
+    candidate = (_static_dir / full_path).resolve()
+    if candidate.is_relative_to(static_root) and candidate.is_file():
         return FileResponse(str(candidate))
+    if not _index_html.is_file():
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
     # Otherwise serve the SPA entry point — with no-cache so proxies always
     # fetch the latest index.html (asset filenames are content-hashed, so
     # they can be cached indefinitely, but index.html must stay fresh)
