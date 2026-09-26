@@ -756,11 +756,40 @@ ORDER BY count DESC
 LIMIT 10;
 """
 
-# Results-by-type chart for a year. Innovation Development bucket = alive-in-year
-# W1/W2 + bilateral, matching the total_innovations KPI (design rule: chart bucket
-# must equal its corresponding KPI card). Types 2 and 10 use Quality-Assessed
-# per-year counts (no dedup needed for these types at year granularity).
+# Results-by-type chart for a year selection. Innovation Development bucket =
+# alive-in-year W1/W2 + bilateral, matching the total_innovations KPI (design
+# rule: this bucket must equal the headline card).
+#
+# QA-4 D10 (2026-09-27): each result code is counted ONCE per selection, so the
+# pie slices add up to the "Innovation results" card (total_results = distinct
+# codes of types 2/7/10). A code re-typed across the selected years (e.g. an
+# innovation development in 2023 re-reported as an innovation use in 2025)
+# used to land in two slices (2022–2025: 2,568 vs the 2,553 card). Rule:
+#   * a code that is an Innovation Development in ANY selected year counts as a
+#     development (keeps the slice == the headline innovations card);
+#   * every other code counts under its LATEST type in the selection
+#     (latest reported_year_id, then latest row id).
+# Single years are unchanged on the Sept-2026 snapshot (no code carries two of
+# these types in one year). In multi-year views the use/package slices can be
+# smaller than their cards by the re-typed codes (2022–2025: in use 594 of the
+# 609 card); the chart description says so.
 _SQL_YEAR_RESULTS_BY_TYPE = """
+WITH dev AS (
+    SELECT DISTINCT result_code FROM result
+    WHERE result_type_id = 7 AND is_active = 1
+      AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))
+      AND reported_year_id IN (__YEARS__)
+),
+other AS (
+    SELECT result_code, result_type_id,
+           ROW_NUMBER() OVER (PARTITION BY result_code
+                              ORDER BY reported_year_id DESC, id DESC) AS rn
+    FROM result
+    WHERE result_type_id IN (2, 10) AND is_active = 1
+      AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))
+      AND reported_year_id IN (__YEARS__)
+      AND result_code NOT IN (SELECT result_code FROM dev)
+)
 SELECT 'Innovation Development' AS type,
     (SELECT COUNT(DISTINCT result_code) FROM result
      WHERE result_type_id = 7 AND source = 'Result' AND is_active = 1 AND status_id = 2
@@ -770,18 +799,20 @@ SELECT 'Innovation Development' AS type,
      WHERE result_type_id = 7 AND source = 'API' AND is_active = 1 AND status_id = 6
        AND reported_year_id IN (__YEARS__)) AS count
 UNION ALL
-SELECT 'Innovations in use' AS type, (
-    SELECT COUNT(DISTINCT result_code) FROM result
-    WHERE is_active = 1
-      AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))
-      AND result_type_id = 2 AND reported_year_id IN (__YEARS__))
+SELECT 'Innovations in use' AS type,
+    (SELECT COUNT(*) FROM other WHERE rn = 1 AND result_type_id = 2)
 UNION ALL
-SELECT 'Innovation Package' AS type, (
-    SELECT COUNT(DISTINCT result_code) FROM result
-    WHERE is_active = 1
-      AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))
-      AND result_type_id = 10 AND reported_year_id IN (__YEARS__));
+SELECT 'Innovation Package' AS type,
+    (SELECT COUNT(*) FROM other WHERE rn = 1 AND result_type_id = 10);
 """
+
+#: Chart description for multi-year selections (QA-4 D10).
+MULTI_YEAR_TYPE_NOTE = (
+    "Each innovation result is counted once, so the slices add up to the "
+    "'Innovation results' card: a result reported as an innovation development in "
+    "any selected year counts as a development; any other result counts under its "
+    "latest type in the selected years."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1051,14 +1082,15 @@ def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
         # Innovations by type (pie chart)
         try:
             results_by_type_data = _rows(cur, sql(sql_results_by_type), params)
-            # Note: summing per-type counts double-counts results that carry
-            # more than one innovation type, so it does not equal the distinct
-            # total_results. Keep the description generic rather than baking in
-            # a potentially misleading snapshot number.
+            # Year selections count each code once (QA-4 D10), so the slices
+            # add up to total_results. The all-years view keeps its canonical
+            # latest-phase Innovation Development bucket.
+            multi_year = is_year and len(selected) > 1
             charts["results_by_type"] = {
                 "chartType": "pie",
                 "title": f"Innovations by Type{label_suffix}",
-                "description": "Distribution of innovation results across types",
+                "description": (MULTI_YEAR_TYPE_NOTE if multi_year
+                                else "Distribution of innovation results across types"),
                 "xAxisKey": "type",
                 "data": results_by_type_data,
                 "series": [{"key": "count", "label": "Innovations", "color": "#427730"}],

@@ -346,13 +346,36 @@ class TestOneQualityGate:
         assert pie <= data["kpis"]["total_results"]
 
     def test_pie_buckets_equal_their_kpi_cards(self):
-        for selection in (None, [2025], _ALL_FOUR_YEARS):
+        """Single years and all years: every slice equals its card. Multi-year
+        (QA-4 D10): the development slice still equals the headline card, and
+        the use/package slices can only be smaller (re-typed codes count once)."""
+        for selection in (None, [2022], [2023], [2024], [2025]):
             data = _fetch_prms_data(years=selection)
             buckets = {r["type"]: r["count"] for r in data["charts"]["results_by_type"]["data"]}
             kpis = data["kpis"]
             assert buckets["Innovation Development"] == kpis["total_innovations"], selection
             assert buckets["Innovations in use"] == kpis["innovation_uses"], selection
             assert buckets["Innovation Package"] == kpis["innovation_packages"], selection
+        for selection in ([2024, 2025], [2023, 2024], _ALL_FOUR_YEARS):
+            data = _fetch_prms_data(years=selection)
+            buckets = {r["type"]: r["count"] for r in data["charts"]["results_by_type"]["data"]}
+            kpis = data["kpis"]
+            assert buckets["Innovation Development"] == kpis["total_innovations"], selection
+            assert buckets["Innovations in use"] <= kpis["innovation_uses"], selection
+            assert buckets["Innovation Package"] <= kpis["innovation_packages"], selection
+
+    @pytest.mark.parametrize("selection", [[2022], [2025], [2024, 2025], [2023, 2024],
+                                           [2022, 2023], _ALL_FOUR_YEARS])
+    def test_year_pie_slices_add_up_to_the_results_card(self, selection):
+        """QA-4 D10: 2022–2025 pie centre was 2,568 vs the 2,553 card (2024–25: 2,167 vs 2,166)."""
+        data = _fetch_prms_data(years=selection)
+        pie = sum(r["count"] for r in data["charts"]["results_by_type"]["data"])
+        assert pie == data["kpis"]["total_results"], (selection, pie)
+
+    def test_multi_year_pie_explains_the_count_once_rule(self):
+        multi = _fetch_prms_data(years=[2024, 2025])["charts"]["results_by_type"]["description"]
+        single = _fetch_prms_data(years=[2025])["charts"]["results_by_type"]["description"]
+        assert "counted once" in multi and "counted once" not in single
 
     def test_2025_default_view_is_unchanged(self):
         kpis = _fetch_prms_data(years=[2025])["kpis"]
