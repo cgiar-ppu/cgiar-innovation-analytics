@@ -1,15 +1,25 @@
 """
-Text-to-speech routes using OpenAI's gpt-4o-mini-tts model.
+Text-to-speech routes using OpenAI's gpt-4o-mini-tts model (read-aloud).
 
 Provides streaming audio synthesis, voice listing, and runtime settings
-management.  Requires OPENAI_API_KEY environment variable.
+management.  Requires OPENAI_API_KEY environment variable (per environment:
+deploy.yml puts SSM ``/cgiar-ia-<stage>/openai-api-key`` into the container).
+
+Every route requires a signed-in user (``Authorization: Bearer``; the
+frontend's read-aloud used to send no token and silently got 401 — review
+L6-05). Cost guards (review L6-06/L6-07): the model is pinned server-side
+(``SYNAPSIS_TTS_MODEL``), the text and instructions are capped, voices and
+formats are allow-listed, each user has a per-minute request budget, and the
+process-wide default settings can only be changed by an administrator (a
+user's own voice/speed preferences travel with each request instead).
 """
 
 import os
 import time
+from collections import defaultdict, deque
 
 from fastapi import APIRouter, HTTPException, Depends
-from synapsis.auth.middleware import get_current_user
+from synapsis.auth.middleware import get_current_user, resolve_role, resolve_user_id
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional
@@ -52,11 +62,24 @@ VOICES = [
 # Request/response models
 # ---------------------------------------------------------------------------
 
+#: OpenAI's own input limit for /v1/audio/speech; read-aloud sends sentences.
+MAX_TEXT_CHARS = 4096
+MAX_INSTRUCTIONS_CHARS = 1000
+#: Per-user request budget (read-aloud fetches sentence by sentence, two at a time).
+REQUESTS_PER_MINUTE = int(os.getenv("IA_TTS_REQUESTS_PER_MINUTE", "120"))
+ALLOWED_FORMATS = ("opus", "mp3", "aac", "flac", "wav", "pcm")
+#: Models an administrator may set as the server default.
+ALLOWED_MODELS = ("gpt-4o-mini-tts", "tts-1", "tts-1-hd")
+
+_recent: dict[str, deque] = defaultdict(deque)
+
+
 class TTSRequest(BaseModel):
-    text: str
+    text: str = Field(..., min_length=1, max_length=MAX_TEXT_CHARS)
     voice: Optional[str] = None
+    #: Ignored: the model is pinned server-side (kept for old clients).
     model: Optional[str] = None
-    instructions: Optional[str] = None
+    instructions: Optional[str] = Field(None, max_length=MAX_INSTRUCTIONS_CHARS)
     speed: Optional[float] = Field(None, ge=0.25, le=4.0)
     response_format: Optional[str] = "opus"
 
@@ -64,7 +87,7 @@ class TTSRequest(BaseModel):
 class TTSSettingsUpdate(BaseModel):
     voice: Optional[str] = None
     model: Optional[str] = None
-    instructions: Optional[str] = None
+    instructions: Optional[str] = Field(None, max_length=MAX_INSTRUCTIONS_CHARS)
     speed: Optional[float] = Field(None, ge=0.25, le=4.0)
 
 
@@ -75,24 +98,42 @@ class TTSSettingsUpdate(BaseModel):
 def _get_api_key() -> str:
     key = os.getenv("OPENAI_API_KEY")
     if not key:
-        raise HTTPException(
-            status_code=500,
-            detail="OPENAI_API_KEY environment variable is not set. "
-                   "Add it to your shell profile or export it before starting the server.",
-        )
+        raise HTTPException(status_code=503, detail="Read-aloud is not configured on this server.")
     return key
 
 
+_VOICE_IDS = frozenset(v["id"] for v in VOICES)
+
+
 def _effective_settings(req: TTSRequest) -> dict:
-    """Merge request overrides with current runtime settings."""
+    """Merge the caller's preferences with the server settings (model pinned)."""
+    voice = req.voice if req.voice in _VOICE_IDS else _tts_settings["voice"]
+    fmt = req.response_format if req.response_format in ALLOWED_FORMATS else "opus"
     return {
-        "model": req.model or _tts_settings["model"],
-        "voice": req.voice or _tts_settings["voice"],
+        "model": _tts_settings["model"],
+        "voice": voice,
         "input": req.text,
         "instructions": req.instructions if req.instructions is not None else _tts_settings["instructions"],
         "speed": req.speed if req.speed is not None else _tts_settings["speed"],
-        "response_format": req.response_format or "opus",
+        "response_format": fmt,
     }
+
+
+def _check_rate(user_id: str, now: float | None = None) -> None:
+    """Per-user sliding one-minute window; 429 when the budget is used up."""
+    now = time.monotonic() if now is None else now
+    q = _recent[user_id]
+    while q and now - q[0] > 60:
+        q.popleft()
+    if len(q) >= REQUESTS_PER_MINUTE:
+        raise HTTPException(status_code=429, detail="Too many read-aloud requests; try again in a minute.")
+    q.append(now)
+
+
+def _require_admin(user: dict = Depends(get_current_user)) -> dict:
+    if resolve_role(user) != "admin":
+        raise HTTPException(status_code=403, detail="Administrator access required")
+    return user
 
 
 # ---------------------------------------------------------------------------
@@ -100,9 +141,10 @@ def _effective_settings(req: TTSRequest) -> dict:
 # ---------------------------------------------------------------------------
 
 @router.post("/api/tts")
-async def synthesize_speech(req: TTSRequest):
-    """Stream synthesised audio from OpenAI's TTS API."""
+async def synthesize_speech(req: TTSRequest, user: dict = Depends(get_current_user)):
+    """Stream synthesised audio from OpenAI's TTS API (signed-in users only)."""
     api_key = _get_api_key()
+    _check_rate(resolve_user_id(user))
 
     try:
         import httpx
@@ -137,8 +179,8 @@ async def synthesize_speech(req: TTSRequest):
                 json=params,
             ) as resp:
                 if resp.status_code != 200:
-                    body = await resp.aread()
-                    logger.error("OpenAI TTS failed: %s %s", resp.status_code, body[:500])
+                    # Status only: the provider body can echo a masked key fragment.
+                    logger.error("OpenAI TTS failed: provider_status=%s", resp.status_code)
                     raise HTTPException(status_code=502, detail=f"OpenAI TTS failed: {resp.status_code}")
                 async for chunk in resp.aiter_bytes(4096):
                     yield chunk
@@ -162,15 +204,21 @@ async def list_voices():
     }
 
 
-@router.post("/api/tts/settings")
+@router.post("/api/tts/settings", dependencies=[Depends(_require_admin)])
 async def update_settings(req: TTSSettingsUpdate):
-    """Update runtime TTS settings (voice, model, instructions, speed)."""
+    """Update the server-wide DEFAULT TTS settings (administrators only).
+
+    These defaults apply to every user who has not chosen their own voice or
+    speed; users' own choices are kept in their browser and sent with each
+    request (review L6-06: any user used to change everyone's voice here).
+    """
     if req.voice is not None:
-        valid_ids = {v["id"] for v in VOICES}
-        if req.voice not in valid_ids:
+        if req.voice not in _VOICE_IDS:
             raise HTTPException(status_code=400, detail=f"Unknown voice: {req.voice}")
         _tts_settings["voice"] = req.voice
     if req.model is not None:
+        if req.model not in ALLOWED_MODELS:
+            raise HTTPException(status_code=400, detail=f"Unsupported model: {req.model}")
         _tts_settings["model"] = req.model
     if req.instructions is not None:
         _tts_settings["instructions"] = req.instructions

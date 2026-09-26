@@ -120,3 +120,29 @@ async def test_status_route_reports_provider_ok(initialized_db, monkeypatch):
         body = (await client.get('/api/voice/status')).json()
     assert body['enabled'] is True and body['configured'] is True and body['provider_ok'] is False
     assert body['max_seconds'] == 600
+
+
+async def test_failed_probe_is_only_cached_for_a_minute_and_success_clears_it(monkeypatch):
+    """Review L6-08: a blip showed "Voice unavailable" for 10 min; now about a minute."""
+    import time as _time
+    calls = []
+    status = {'code': 503}
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(status['code'], json={})
+
+    health._transport = httpx.MockTransport(handler)
+    assert health.FAILURE_CACHE_SECONDS <= 120 < health.CACHE_SECONDS
+    assert await health.provider_ok() is False
+    assert await health.provider_ok() is False
+    assert len(calls) == 1  # still cached (no probe storm)
+    # A minute later the failure has expired and the recovered provider is seen.
+    health._cache['checked'] = _time.time() - health.FAILURE_CACHE_SECONDS - 1
+    status['code'] = 200
+    assert await health.provider_ok() is True
+    assert len(calls) == 2
+    # Success is cached for the long window.
+    health._cache['checked'] = _time.time() - health.FAILURE_CACHE_SECONDS - 1
+    assert await health.provider_ok() is True
+    assert len(calls) == 2

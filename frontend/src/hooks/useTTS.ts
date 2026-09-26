@@ -21,7 +21,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useTTSStore } from '../stores/tts'
 import { useChatStore } from '../stores/chat'
-import { api } from '../lib/api'
+import { api, authHeaders } from '../lib/api'
 import { onTTSRequest, offTTSRequest } from '../lib/ttsEventBridge'
 
 // ---------------------------------------------------------------------------
@@ -102,23 +102,35 @@ function extractSentences(text: string): [string[], string] {
 // Core audio fetch (opus with mp3 fallback)
 // ---------------------------------------------------------------------------
 
-async function fetchAudio(text: string, signal?: AbortSignal): Promise<AudioBuffer> {
+/**
+ * POST one text chunk to `/api/tts` WITH the signed-in user's bearer token.
+ *
+ * Review L6-05: the request used to carry no `Authorization` header, so every
+ * read-aloud click got a 401 in any environment with login enabled and failed
+ * silently. The token is read at call time (fresh after an SSO refresh). The
+ * model is chosen by the server; the user's own voice, speed and
+ * instructions travel with the request.
+ */
+export async function requestTTSAudio(text: string, format: 'opus' | 'mp3', signal?: AbortSignal): Promise<Response> {
   const { settings } = useTTSStore.getState()
-  const format = negotiatedFormat ?? 'opus'
-
-  const response = await fetch(api.ttsUrl, {
+  return fetch(api.ttsUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       text,
       voice: settings.voice,
-      model: settings.model,
       instructions: settings.instructions,
       speed: settings.speed,
       response_format: format,
     }),
     signal,
   })
+}
+
+async function fetchAudio(text: string, signal?: AbortSignal): Promise<AudioBuffer> {
+  const format = negotiatedFormat ?? 'opus'
+
+  const response = await requestTTSAudio(text, format, signal)
 
   if (!response.ok) throw new Error(`TTS request failed: ${response.status}`)
 

@@ -5,6 +5,7 @@ The container runs a reaper; heartbeat leases also recover abandoned tabs.
 """
 import asyncio
 import hashlib
+import math
 import os
 import time
 from urllib.parse import quote
@@ -32,6 +33,12 @@ EXTRA_COLUMNS = {
 TERMINAL = ('closed', 'rejected', 'closed_unconfirmed')
 MAX_HANGUP_ATTEMPTS = 8            # 60 s, 120, 240, 480, then 600 s apart: ~45 min of retries
 UNCONFIRMED_AFTER_SECONDS = 86400  # hard ceiling for a lease we could not confirm closed
+# Review L6-08: after one provider failure (5xx/timeout on start) the owner used to be locked out
+# of voice for 11 min (no provider ID) or ~45 min (hang-up retries). A create whose outcome is
+# unknown and for which NO provider ID and NO SDP answer ever came back cannot have a connected
+# media session (the browser never got the answer), so the owner is released after this short
+# window. The daily/per-minute start caps are unchanged: every start still counts.
+UNCERTAIN_NO_ID_RELEASE_SECONDS = 90
 _reaper = None
 _warmup = None
 _creates: set[asyncio.Task] = set()
@@ -132,9 +139,12 @@ async def create(owner, request_id, sdp):
         # shared capacity: creating/active, and closing ones whose provider ID we know. 'uncertain' rows
         # and closing rows without a provider ID are bounded by the reaper (see reap_once) and must not
         # shrink the pool for everyone else while they wait.
-        mine = await (await db.execute("SELECT 1 FROM voice_sessions WHERE owner=? AND status NOT IN ('closed','rejected','closed_unconfirmed') LIMIT 1", (owner,))).fetchone()
-        if mine:
-            raise HTTPException(409, 'Your previous voice connection is active or awaiting cleanup. End it before starting another.')
+        pending = await (await db.execute("SELECT status, provider_id, created FROM voice_sessions WHERE owner=? AND status NOT IN ('closed','rejected','closed_unconfirmed')", (owner,))).fetchall()
+        wait = max((owner_block_seconds(dict(r), now) for r in pending), default=0)
+        if wait > 0:
+            raise HTTPException(409, 'Your previous voice connection is active or awaiting cleanup. '
+                                     + ('End it before starting another.' if wait == float('inf')
+                                        else f'Try again in about {_wait_phrase(wait)}.'))
         counted = (await (await db.execute("SELECT COUNT(*) FROM voice_sessions WHERE status IN ('creating','active') OR (status='closing' AND provider_id IS NOT NULL)")).fetchone())[0]
         if counted >= 6:
             raise HTTPException(429, 'All voice connections are currently in use. Try again in a few minutes.')
@@ -151,6 +161,27 @@ async def create(owner, request_id, sdp):
     _creates.add(task)
     task.add_done_callback(_creates.discard)
     return await asyncio.shield(task)
+
+
+def owner_block_seconds(row, now):
+    """How long a non-terminal lease still blocks its owner from starting voice (0 = not at all).
+
+    * creating/active: until it ends (bounded by the heartbeat/expiry reaper) → ``inf``;
+    * uncertain/closing with NO provider ID: no media session can exist (no SDP answer ever
+      reached the browser) → released UNCERTAIN_NO_ID_RELEASE_SECONDS after the start;
+    * uncertain/closing WITH a provider ID: a connected call cannot outlive the 10-minute limit
+      (the browser ends it at expiry), so the owner is free after MAX_SECONDS + HEARTBEAT_SECONDS
+      even while the reaper keeps retrying the hang-up in the background.
+    """
+    if row['status'] in ('creating', 'active'):
+        return float('inf')
+    window = MAX_SECONDS + HEARTBEAT_SECONDS if row['provider_id'] else UNCERTAIN_NO_ID_RELEASE_SECONDS
+    return max(0.0, row['created'] + window - now)
+
+
+def _wait_phrase(seconds):
+    minutes = max(1, math.ceil(seconds / 60))
+    return '1 minute' if minutes == 1 else f'{minutes} minutes'
 
 
 def provider_error(status: int) -> str:
@@ -238,8 +269,8 @@ async def _resolve_unconfirmed(row, now):
       an operator needs to reconcile against provider records.
     - no provider ID: nothing can be hung up. The SDP answer never reached the browser, so no media
       session was ever connected; a provider-side session created for that offer idles out on its
-      own. Once the maximum call length plus a heartbeat window has passed, nothing can still be
-      running, and the row is marked closed_unconfirmed.
+      own. After UNCERTAIN_NO_ID_RELEASE_SECONDS (was: the full call length + heartbeat, 11 min —
+      review L6-08) the row is marked closed_unconfirmed and its owner may start again.
     """
     if row['provider_id']:
         if row['attempts'] >= MAX_HANGUP_ATTEMPTS or now - row['created'] > UNCONFIRMED_AFTER_SECONDS:
@@ -250,8 +281,8 @@ async def _resolve_unconfirmed(row, now):
         confirmed, status = await _hangup(row)
         if confirmed:
             await _record_closed(row, status)
-    elif now - row['created'] > MAX_SECONDS + HEARTBEAT_SECONDS:
-        await _give_up(row, now, 'no_provider_id_after_max_call_length')
+    elif now - row['created'] > UNCERTAIN_NO_ID_RELEASE_SECONDS:
+        await _give_up(row, now, 'no_provider_id_no_answer_delivered')
 
 
 async def reap_once():
