@@ -16,7 +16,7 @@ Result code is the identifier used for counting and citations. A result code can
 
 W1/W2 pooled-funding results and W3/bilateral results have different source/status conventions. Use the shipped methodology and SQL for exact filters, phase ordering and deduplication. Never present a memorized example total as a current canonical count. State counting method, phase/snapshot and funding split for every total; the institution's preferred definition of "active innovation" remains a governance question.
 
-The public CGIAR Results Dashboard and public PDFs are citation destinations. The official dashboard is a cross-check; a source-code excerpt explains how this implementation calculates a metric, not whether every underlying record is correct. Exported AI documents carry the application's existing disclaimer and watermark.
+Every result the chat names links to that result's public PRMS result report (a one-page PDF summary anyone can open without a login); the public CGIAR Results Dashboard is the portfolio-level view. The official dashboard is a cross-check; a source-code excerpt explains how this implementation calculates a metric, not whether every underlying record is correct. Exported AI documents carry the application's existing disclaimer and watermark.
 
 ## Privacy and controls
 Chat list/history access is scoped to the signed-in user. Admins can additionally see designated pre-auth legacy chats. Application-level chat privacy does not provide per-user execution sandboxing for the existing analytics agent.
