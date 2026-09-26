@@ -181,12 +181,29 @@ def _run_converter(cmd: list[str], out: Path) -> None:
                 proc.wait()
 
 
+def _move_into_place(src: Path, dest: Path) -> None:
+    """Copy *src* next to *dest*, then rename atomically.
+
+    The temp dir (``/tmp``) and the exports directory (a bind-mounted volume
+    in the container) are usually different filesystems, so a plain
+    ``os.replace`` across them fails with EXDEV.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    staging = dest.with_name(f".{dest.name}.{os.getpid()}.{os.urandom(4).hex()}.part")
+    try:
+        shutil.copyfile(src, staging)
+        os.replace(staging, dest)
+    finally:
+        staging.unlink(missing_ok=True)
+
+
 def _html_to_pdf(html_content: str, pdf_filepath: Path) -> bool:
     """Print *html_content* to *pdf_filepath*. Blocking — call via :func:`_render`.
 
     Each call works in its own temporary directory (HTML input, PDF output and
     a throwaway browser profile, so two concurrent renders never share a
-    Chromium profile lock) and moves the finished PDF into place atomically.
+    Chromium profile lock) and moves the finished PDF into place atomically
+    (copy + rename, safe across filesystems).
     If a converter keeps running after writing a complete PDF — Chromium
     sometimes does not exit after printing — that PDF is used as soon as it is
     complete (review L6-11); it used to be discarded in favour of the HTML
@@ -204,7 +221,7 @@ def _html_to_pdf(html_content: str, pdf_filepath: Path) -> bool:
             except FileNotFoundError:
                 continue
             if _is_complete_pdf(out):
-                os.replace(out, pdf_filepath)
+                _move_into_place(out, pdf_filepath)
                 logger.info("PDF export rendered by %s in %.1fs", Path(cmd[0]).name, time.monotonic() - t0)
                 return True
             out.unlink(missing_ok=True)

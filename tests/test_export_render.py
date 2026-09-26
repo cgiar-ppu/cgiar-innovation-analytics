@@ -270,6 +270,29 @@ def test_pdf_written_before_a_timeout_is_used(tmp_path, monkeypatch):
     assert target.read_bytes() == _FAKE_PDF
 
 
+def test_pdf_is_moved_across_filesystems(tmp_path, monkeypatch):
+    """/tmp and the exports volume are different devices in the container."""
+    import errno
+    import os as _os
+
+    from synapsis.routes import export as ex
+
+    script = _fake_browser(tmp_path, sleep=0)
+    monkeypatch.setattr(ex, "_pdf_commands", lambda h, p, prof: [[sys.executable, script, f"--print-to-pdf={p}", str(h)]])
+    real_replace = _os.replace
+
+    def replace_same_dir_only(src, dst):
+        if Path(src).parent != Path(dst).parent:
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(ex.os, "replace", replace_same_dir_only)
+    target = tmp_path / "exports" / "x.pdf"
+    assert ex._html_to_pdf("<html></html>", target) is True
+    assert target.read_bytes() == _FAKE_PDF
+    assert [p.name for p in target.parent.iterdir()] == ["x.pdf"]  # no staging leftovers
+
+
 def test_incomplete_pdf_is_rejected(tmp_path, monkeypatch):
     from synapsis.routes import export as ex
 

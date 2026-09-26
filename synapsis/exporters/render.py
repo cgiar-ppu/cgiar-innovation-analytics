@@ -380,6 +380,13 @@ RENDERED_CSS = """\
 _MONO = "Consolas"
 
 
+def _pt(value):
+    from docx.shared import Pt
+
+    return Pt(value)
+
+
+
 def _add_hyperlink(paragraph, url: str, text: str, *, bold=False, italic=False, strike=False) -> None:
     """Append a real, clickable external hyperlink run to *paragraph*."""
     from docx.opc.constants import RELATIONSHIP_TYPE as RT
@@ -428,7 +435,8 @@ def _write_inline(paragraph, children: Iterable[Token], base_size=None) -> None:
             run.font.strike = True
         if code:
             run.font.name = _MONO
-        if base_size:
+            run.font.size = _pt(9.5)
+        if base_size and not code:
             run.font.size = base_size
 
     for tok in children:
@@ -525,6 +533,13 @@ def chart_into_docx(container, spec: Optional[dict]) -> None:
     _add_caption(container, caption)
     if columns:
         _add_docx_table(container, columns, rows)
+        _spacer(container)
+
+
+def _spacer(container) -> None:
+    """A small empty paragraph so text does not butt against a table."""
+    p = container.add_paragraph()
+    p.paragraph_format.space_after = _pt(2)
 
 
 def _list_style(doc, ordered: bool, level: int) -> Optional[str]:
@@ -601,6 +616,7 @@ def _tokens_into_docx(doc, tokens: list[Token], heading_offset: int, base_size) 
             in_table = False
             _add_docx_table(doc, [""] * len(table_header), [[""] * len(r) for r in table_rows],
                             header_tokens=table_header, row_tokens=table_rows)
+            _spacer(doc)
         elif t == "inline":
             children = tok.children or []
             if in_table:
