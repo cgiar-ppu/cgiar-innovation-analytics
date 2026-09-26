@@ -15,8 +15,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 
 from synapsis.config import logger
+from synapsis.security_headers import SecurityHeadersMiddleware, cors_settings
 from synapsis.database import init_db, close_db
 from synapsis.workflow_db import init_workflow_db, close_workflow_db
 from synapsis.database.fleet_schema import init_fleet_db
@@ -50,16 +52,15 @@ from synapsis.websocket import ws_chat, get_activity_stats, cleanup_session_clie
 
 app = FastAPI(title="CGIAR Innovation Analytics Platform", version="0.1.0")
 
-# -- CORS middleware for external mini-app integration --
-import os as _os
-_cors_origins = _os.getenv("CORS_ORIGINS", "*").split(",")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# -- HTTP hardening (review 2026-09-23 L1-07/L1-08/L4-12) --
+# Order: the last middleware added is the outermost. CORS is outermost so
+# preflights are answered first; security headers wrap every HTTP response
+# (including errors and the SPA); GZip compresses the ~2 MB of JS/CSS.
+# CORS used to be "*" + credentials in every env; it is now the env's own
+# origin (CORS_ORIGINS, else IA_SSO_ORIGIN) — see synapsis/security_headers.py.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(CORSMiddleware, **cors_settings())
 
 # -- Register route routers --
 app.include_router(auth_router)
