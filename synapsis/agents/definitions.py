@@ -39,8 +39,13 @@ from synapsis.config import IS_MACOS
 # Shared tool lists (DRY -- avoid repeating the same list in every agent)
 # ---------------------------------------------------------------------------
 
+# IA sandbox (2026-09-26, review P0-2): no Bash / Write / Edit for any
+# specialist. Files reach the user through the narrow create_document tool
+# (per-owner area, zero-draft watermark); Read/Glob/Grep are path-confined and
+# WebFetch is SSRF-guarded by PreToolUse hooks (synapsis/hooks/sandbox.py).
 _STANDARD_TOOLS: list[str] = [
-    "Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch",
+    "Read", "Glob", "Grep", "WebSearch", "WebFetch",
+    "mcp__synapsis__create_document",
 ]
 
 _PRMS_TOOLS: list[str] = _STANDARD_TOOLS + ["mcp__synapsis__prms_query"]
@@ -323,18 +328,7 @@ Provide formulas and parameters so the user can run calculations themselves.""",
             "from dashboards, or verifying visual output."
         ),
         prompt=_build_computer_use_prompt(),
-        tools=["Bash",
-               "mcp__computer-use__screenshot",
-               "mcp__computer-use__left_click",
-               "mcp__computer-use__right_click",
-               "mcp__computer-use__double_click",
-               "mcp__computer-use__triple_click",
-               "mcp__computer-use__mouse_move",
-               "mcp__computer-use__type",
-               "mcp__computer-use__key",
-               "mcp__computer-use__scroll",
-               "mcp__computer-use__wait",
-               "mcp__computer-use__left_click_drag"],
+        tools=[],  # not offered in the IA app (removed from SUBAGENTS below)
         model="claude-sonnet-5",
     ),
 
@@ -832,6 +826,14 @@ def _make_variants(subagents: dict[str, AgentDefinition]) -> dict[str, AgentDefi
         )
     return variants
 
+
+# IA sandbox (2026-09-26, review L3-09): the GUI (computer_use) and
+# shell/scripting (code_automation) specialists are Synapsis-agent leftovers
+# that only work with Bash / desktop control. They are not part of the IA
+# roster, the persona picker or the orchestrator's routing table.
+NON_IA_AGENTS: tuple[str, ...] = ("computer_use", "code_automation")
+for _non_ia in NON_IA_AGENTS:
+    SUBAGENTS.pop(_non_ia, None)
 
 _VARIANTS = _make_variants(SUBAGENTS)
 SUBAGENTS.update(_VARIANTS)

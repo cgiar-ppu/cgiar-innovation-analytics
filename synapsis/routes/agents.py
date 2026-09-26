@@ -9,6 +9,11 @@ Agent browsing, creation, and management API.
 - POST   /api/agents/{id}/clone   -- Clone any agent as a new custom agent
 - POST   /api/agents/{id}/test    -- Validate an agent's configuration
 - GET    /api/personas            -- The specialists the chat picker may offer
+
+Access (2026-09-26, review L1-06/L7-03): every route needs a signed-in user;
+the WRITE routes (create/update/delete/clone/test) are administrator-only.
+Custom agents are no longer injected into anyone's chat (the loader returns
+builtins only), so these rows are inert records until a future admin feature.
 """
 
 import json
@@ -16,7 +21,7 @@ import time
 import uuid
 
 from fastapi import APIRouter, HTTPException, Depends
-from synapsis.auth.middleware import get_current_user
+from synapsis.auth.middleware import get_current_user, resolve_role
 from pydantic import BaseModel
 from typing import Optional
 
@@ -31,6 +36,19 @@ from synapsis.validators.agents import validate_model, validate_tools, assert_no
 _BUILTIN_IDS = set(SUBAGENTS) | {"orchestrator"}
 
 router = APIRouter(prefix="/api", tags=["agents"], dependencies=[Depends(get_current_user)])
+
+
+def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    """Administrator-only guard for the agent WRITE routes.
+
+    The role is the verified JWT claim (never client input). In the local
+    dev-bypass mode ``get_current_user`` returns the admin dev user, so local
+    behaviour is unchanged.
+    """
+    if resolve_role(user) != "admin":
+        raise HTTPException(status_code=403, detail="Administrator access required")
+    return user
+
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
@@ -196,7 +214,7 @@ async def get_agent(agent_id: str):
         return _custom_agent_from_row(row)
 
 
-@router.post("/agents")
+@router.post("/agents", dependencies=[Depends(require_admin)])
 async def create_agent(payload: AgentCreate):
     """Create a new custom agent."""
     if not (1 <= len(payload.name) <= 100):
@@ -229,7 +247,7 @@ async def create_agent(payload: AgentCreate):
         return _custom_agent_from_row(row)
 
 
-@router.put("/agents/{agent_id}")
+@router.put("/agents/{agent_id}", dependencies=[Depends(require_admin)])
 async def update_agent(agent_id: str, payload: AgentUpdate):
     """Update a custom agent. Cannot update builtin agents."""
     try:
@@ -260,7 +278,7 @@ async def update_agent(agent_id: str, payload: AgentUpdate):
         return _custom_agent_from_row(await cursor.fetchone())
 
 
-@router.delete("/agents/{agent_id}")
+@router.delete("/agents/{agent_id}", dependencies=[Depends(require_admin)])
 async def delete_agent(agent_id: str):
     """Soft-delete a custom agent. Cannot delete builtin agents."""
     try:
@@ -281,7 +299,7 @@ async def delete_agent(agent_id: str):
     return {"status": "deleted", "id": agent_id}
 
 
-@router.post("/agents/{agent_id}/clone")
+@router.post("/agents/{agent_id}/clone", dependencies=[Depends(require_admin)])
 async def clone_agent(agent_id: str):
     """Clone any agent (builtin or custom) as a new custom agent."""
     if agent_id in SUBAGENTS:
@@ -318,7 +336,7 @@ async def clone_agent(agent_id: str):
         return _custom_agent_from_row(row)
 
 
-@router.post("/agents/{agent_id}/test")
+@router.post("/agents/{agent_id}/test", dependencies=[Depends(require_admin)])
 async def test_agent(agent_id: str, body: dict = {}):
     """Validate an agent's configuration without running the full SDK."""
     agent = await get_agent(agent_id)

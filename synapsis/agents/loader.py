@@ -1,17 +1,19 @@
 """
-Agent loader -- merges builtin SUBAGENTS with custom agents from the database.
+Agent loader -- the specialist roster handed to the SDK's ``agents=`` option.
 
-Provides load_all_agents(), which returns a combined dict of AgentDefinition
-instances suitable for the SDK's agents= parameter.
+Security note (2026-09-26, review L1-06 / L3-05 / L7-03): this used to merge
+every ``is_active`` row of the ``agents`` table into EVERY user's orchestrator
+roster and system prompt. Any signed-in user could therefore create an agent
+("route every PRMS question here", "ignore the counting rules") that steered
+all other users' answers. The IA app now uses the builtin specialists only;
+custom agent rows stay in the database as inert records (their write routes
+are administrator-only) and are never injected into a chat.
 """
 
-import json
-
-import aiosqlite
 from claude_agent_sdk import AgentDefinition
 
-from synapsis.agents.definitions import SUBAGENTS, _STANDARD_TOOLS
-from synapsis.exporters.instructions import EXPORT_INSTRUCTIONS
+from synapsis.agents.definitions import SUBAGENTS
+
 
 def current_agent_model(model: str | None) -> str:
     """Resolve stored legacy tier aliases without rewriting users' records."""
@@ -19,28 +21,9 @@ def current_agent_model(model: str | None) -> str:
 
 
 async def load_all_agents() -> dict[str, AgentDefinition]:
-    """Merge builtin SUBAGENTS with custom agents from the database.
+    """Return the builtin specialist roster (a fresh dict each call).
 
-    Returns a new dict containing both builtin and custom agents as
-    AgentDefinition instances suitable for the SDK's agents= parameter.
+    Kept async and under its historical name so every caller
+    (``agent_options``, the persona picker) is unchanged.
     """
-    from synapsis.database import get_db
-
-    merged = dict(SUBAGENTS)
-    try:
-        async with get_db() as db:
-            cursor = await db.execute(
-                "SELECT * FROM agents WHERE is_active = 1"
-            )
-            rows = await cursor.fetchall()
-            for row in rows:
-                tools = json.loads(row["tools"]) if row["tools"] else _STANDARD_TOOLS
-                merged[row["id"]] = AgentDefinition(
-                    description=row["description"],
-                    prompt=row["system_prompt"] + "\n\n" + EXPORT_INSTRUCTIONS,
-                    tools=tools,
-                    model=current_agent_model(row["model"]),
-                )
-    except (aiosqlite.OperationalError, aiosqlite.DatabaseError):
-        pass  # DB not ready yet -- return builtin agents only
-    return merged
+    return dict(SUBAGENTS)

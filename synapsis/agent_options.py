@@ -6,201 +6,208 @@ so both the WebSocket handler and the stateless query endpoint can share
 the same agent configuration.
 """
 
+import hashlib
+import os
+import re
 from pathlib import Path
 from typing import Optional
 
 from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
 from synapsis.config import (
-    MODEL, FALLBACK_MODEL, MAX_TURNS, WORKSPACE, PROJECT_DIR,
-    SAFETY_HOOKS_ENABLED, IS_MACOS, logger,
+    MODEL, FALLBACK_MODEL, MAX_TURNS, WORKSPACE, logger,
 )
 from synapsis.constants import MAX_BUFFER_SIZE
-from synapsis.exporters.instructions import EXPORT_INSTRUCTIONS
-from synapsis.tools import synapsis_mcp, computer_use_mcp
-from synapsis.hooks import safety_validator, audit_logger, audit_logger_post
+from synapsis.tools import synapsis_mcp
+from synapsis.hooks import audit_logger, audit_logger_post
+from synapsis.hooks.sandbox import build_sandbox_hooks
 from synapsis.agents import build_system_prompt, load_all_agents
 
 
 # ---------------------------------------------------------------------------
-# System-prompt file path
+# System-prompt file (per build, content-addressed)
 # ---------------------------------------------------------------------------
 # On Linux the system prompt (~131 KB) exceeds ARG_MAX when passed as a CLI
-# argument to the `claude` binary (OSError [Errno 7] Argument list too long).
-# We write it to a temp file once per session startup and pass the path via
-# --system-prompt-file instead, which the bundled claude binary supports.
-# The file is in /tmp (ephemeral, container-local) and is always rewritten on
-# each call to build_agent_options, so it is always up-to-date.
+# argument, so it is written to a file and passed via --system-prompt-file.
+# Review L3-14: a single shared /tmp/cgiar-ia-system-prompt.txt was truncated
+# and rewritten by every client build, so a CLI starting at the same moment
+# could read a half-written or different prompt. Each distinct prompt now gets
+# its own content-hashed file, written atomically (temp file + os.replace):
+# a reader always sees a complete file whose content matches its name.
 # ---------------------------------------------------------------------------
-_SYSTEM_PROMPT_FILE = Path("/tmp/cgiar-ia-system-prompt.txt")
+_SYSTEM_PROMPT_DIR = Path(os.getenv("IA_SYSTEM_PROMPT_DIR", "/tmp"))
+_SYSTEM_PROMPT_PREFIX = "cgiar-ia-system-prompt-"
 
 
 def _write_system_prompt_file(prompt_text: str) -> dict:
-    """Write system prompt to a temp file and return a SystemPromptFile dict.
+    """Write the prompt to a content-hashed file and return a SystemPromptFile dict.
 
-    Using --system-prompt-file instead of --system-prompt avoids the Linux
-    ARG_MAX limit (128 KB) that breaks subprocess launch when the system
-    prompt exceeds it.
-
-    Args:
-        prompt_text: The full system prompt string.
-
-    Returns:
-        A dict compatible with ClaudeAgentOptions.system_prompt of the form
-        {"type": "file", "path": "<absolute path>"}.
+    Falls back to the inline string if the file cannot be written.
     """
+    digest = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()[:20]
+    target = _SYSTEM_PROMPT_DIR / f"{_SYSTEM_PROMPT_PREFIX}{digest}.txt"
     try:
-        _SYSTEM_PROMPT_FILE.write_text(prompt_text, encoding="utf-8")
-        logger.debug(
-            "System prompt written to file (%d chars): %s",
-            len(prompt_text),
-            _SYSTEM_PROMPT_FILE,
-        )
+        if not target.is_file():
+            tmp = target.with_name(f".{target.name}.{os.getpid()}.{os.urandom(4).hex()}")
+            tmp.write_text(prompt_text, encoding="utf-8")
+            os.replace(tmp, target)
+        logger.debug("System prompt file %s (%d chars)", target, len(prompt_text))
     except OSError as exc:
-        # If we can't write the file (rare), fall back to inline string and
-        # let the OS decide whether the arg fits.
         logger.warning(
             "Could not write system prompt file %s: %s — falling back to inline",
-            _SYSTEM_PROMPT_FILE,
+            target,
             exc,
         )
         return prompt_text  # type: ignore[return-value]
-    return {"type": "file", "path": str(_SYSTEM_PROMPT_FILE)}
+    return {"type": "file", "path": str(target)}
 
 
 # ---------------------------------------------------------------------------
-# Skills discovery — symlink .claude/ into the workspace directory
+# End-user sandbox: IA-only tools (review 2026-09-23 P0-2 / L3-09)
 # ---------------------------------------------------------------------------
-# The SDK discovers SKILL.md files under <cwd>/.claude/skills/.  We keep cwd
-# as WORKSPACE (~/workspace) so all file tools work there, but symlink the
-# project's .claude directory into WORKSPACE so the CLI finds skills.
-# The symlink is created once at import time and is idempotent.
-# ---------------------------------------------------------------------------
-
-_project_claude_dir = PROJECT_DIR / ".claude"
-_workspace_claude_dir = WORKSPACE / ".claude"
-
-if _project_claude_dir.is_dir():
-    _needs_link = False
-    if _workspace_claude_dir.is_symlink():
-        # Verify existing symlink points to the CURRENT project, not a stale one
-        _current_target = _workspace_claude_dir.resolve()
-        _expected_target = _project_claude_dir.resolve()
-        if _current_target != _expected_target:
-            logger.warning(
-                "Stale .claude symlink: %s → %s (expected %s). Recreating.",
-                _workspace_claude_dir, _current_target, _expected_target,
-            )
-            _workspace_claude_dir.unlink()
-            _needs_link = True
-    elif not _workspace_claude_dir.exists():
-        _needs_link = True
-
-    if _needs_link:
-        try:
-            _workspace_claude_dir.symlink_to(_project_claude_dir)
-            logger.info("Symlinked %s → %s for skill discovery",
-                         _workspace_claude_dir, _project_claude_dir)
-        except OSError as exc:
-            logger.warning("Could not symlink .claude for skills: %s", exc)
-
-
-# ---------------------------------------------------------------------------
-# Allowed tools for the main orchestrator
+# The orchestrator and every specialist run for CGIAR staff and invited
+# externals. They get exactly the capabilities the product needs: PRMS data
+# tools, charts, dashboards, documents, the user's own chat history, web
+# search, and read-only access to references / the user's own files. There is
+# NO shell (Bash), NO file writing (Write/Edit/NotebookEdit), no memory,
+# custom-agent, fleet, Slack, image-generation, TTS-settings or computer-use
+# tools. Files reach the user only through create_document / html_dashboard,
+# which write into the caller's own area (synapsis/user_files.py).
 # ---------------------------------------------------------------------------
 
-ALLOWED_TOOLS: list[str] = [
-    # Built-in SDK tools
-    "Read", "Write", "Edit", "Bash",
-    "Glob", "Grep",
-    "WebSearch", "WebFetch",
+#: Built-in CLI tools the agent may see at all (passed as ``tools=``: the base
+#: set; anything else — Bash, Write, Edit, ... — does not exist for the model).
+IA_BUILTIN_TOOLS: list[str] = [
+    "Read", "Glob", "Grep",          # path-confined by hooks/sandbox.py
+    "WebSearch",                     # server-side web search
+    "WebFetch",                      # SSRF-guarded by hooks/sandbox.py
     "TodoWrite",
-    "Task",
-    # Skill and deferred-tool support
-    "Skill",
-    "ToolSearch",
-    # MCP memory tools
-    "mcp__synapsis__memory_store",
-    "mcp__synapsis__memory_recall",
-    "mcp__synapsis__memory_list",
-    "mcp__synapsis__memory_forget",
-    # MCP agent management tools
-    "mcp__synapsis__agent_create",
-    "mcp__synapsis__agent_list",
-    "mcp__synapsis__agent_update",
-    # MCP Slack notification tool
-    "mcp__synapsis__slack_notify",
-    # MCP PRMS database query tool
+    "Task",                          # delegate to the IA specialists
+]
+
+#: MCP tools served in-process by the ``synapsis`` server (tools/__init__.py).
+IA_MCP_TOOLS: list[str] = [
     "mcp__synapsis__prms_query",
-    # MCP PRMS hybrid (BM25 + semantic) theme/topic search tool
     "mcp__synapsis__prms_search",
-    # MCP image generation / editing tools (OpenAI gpt-image-2)
-    "mcp__synapsis__image_generate",
-    "mcp__synapsis__image_edit",
-    # MCP interactive HTML dashboard generator
+    "mcp__synapsis__create_chart",
+    "mcp__synapsis__scenario_analysis",
+    "mcp__synapsis__partner_identification",
     "mcp__synapsis__html_dashboard",
-    # MCP fleet management tools
-    "mcp__synapsis__fleet_create",
-    "mcp__synapsis__fleet_spawn",
-    "mcp__synapsis__fleet_resume",
-    "mcp__synapsis__fleet_mediate",
-    "mcp__synapsis__fleet_status",
-    "mcp__synapsis__fleet_inspect",
+    "mcp__synapsis__create_document",
+    "mcp__synapsis__history_search",
+    "mcp__synapsis__history_retrieve",
+    "mcp__synapsis__history_index",
+    "mcp__synapsis__history_list",
+]
+
+#: Auto-approved tools (orchestrator). Sub-agents' ``tools=`` lists are subsets.
+ALLOWED_TOOLS: list[str] = IA_BUILTIN_TOOLS + IA_MCP_TOOLS
+
+#: Names the tool gate hook accepts ("Agent" is the CLI's current name for Task).
+_GATE_ALLOWED: list[str] = ALLOWED_TOOLS + ["Agent"]
+
+#: Explicitly removed from the model's context (belt and braces with ``tools=``
+#: and the tool-gate hook). Unknown names are ignored by the CLI.
+DISALLOWED_TOOLS: list[str] = [
+    "Bash", "BashOutput", "KillShell", "KillBash", "Monitor", "PowerShell",
+    "Write", "Edit", "MultiEdit", "NotebookEdit",
+    "Skill", "SlashCommand", "AskUserQuestion", "ExitPlanMode", "EnterWorktree",
+    "CronCreate", "CronDelete", "CronList", "RemoteTrigger", "TeamCreate",
+    "SendMessage", "Workflow", "Sleep",
+    "ListMcpResourcesTool", "ReadMcpResourceTool",
+    "mcp__synapsis__memory_store", "mcp__synapsis__memory_recall",
+    "mcp__synapsis__memory_list", "mcp__synapsis__memory_forget",
+    "mcp__synapsis__agent_create", "mcp__synapsis__agent_list",
+    "mcp__synapsis__agent_update", "mcp__synapsis__slack_notify",
+    "mcp__synapsis__image_generate", "mcp__synapsis__image_edit",
+    "mcp__synapsis__tts_set_voice", "mcp__synapsis__tts_get_voices",
+    "mcp__synapsis__fleet_create", "mcp__synapsis__fleet_spawn",
+    "mcp__synapsis__fleet_resume", "mcp__synapsis__fleet_mediate",
+    "mcp__synapsis__fleet_status", "mcp__synapsis__fleet_inspect",
     "mcp__synapsis__fleet_initialize",
 ]
 
-# MCP computer use tools — macOS only (Quartz/CGEvent not available on Linux)
-if IS_MACOS:
-    ALLOWED_TOOLS.extend([
-        "mcp__computer-use__screenshot",
-        "mcp__computer-use__left_click",
-        "mcp__computer-use__right_click",
-        "mcp__computer-use__double_click",
-        "mcp__computer-use__triple_click",
-        "mcp__computer-use__mouse_move",
-        "mcp__computer-use__type",
-        "mcp__computer-use__key",
-        "mcp__computer-use__scroll",
-        "mcp__computer-use__wait",
-        "mcp__computer-use__left_click_drag",
-    ])
+#: With the tool set above, the tool-gate hook and the path/SSRF hooks,
+#: every capability the agent has is enumerated and guarded, so skipping the
+#: interactive permission prompt (there is no human at a terminal) is safe.
+#: See the Lane A report for why this stays ``bypassPermissions``.
+AGENT_PERMISSION_MODE = "bypassPermissions"
 
 
 # ---------------------------------------------------------------------------
-# Private helpers
+# Agent subprocess environment — secrets stripped (review L1-03 / L3-02)
+# ---------------------------------------------------------------------------
+# The SDK starts the CLI with {**os.environ, **options.env}. Every secret the
+# server holds (JWT signing key, OpenAI key, SSO secrets, AWS credentials,
+# Litestream credentials, ...) is overridden with an empty value. Only what the
+# CLI needs to call the model is kept.
 # ---------------------------------------------------------------------------
 
-def _build_hooks() -> dict:
-    """Build the hook configuration dict shared by all agent option builders.
+#: Credentials the Claude CLI itself needs to reach the model API.
+_CLI_CREDENTIAL_KEYS = frozenset({
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+})
 
-    When SAFETY_HOOKS_ENABLED is true, a Bash-specific pre-tool hook runs
-    ``safety_validator`` before the catch-all ``audit_logger`` hook.  When
-    disabled, only the audit logger is attached so every tool call is still
-    recorded without the safety gate.
+#: Always blanked, even when not currently set (defence against late export).
+_ALWAYS_BLANK = ("IA_JWT_SECRET", "OPENAI_API_KEY", "AWS_ACCESS_KEY_ID",
+                 "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
 
-    Returns:
-        A dict suitable for passing directly as the ``hooks`` kwarg of
-        ``ClaudeAgentOptions``.
+_SECRET_NAME = re.compile(
+    r"(SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|PRIVATE|APIKEY|API_KEY|_KEY$|_KEY_|"
+    r"^AWS_|^LITESTREAM_|DATABASE_URL|_DSN$|SESSION_KEY|COOKIE)",
+    re.IGNORECASE,
+)
+
+
+def agent_env(environ: Optional[dict] = None) -> dict[str, str]:
+    """Environment overrides for the agent CLI: every secret blanked."""
+    src = os.environ if environ is None else environ
+    env = {k: "" for k in _ALWAYS_BLANK}
+    for key in src:
+        if key in _CLI_CREDENTIAL_KEYS:
+            continue
+        if _SECRET_NAME.search(key):
+            env[key] = ""
+    # Keep MCP tools loaded up front (never deferred behind ToolSearch): the
+    # model must see create_document / prms_query on the first turn.
+    env["ENABLE_TOOL_SEARCH"] = "false"
+    return env
+
+
+# ---------------------------------------------------------------------------
+# Hooks
+# ---------------------------------------------------------------------------
+
+def _build_hooks(owner_id: Optional[str]) -> dict:
+    """Hook configuration for one client, bound to its owner.
+
+    PreToolUse: the sandbox (tool gate, Read/Glob/Grep confinement, WebFetch
+    SSRF guard) plus the audit trail. PostToolUse: audit trail. The old
+    Bash-pattern ``safety_validator`` is not registered: Bash is not available.
     """
-    pre_tool_hooks = (
-        [
-            HookMatcher(matcher="Bash", hooks=[safety_validator]),
-            HookMatcher(hooks=[audit_logger]),
-        ]
-        if SAFETY_HOOKS_ENABLED
-        else [HookMatcher(hooks=[audit_logger])]
-    )
     return {
-        "PreToolUse": pre_tool_hooks,
+        "PreToolUse": build_sandbox_hooks(owner_id, _GATE_ALLOWED)
+        + [HookMatcher(hooks=[audit_logger])],
         "PostToolUse": [HookMatcher(hooks=[audit_logger_post])],
     }
+
+
+def _current_owner() -> str:
+    """The verified identity of the connection/request building the client."""
+    from synapsis.auth.context import get_current_user_id
+
+    return get_current_user_id()
 
 
 async def build_agent_options(
     resume_session_id: str = "",
     model_override: Optional[str] = None,
 ) -> ClaudeAgentOptions:
-    """Build a ClaudeAgentOptions instance for the main orchestrator.
+    """Build a sandboxed ClaudeAgentOptions instance for the IA orchestrator.
+
+    The caller's identity is read from the connection/request context
+    (``synapsis.auth.context``) and bound into the sandbox hooks, so the
+    agent can only read that user's files.
 
     Args:
         resume_session_id: If provided, resumes an existing Claude SDK session
@@ -210,17 +217,16 @@ async def build_agent_options(
     Returns:
         Fully configured ClaudeAgentOptions ready for ClaudeSDKClient or query().
     """
-    # Load all agents (builtin + custom from DB)
+    # Builtin IA specialists only (custom DB agents are never injected).
     all_agents = await load_all_agents()
-
-    mcp_servers = {"synapsis": synapsis_mcp}
-    if computer_use_mcp is not None:
-        mcp_servers["computer-use"] = computer_use_mcp
+    owner_id = _current_owner()
 
     sp = _write_system_prompt_file(build_system_prompt(all_agents))
     opts = ClaudeAgentOptions(
-        allowed_tools=ALLOWED_TOOLS,
-        permission_mode="bypassPermissions",
+        tools=list(IA_BUILTIN_TOOLS),
+        allowed_tools=list(ALLOWED_TOOLS),
+        disallowed_tools=list(DISALLOWED_TOOLS),
+        permission_mode=AGENT_PERMISSION_MODE,
         system_prompt=sp,
         cwd=str(WORKSPACE),
         model=model_override if model_override else MODEL,
@@ -228,9 +234,17 @@ async def build_agent_options(
         max_turns=MAX_TURNS,
         agents=all_agents,
         include_partial_messages=True,
-        mcp_servers=mcp_servers,
-        hooks=_build_hooks(),
-        setting_sources=["project"],
+        mcp_servers={"synapsis": synapsis_mcp},
+        strict_mcp_config=True,
+        hooks=_build_hooks(owner_id),
+        # No user/project settings: nothing on the host (e.g. a permissive
+        # .claude/settings.json allow-list or hooks) can widen the sandbox.
+        setting_sources=[],
+        # Deliver prompts verbatim: no ``@/path`` file-mention expansion (which
+        # would read files without a tool call, bypassing the hooks) and no
+        # slash-command dispatch.
+        verbatim_prompts=True,
+        env=agent_env(),
         max_buffer_size=MAX_BUFFER_SIZE,
     )
 
@@ -241,88 +255,14 @@ async def build_agent_options(
     return opts
 
 
-def _build_generic_system_prompt(agents_dict: dict) -> str:
-    """Build the system prompt for the generic orchestrator.
-
-    Lists every available specialist agent dynamically so the prompt stays
-    accurate as agents are added or removed.
-
-    Args:
-        agents_dict: Mapping of agent_id -> AgentDefinition for all loaded agents.
-
-    Returns:
-        The full system prompt string for the generic orchestrator.
-    """
-    agent_lines = ""
-    for agent_id, agent_def in agents_dict.items():
-        desc = agent_def.description
-        if len(desc) > 120:
-            desc = desc[:117] + "..."
-        agent_lines += f"- **{agent_id}**: {desc}\n"
-
-    return f"""You are a general-purpose AI orchestrator that delegates tasks to specialist sub-agents.
-
-Your role is to:
-1. Understand the user's request
-2. Break it into sub-tasks if needed
-3. Delegate to the appropriate specialist agent
-4. Synthesize results and present a coherent response
-
-You have access to the following specialist agents via the Task tool. Choose the best agent for each sub-task.
-
-Available agents:
-{agent_lines}
-## Guidelines
-- Always explain your reasoning for which agent you chose
-- If a task needs multiple agents, run them in sequence
-- Synthesize outputs from different agents into a coherent response
-- You can also handle simple tasks directly without delegation
-
-{EXPORT_INSTRUCTIONS}
-"""
-
-
 async def build_generic_agent_options(
     resume_session_id: str = "",
     model_override: Optional[str] = None,
 ) -> ClaudeAgentOptions:
-    """Build a ClaudeAgentOptions instance for the generic (non-Synapsis) orchestrator.
+    """Former "generic orchestrator" (Synapsis workflows / /ws/agent).
 
-    Uses a minimal, domain-agnostic system prompt that simply lists available
-    agents and describes the delegation workflow — no analytics-specific context.
-
-    Args:
-        resume_session_id: If provided, resumes an existing Claude SDK session.
-        model_override:    If provided, use this model instead of the configured MODEL.
-
-    Returns:
-        Fully configured ClaudeAgentOptions ready for ClaudeSDKClient or query().
+    The generic, non-CGIAR prompt is gone (review L3-14/L7-05): its only
+    callers were the removed workflow/agent sockets and routes. Kept as an
+    alias so any remaining import gets the same sandboxed IA options.
     """
-    all_agents = await load_all_agents()
-
-    mcp_servers = {"synapsis": synapsis_mcp}
-    if computer_use_mcp is not None:
-        mcp_servers["computer-use"] = computer_use_mcp
-
-    sp = _write_system_prompt_file(_build_generic_system_prompt(all_agents))
-    opts = ClaudeAgentOptions(
-        allowed_tools=ALLOWED_TOOLS,
-        permission_mode="bypassPermissions",
-        system_prompt=sp,
-        cwd=str(WORKSPACE),
-        model=model_override if model_override else MODEL,
-        fallback_model=FALLBACK_MODEL,
-        max_turns=MAX_TURNS,
-        agents=all_agents,
-        include_partial_messages=True,
-        mcp_servers=mcp_servers,
-        hooks=_build_hooks(),
-        setting_sources=["project"],
-        max_buffer_size=MAX_BUFFER_SIZE,
-    )
-
-    if resume_session_id:
-        opts.resume = resume_session_id
-        logger.info("Building generic agent options with resume=%s", resume_session_id)
-
-    return opts
+    return await build_agent_options(resume_session_id, model_override)

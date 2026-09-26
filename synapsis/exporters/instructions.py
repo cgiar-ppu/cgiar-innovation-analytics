@@ -1,20 +1,20 @@
-"""Shared instructions for agent-authored files, in addition to route exporters."""
+"""Shared instructions for agent-authored files, in addition to route exporters.
+
+Appended to the orchestrator prompt and to every specialist's prompt. Since the
+2026-09-26 sandbox (review P0-2) the agent has no shell / Python / file-writing
+tool: files are produced only by the ``create_document`` and ``html_dashboard``
+MCP tools, which apply the zero-draft marks themselves.
+"""
 from synapsis.exporters.watermark import WATERMARK_BANNER
 
 EXPORT_INSTRUCTIONS = f"""## Mandatory AI zero-draft marks on deliverables
 Every downloadable output is an AI-assisted draft and must visibly carry:
-**{WATERMARK_BANNER}**. This includes files you create with Write/Bash or delegate,
-not only the built-in chat export buttons. Preserve this requirement when briefing
-another agent. Do not describe any output as approved or human-validated.
-
-Reuse `synapsis.exporters.watermark` from the installed application (Python imports
-can add `/app` to sys.path on the hosted runtime): `apply_ai_watermark(document)`
-for DOCX; `watermark_markdown()` and `watermark_markdown_footer()` for Markdown;
-`watermark_html()`, `watermark_html_overlay()` and `WATERMARK_HTML_CSS` for HTML
-and its PDF rendering. Keep the visible banner, per-page mark where supported,
-provenance notice and UTC export timestamp. Do not add personal contacts to exports.
-For spreadsheets, put the notice in a visible first worksheet and printed headers
-or footers; for slides and standalone charts, add a readable draft notice in the
-slide/chart footer. Verify the saved file contains the notice before sharing it.
+**{WATERMARK_BANNER}**. Produce files ONLY with `mcp__synapsis__create_document`
+(Word, Excel, CSV, Markdown) or `mcp__synapsis__html_dashboard` (interactive
+dashboard): both add the notice, the PRMS snapshot line and the UTC generation
+timestamp automatically, and save the file where only the requesting user can
+download it. There is no other way to write a file — do not claim otherwise.
+When briefing another agent, keep this requirement. Do not describe any output
+as approved or human-validated, and do not add personal contacts to exports.
 State the actual source snapshot separately from the export generation date.
 """
