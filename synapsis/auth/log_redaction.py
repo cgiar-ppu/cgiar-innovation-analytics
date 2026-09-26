@@ -22,8 +22,28 @@ class AuthUrlFilter(logging.Filter):
         return True
 
 
+def _redacting_factory(base):
+    def factory(*args, **kwargs):
+        record = base(*args, **kwargs)
+        AuthUrlFilter().filter(record)
+        return record
+    factory._ia_redacting = True  # idempotence marker
+    return factory
+
+
 def install_auth_url_redaction():
+    """Redact credential query values in EVERY log record.
+
+    Logger-level filters (uvicorn.error / uvicorn.access / httpx) only see
+    records logged on those exact loggers, not ones propagated from child
+    loggers or written by the app's own loggers. The record factory covers all
+    of them — access log, app log, libraries — whatever the logging config
+    installed later (uvicorn's dictConfig replaces handlers, not the factory).
+    """
     for name in ("uvicorn.error", "uvicorn.access", "httpx"):
         logger = logging.getLogger(name)
         if not any(isinstance(f, AuthUrlFilter) for f in logger.filters):
             logger.addFilter(AuthUrlFilter())
+    current = logging.getLogRecordFactory()
+    if not getattr(current, "_ia_redacting", False):
+        logging.setLogRecordFactory(_redacting_factory(current))
