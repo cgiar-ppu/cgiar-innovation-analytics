@@ -234,6 +234,19 @@ def _get_total_count(db_path: str, sql: str) -> int | None:
     return None
 
 
+# QA-4 D5: PRMS titles were cut at 80 characters in the table view (73 % of
+# result titles are longer), and the model "completed" them — once with an
+# invented qualifier — while claiming the titles were as stored. Title/name
+# columns now keep up to 250 characters (99 % of PRMS titles fit); anything
+# still cut ends in "..." and the prompt says to keep that ellipsis.
+_TITLE_COLUMN_RE = re.compile(r"(^|[_\s])(title|name)s?($|[_\s])", re.IGNORECASE)
+TITLE_CELL_LIMIT = 250
+
+
+def _cell_limit(column, default: int) -> int:
+    return max(default, TITLE_CELL_LIMIT) if _TITLE_COLUMN_RE.search(str(column)) else default
+
+
 def _format_results_text(
     rows: list[dict],
     columns: list[str],
@@ -269,9 +282,10 @@ def _format_results_text(
             for c in columns:
                 v = row.get(c, "")
                 s = str(v) if v is not None else "NULL"
-                # Truncate long values
-                if len(s) > 80:
-                    s = s[:77] + "..."
+                # Truncate long values (titles/names get more room — QA-4 D5)
+                limit = _cell_limit(c, 80)
+                if len(s) > limit:
+                    s = s[:limit - 3] + "..."
                 vals.append(s)
             lines.append(" | ".join(vals))
     else:
@@ -280,8 +294,9 @@ def _format_results_text(
             lines.append(f"--- Row {i + 1} ---")
             for k, v in row.items():
                 s = str(v) if v is not None else "NULL"
-                if len(s) > 200:
-                    s = s[:197] + "..."
+                limit = _cell_limit(k, 200)
+                if len(s) > limit:
+                    s = s[:limit - 3] + "..."
                 lines.append(f"  {k}: {s}")
             lines.append("")
 

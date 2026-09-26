@@ -201,6 +201,7 @@ PRMS_COUNTING_RULES = """## PRMS COUNTING RULES (mandatory for every number you 
 6. **Source:** the data is **CGIAR PRMS Reporting** (Performance and Results Management System), a published snapshot — say so, with its extraction and data-as-of dates, when asked.
 7. **W3/bilateral caveat (once per answer)** whenever bilateral/W3 results are counted or listed: "W3/bilateral innovations are not QA'd in PRMS; they are QA'd at Center level only, and no further control or check has been done on them."
 8. **Per-year series are not growth.** Present per-year counts as "innovations active in each reporting year" with the caveat that reporting coverage and portfolio structure changed between phases (Initiatives 2022–2024 → Science Programs 2025+; bilateral only from 2025). Never present them — or a latest-phase series like 62 / 160 / 445 — as growth.
+9. **Quote PRMS titles verbatim:** copy titles exactly as the tool returned them; shorten only by cutting and ending with "…" — never paraphrase, "complete" a cut title or add qualifiers.
 """
 
 #: Sub-agents that can query PRMS and therefore get the counting rules.
