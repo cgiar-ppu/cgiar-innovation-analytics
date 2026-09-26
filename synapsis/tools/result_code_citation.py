@@ -395,7 +395,17 @@ _R_TOKEN_RE = re.compile(r"R-?(\d{1,7})")
 
 # Bare R-codes in prose/tables: "R1003", "R-1003". At least 2 digits and not
 # glued to words, paths, versions or hyphenated names ("R1-nj", "R2.5", "IR64").
-_BARE_R_RE = re.compile(r"(?<![\w/#=.\-\[])R-?(\d{2,7})(?![\w\-]|\.\d)")
+# A slash right before the code is allowed only in prose separators (QA-4 D7):
+# after ")" or whitespace ("[R26008](…)/R28583", "a / R17", ") /R17"), at the
+# start of a chunk (i.e. straight after a protected link), or after another
+# bare R-code ("R26008/R28583"). Path segments ("/data/R1003") stay unlinked.
+_SLASH_AFTER_CODE = "|".join(
+    rf"(?<=(?<![\w/#=.\-\[]){p}\d{{{n}}}/)" for n in range(2, 8) for p in ("R", "R-")
+)
+_BARE_R_RE = re.compile(
+    r"(?:(?<![\w/#=.\-\[])|(?<=[)\s]/)|(?<=\A/)|" + _SLASH_AFTER_CODE + r")"
+    r"R-?(\d{2,7})(?![\w\-]|\.\d)"
+)
 
 # "result code 1003", "Result codes: 1003, 1004 and 1005", "result_code=1003".
 _PHRASE_RE = re.compile(

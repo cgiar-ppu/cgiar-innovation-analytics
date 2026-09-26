@@ -378,6 +378,21 @@ def test_non_codes_are_never_linked(snapshot):
     assert linkify_result_codes(text) == text
 
 
+def test_code_after_a_slash_separator_is_linked(snapshot):
+    """QA-4 D7: "[R26008](…)/R28583" left the second code bare."""
+    out = linkify_result_codes("Pair: [R1003]/R17 and R188/R42; also (R1003) /R17.")
+    assert f"[R1003]({R.format(1003, 6)})/[R17]({R.format(17, 6)})" in out
+    assert f"[R188]({R.format(188, 4)})/[R42]({R.format(42, 1)})" in out
+    assert f"/[R17]({R.format(17, 6)})." in out
+    linked = linkify_result_codes(f"[R1003]({R.format(1003, 6)})/R17")
+    assert linked == f"[R1003]({R.format(1003, 6)})/[R17]({R.format(17, 6)})"
+
+
+def test_path_segments_with_codes_stay_unlinked(snapshot):
+    for text in ("path /data/R1003", "see data/R1003/R17 here", "x/R1003", "IR64/R1003"):
+        assert linkify_result_codes(text) == text, text
+
+
 def test_code_spans_fences_charts_and_urls_are_protected(snapshot):
     text = (
         "Inline `R1003` stays.\n"
