@@ -129,6 +129,16 @@ describe('sessions store', () => {
     expect(loading).toBe(false)
   })
 
+  it('test_loadSessions_keeps_the_active_empty_chat_visible (QA-4 D12)', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api.getSessions).mockResolvedValueOnce({ sessions: [] })
+    useSessionsStore.getState().setActiveSession('fresh-chat')
+
+    await useSessionsStore.getState().loadSessions()
+
+    expect(api.getSessions).toHaveBeenLastCalledWith('fresh-chat')
+  })
+
   it('test_loadSessions_sets_loading_false_on_error', async () => {
     const { api } = await import('../../lib/api')
     vi.mocked(api.getSessions).mockRejectedValueOnce(new Error('Network error'))

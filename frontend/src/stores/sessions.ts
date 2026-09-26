@@ -118,7 +118,8 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
   loadSessions: async () => {
     set({ loading: true })
     try {
-      const { sessions } = await api.getSessions()
+      // Empty chats are hidden server-side (QA-4 D12); keep the active one.
+      const { sessions } = await api.getSessions(get().activeSessionId)
       set({ sessions, loading: false })
     } catch {
       set({ loading: false })

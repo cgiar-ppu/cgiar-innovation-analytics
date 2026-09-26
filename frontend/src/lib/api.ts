@@ -266,7 +266,8 @@ export const api = {
   getAdminUsage: (days = 14) => get<AdminUsage>(`/api/admin/usage?days=${days}`),
 
   /** Returns the list of all chat sessions. */
-  getSessions: () => get<{ sessions: Session[] }>('/api/sessions'),
+  getSessions: (keep?: string | null) =>
+    get<{ sessions: Session[] }>(keep ? `/api/sessions?keep=${encodeURIComponent(keep)}` : '/api/sessions'),
 
   /**
    * Fetches the message history for a session and maps it to {@link ChatMessage} objects.
