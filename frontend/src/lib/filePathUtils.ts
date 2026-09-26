@@ -115,6 +115,26 @@ export function buildDownloadUrl(relativePath: string, token?: string | null): s
 }
 
 /**
+ * Pseudo-schemes models put in front of a local path (`sandbox:/…` is a
+ * ChatGPT habit; `file://`, `attachment:`, `computer:` also occur). They are
+ * not real URLs: react-markdown blanks unknown schemes, so the link went dead
+ * (QA-4 D4). Only stripped when a path follows.
+ */
+const PSEUDO_SCHEME_RE = /^(?:sandbox|file|attachment|computer|workspace):(?:\/\/)?(?=\/|~\/)/i
+
+/**
+ * Removes a leading pseudo-scheme from a local path.
+ *
+ * @example
+ * stripPseudoScheme('sandbox:/workspace/outputs/x.xlsx') // → '/workspace/outputs/x.xlsx'
+ * stripPseudoScheme('file:///workspace/outputs/x.xlsx')  // → '/workspace/outputs/x.xlsx'
+ * stripPseudoScheme('https://example.org/x')             // → unchanged
+ */
+export function stripPseudoScheme(href: string): string {
+  return href ? href.replace(PSEUDO_SCHEME_RE, '') : href
+}
+
+/**
  * Resolves an arbitrary anchor `href` (as found in agent-rendered markdown
  * links, e.g. `[report](/workspace/outputs/report.docx)`) to a working
  * download URL if it points inside the workspace; otherwise returns the
@@ -139,8 +159,8 @@ export function buildDownloadUrl(relativePath: string, token?: string | null): s
  */
 export function resolveWorkspaceHref(href: string, token?: string | null): string {
   if (!href) return href
-  // Strip a leading file:// scheme if present (mirrors MarkdownImage's handling).
-  const cleaned = href.replace(/^file:\/\//, '')
+  // Strip a leading pseudo-scheme (file://, sandbox:, …) — QA-4 D4.
+  const cleaned = stripPseudoScheme(href)
   const rel = extractRelativePath(cleaned)
   if (!rel) return href
   return buildDownloadUrl(rel, token)
@@ -153,7 +173,7 @@ export function resolveWorkspaceHref(href: string, token?: string | null): strin
  */
 export function isWorkspaceHref(href: string): boolean {
   if (!href) return false
-  return extractRelativePath(href.replace(/^file:\/\//, '')) !== null
+  return extractRelativePath(stripPseudoScheme(href)) !== null
 }
 
 /**

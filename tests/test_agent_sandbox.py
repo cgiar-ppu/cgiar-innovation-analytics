@@ -378,6 +378,22 @@ def test_create_document_rejects_bad_input(ws, kwargs, msg):
         create_document_file(**args)
 
 
+def test_create_document_tells_the_agent_to_paste_the_path_without_a_scheme(ws):
+    """QA-4 D4: a `sandbox:/…` link rendered dead. The tool reply must ask for
+    the exact path with no scheme, and show a link with the file name as text."""
+    from synapsis.auth.context import set_current_user_id
+    from synapsis.tools.create_document import create_document
+
+    async def run():
+        set_current_user_id("alice@cgiar.org", "researcher")
+        return await create_document.handler({"title": "Kenya list", "format": "md", "content": "x"})
+
+    text = asyncio.run(run())["content"][0]["text"]
+    path = text.split("**File:** `")[1].split("`")[0]
+    assert "no `sandbox:`" in text and "file://" in text
+    assert f"[{Path(path).name}]({path})" in text
+
+
 def test_create_document_tool_uses_the_connection_identity(ws):
     from synapsis.auth.context import set_current_user_id
     from synapsis.tools.create_document import create_document

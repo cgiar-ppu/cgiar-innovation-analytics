@@ -11,6 +11,7 @@ import {
   resolveWorkspaceHref,
   isWorkspaceHref,
   parseFilePathsInText,
+  stripPseudoScheme,
 } from '../filePathUtils'
 
 describe('buildDownloadUrl', () => {
@@ -102,5 +103,27 @@ describe('extractRelativePath / parseFilePathsInText (unchanged behavior)', () =
       },
       { type: 'text', value: ' for details' },
     ])
+  })
+})
+
+describe('stripPseudoScheme (QA-4 D4)', () => {
+  it('strips sandbox:, file:// and similar prefixes in front of a path', () => {
+    expect(stripPseudoScheme('sandbox:/workspace/outputs/x.xlsx')).toBe('/workspace/outputs/x.xlsx')
+    expect(stripPseudoScheme('file:///workspace/outputs/x.xlsx')).toBe('/workspace/outputs/x.xlsx')
+    expect(stripPseudoScheme('SANDBOX:/workspace/outputs/x.xlsx')).toBe('/workspace/outputs/x.xlsx')
+    expect(stripPseudoScheme('attachment:~/workspace/outputs/x.xlsx')).toBe('~/workspace/outputs/x.xlsx')
+  })
+
+  it('leaves real URLs and plain text alone', () => {
+    expect(stripPseudoScheme('https://reporting.cgiar.org/reports/result-details/1003?phase=6')).toBe(
+      'https://reporting.cgiar.org/reports/result-details/1003?phase=6',
+    )
+    expect(stripPseudoScheme('sandbox:abc')).toBe('sandbox:abc')
+    expect(stripPseudoScheme('')).toBe('')
+  })
+
+  it('resolveWorkspaceHref / isWorkspaceHref accept a sandbox: path', () => {
+    expect(isWorkspaceHref('sandbox:/workspace/outputs/x.xlsx')).toBe(true)
+    expect(resolveWorkspaceHref('sandbox:/workspace/outputs/x.xlsx')).toBe('/api/files/outputs/x.xlsx')
   })
 })

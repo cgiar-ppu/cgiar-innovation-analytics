@@ -97,6 +97,44 @@ describe('MarkdownAnchor (ASSISTANT_MD_COMPONENTS)', () => {
   })
 })
 
+describe('pseudo-scheme download links (QA-4 D4)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    useAuthStore.setState({ token: 'jwt-test-token', authRequired: true })
+  })
+
+  it('a sandbox:/workspace/... link becomes a working download link', () => {
+    renderMarkdown('[Kenya_list.xlsx](sandbox:/workspace/outputs/u/abc/0123/Kenya_list.xlsx)')
+    const link = screen.getByRole('link', { name: 'Kenya_list.xlsx' })
+    expect(link).toHaveAttribute('href', '/api/files/outputs/u/abc/0123/Kenya_list.xlsx')
+    expect(link).toHaveAttribute('download')
+  })
+
+  it('file:///workspace/... works too', () => {
+    renderMarkdown('[report](file:///workspace/outputs/report.docx)')
+    expect(screen.getByRole('link', { name: 'report' })).toHaveAttribute('href', '/api/files/outputs/report.docx')
+  })
+
+  it('a link whose text is the server path shows only the file name', () => {
+    renderMarkdown('[/workspace/outputs/u/abc/0123/brief.docx](sandbox:/workspace/outputs/u/abc/0123/brief.docx)')
+    const link = screen.getByRole('link', { name: 'brief.docx' })
+    expect(link.textContent).toBe('brief.docx')
+    expect(link).toHaveAttribute('href', '/api/files/outputs/u/abc/0123/brief.docx')
+  })
+
+  it('a bare sandbox: path in text becomes a download chip without the prefix', () => {
+    const { container } = renderMarkdown('Download: sandbox:/workspace/outputs/u/abc/0123/list.csv')
+    expect(container.textContent).not.toContain('sandbox:')
+    const link = container.querySelector('a[href="/api/files/outputs/u/abc/0123/list.csv"]')
+    expect(link).not.toBeNull()
+  })
+
+  it('never touches real URLs', () => {
+    renderMarkdown('[site](https://example.org/sandbox:/workspace/x)')
+    expect(screen.getByRole('link', { name: 'site' })).toHaveAttribute('href', 'https://example.org/sandbox:/workspace/x')
+  })
+})
+
 describe('MarkdownAnchor (STREAMING_MD_COMPONENTS)', () => {
   beforeEach(() => {
     localStorage.clear()

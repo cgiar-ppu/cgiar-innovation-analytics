@@ -11,13 +11,33 @@ import React, { useEffect, useState } from 'react'
 import remarkGfm from 'remark-gfm'
 import { CodeBlock } from './CodeBlock'
 import { processChildrenForFilePaths } from './FileDownloadLink'
-import { extractRelativePath, buildDownloadUrl, resolveWorkspaceHref, isWorkspaceHref } from '../../lib/filePathUtils'
+import { extractRelativePath, buildDownloadUrl, resolveWorkspaceHref, isWorkspaceHref, stripPseudoScheme } from '../../lib/filePathUtils'
 import { fetchAuthenticatedImageUrl, withFreshToken } from '../../lib/downloads'
 import type { Components } from 'react-markdown'
 
 /* ---- Shared across both assistant & streaming messages ---- */
 
-export const REMARK_PLUGINS = [remarkGfm]
+type MdNode = { type: string; url?: string; value?: string; children?: MdNode[] }
+
+/**
+ * Remark plugin: drop pseudo-schemes (`sandbox:`, `file://`, …) in front of
+ * local paths in link/image targets and plain text BEFORE react-markdown's
+ * URL sanitiser blanks them (QA-4 D4). Workspace paths then become the
+ * authenticated download link / chip as usual.
+ */
+export function remarkStripPseudoSchemes() {
+  const walk = (node: MdNode) => {
+    if ((node.type === 'link' || node.type === 'image' || node.type === 'definition') && node.url) {
+      node.url = stripPseudoScheme(node.url)
+    } else if (node.type === 'text' && node.value && /(?:sandbox|file|attachment|computer):/i.test(node.value)) {
+      node.value = node.value.replace(/\b(?:sandbox|file|attachment|computer):(?:\/\/)?(?=(?:\/|~\/)[^\s]*workspace)/gi, '')
+    }
+    node.children?.forEach(walk)
+  }
+  return (tree: MdNode) => walk(tree)
+}
+
+export const REMARK_PLUGINS = [remarkGfm, remarkStripPseudoSchemes]
 
 /**
  * Inline image renderer for markdown `![alt](src)`.
@@ -30,7 +50,7 @@ export const REMARK_PLUGINS = [remarkGfm]
  */
 function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
   const raw = src ?? ''
-  const rel = raw ? extractRelativePath(raw.replace(/^file:\/\//, '')) : null
+  const rel = raw ? extractRelativePath(stripPseudoScheme(raw)) : null
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
 
@@ -82,10 +102,15 @@ const MarkdownAnchor: Components['a'] = ({ href, children, node: _node, ...rest 
   const resolvedHref = href ? resolveWorkspaceHref(href) : href
 
   if (workspaceLink) {
+    // Never show the server path as the link text: a path-as-text link shows
+    // just the file name (QA-4 D4).
+    const text = typeof children === 'string' ? children
+      : Array.isArray(children) && children.length === 1 && typeof children[0] === 'string' ? children[0] : null
+    const label = text && isWorkspaceHref(text.trim()) ? text.trim().split('/').pop() : children
     return (
       <a href={resolvedHref} download target="_blank" rel="noopener noreferrer" {...rest}
         onClick={withFreshToken} onAuxClick={withFreshToken}>
-        {children}
+        {label}
       </a>
     )
   }

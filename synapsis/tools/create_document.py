@@ -472,6 +472,9 @@ async def create_document(args: dict[str, Any]) -> dict[str, Any]:
     return success_response(
         "Document created.\n\n"
         f"**File:** `{path}`\n\n"
-        "Include this exact path in your reply (as plain text or a Markdown link) "
-        "so the user gets a download link. It carries the AI zero-draft notice."
+        "Paste this exact path into your reply, exactly as shown and with NOTHING "
+        "in front of it (no `sandbox:`, `file://` or other scheme), either as plain "
+        "text or as the target of a Markdown link whose text is the file name, e.g. "
+        f"[{path.name}]({path}). The chat turns it into a download button that shows "
+        "only the file name. It carries the AI zero-draft notice."
     )
