@@ -20,46 +20,6 @@ export interface FileInfo {
 }
 
 /**
- * A persistent memory entry stored in the agent's memory store.
- */
-export interface Memory {
-  /** Auto-increment primary key. */
-  id: number
-  /** Category label (e.g. `"preference"`, `"fact"`). */
-  category: string
-  /** The memory text. */
-  content: string
-  /** Importance score (1-10). */
-  importance: number
-  /** Session ID where this memory was created. */
-  source_session: string
-  /** Unix timestamp of creation. */
-  created_at: number
-  /** Unix timestamp of last update. */
-  updated_at: number
-  /** Number of times this memory has been retrieved. */
-  access_count: number
-  /** Comma-separated tag string. */
-  tags: string
-  /** `1` if active, `0` if soft-deleted. */
-  active: number
-}
-
-/**
- * Payload for creating a new {@link Memory} entry via `POST /api/memories`.
- */
-export interface NewMemory {
-  /** Category label. */
-  category: string
-  /** The memory text. */
-  content: string
-  /** Importance score (1-10). */
-  importance: number
-  /** Comma-separated tags. */
-  tags: string
-}
-
-/**
  * Application configuration returned by `GET /api/config`.
  * Drives feature flags and UI labels throughout the app.
  */
@@ -71,6 +31,27 @@ export interface SelectableModel {
   id: string
   /** Short human-readable label shown in the pill/dropdown. */
   label: string
+}
+
+/** `model_policy` block of `GET /api/config` (see Lane D contract). */
+export interface ModelPolicy {
+  /** Caller role as resolved by the server: `anonymous`, `researcher`, `admin`, ... */
+  role: string
+  default_model: string
+  allowed_models: string[]
+  max_budget_usd_per_turn: number | null
+  daily_budget_usd: number | null
+  max_turns: number
+  /** True only for administrators: show per-answer cost. */
+  show_cost: boolean
+}
+
+/** One in-app contact served by `GET /api/config` (`contacts`). */
+export interface GuardrailContactInfo {
+  name: string
+  email: string
+  /** What to ask this person about, e.g. `technical`. */
+  remit: string
 }
 
 export interface AppConfig {
@@ -97,14 +78,17 @@ export interface AppConfig {
   agent_type: string
   /** Available persona names. */
   personas: string[]
-  /** Available confidence level labels. */
-  confidence_levels: string[]
-  /** Available memory category labels. */
-  memory_categories: string[]
-  /** Whether a VNC server is available for the desktop panel. */
-  vnc_available: boolean
-  /** Port the VNC WebSocket proxy listens on. */
-  vnc_port: number
+  /**
+   * The caller's model/cost policy (role-aware, Lane D 2026-09-26). The UI
+   * hides the cost pill unless `show_cost` is true (administrators only).
+   */
+  model_policy?: ModelPolicy
+  /** "Reach out if in doubt" contacts for the disclaimer modal and footer. */
+  contacts?: GuardrailContactInfo[]
+  /** SSO / invitation / password login flags (read by the login screen). */
+  sso_enabled?: boolean
+  password_login_enabled?: boolean
+  signup_allowed_domains?: string[]
   /** Host platform identifier (optional). */
   platform?: string
   /**
@@ -116,19 +100,21 @@ export interface AppConfig {
 }
 
 /**
- * Health-check response from `GET /api/health`.
+ * Health-check response from `GET /api/health`. `workspace`, `auth_method`
+ * and `available_models` are only returned to administrators.
  */
 export interface HealthStatus {
   /** `"ok"` when the backend is healthy. */
   status: string
-  /** Model currently loaded. */
+  /** Deployed commit. */
+  git_sha?: string
+  /** Default model. */
   model: string
-  /** Absolute path to the agent's workspace directory. */
-  workspace: string
-  /** Authentication method in use. */
-  auth_method: string
   /** Backend version string. */
   version: string
+  workspace?: string
+  auth_method?: string
+  available_models?: string[]
 }
 
 /**

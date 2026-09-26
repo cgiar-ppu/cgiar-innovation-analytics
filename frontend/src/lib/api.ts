@@ -12,10 +12,10 @@
  * {@link mapHistoryMessage}.
  */
 
-import type { Session, FileInfo, Memory, NewMemory, AppConfig, HealthStatus, ChatMessage, SearchResult, GitStatus, GitDiffResponse, GitLogResponse, GitShowResponse, TTSVoice, TTSSettings } from './types'
+import type { Session, FileInfo, AppConfig, HealthStatus, ChatMessage, SearchResult, TTSVoice, TTSSettings } from './types'
 import { isSuppressedSystemMessage } from '../stores/chat/systemMessageFilter'
-import type { SkillInfo } from './types-extended'
 import { getAuthToken } from '../stores/auth'
+import type { AdminUsage } from './types/usage'
 
 const BASE = ''
 
@@ -217,8 +217,11 @@ export const api = {
   /** Fetches the application configuration (model name, feature flags, etc.). */
   getConfig: () => get<AppConfig>('/api/config'),
 
-  /** Fetches the backend health status. */
+  /** Fetches the backend health status (diagnostic fields for admins only). */
   getHealth: () => get<HealthStatus>('/api/health'),
+
+  /** Admin-only usage summary (per-day turns, users, cost by role/model, voice). */
+  getAdminUsage: (days = 14) => get<AdminUsage>(`/api/admin/usage?days=${days}`),
 
   /** Returns the list of all chat sessions. */
   getSessions: () => get<{ sessions: Session[] }>('/api/sessions'),
@@ -302,23 +305,6 @@ export const api = {
     return token ? `${url}?token=${encodeURIComponent(token)}` : url
   },
 
-  /** Returns the list of stored memories. */
-  getMemories: () => get<{ memories: Memory[] }>('/api/memories'),
-
-  /**
-   * Creates a new memory entry.
-   *
-   * @param m - The memory data to store.
-   */
-  createMemory: (m: NewMemory) => post<{ id: number; status: string }>('/api/memories', m),
-
-  /**
-   * Deletes a memory entry.
-   *
-   * @param id - The numeric ID of the memory to delete.
-   */
-  deleteMemory: (id: number) => del<{ status: string }>(`/api/memories/${id}`),
-
   /** Search across all conversations. */
   searchConversations: (q: string, limit?: number) =>
     get<{ results: SearchResult[]; query: string }>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit ?? 50}`),
@@ -339,32 +325,6 @@ export const api = {
   /** Toggle pin status on a session. */
   pinSession: (sessionId: string, pinned: boolean) =>
     post<{ status: string; pinned: boolean }>(`/api/sessions/${sessionId}/pin`, { pinned }),
-
-  // -- Git operations --
-
-  /** Fetches git status (branch, staged, unstaged, untracked files). */
-  getGitStatus: () => get<GitStatus>('/api/git/status'),
-
-  /** Fetches a diff for a specific file (or all files if no file specified). */
-  getGitDiff: (file?: string, staged?: boolean) => {
-    const params = new URLSearchParams()
-    if (file) params.set('file', file)
-    if (staged) params.set('staged', 'true')
-    return get<GitDiffResponse>(`/api/git/diff?${params}`)
-  },
-
-  /** Fetches recent commit log. */
-  getGitLog: (limit = 15) => get<GitLogResponse>(`/api/git/log?limit=${limit}`),
-
-  /** Fetches the content of a file at a given ref. */
-  getGitShow: (file: string, ref = 'HEAD') =>
-    get<GitShowResponse>(`/api/git/show?file=${encodeURIComponent(file)}&ref=${ref}`),
-
-  // -- Skills discovery --
-
-  /** Fetches available skills and SDK commands for slash-command autocomplete. */
-  getSkills: (invocableOnly = false) =>
-    get<{ skills: SkillInfo[] }>(`/api/skills${invocableOnly ? '?invocable_only=true' : ''}`),
 
   // -- TTS (text-to-speech) --
 

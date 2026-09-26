@@ -1,5 +1,5 @@
 import type { DashboardStats, ActivityDataPoint, AgentInfo, Workflow } from './types-extended';
-import type { Session, Memory } from './types';
+import type { Session } from './types';
 
 export const mockDashboardStats: DashboardStats = {
   total_sessions: 12,
@@ -113,21 +113,6 @@ export const mockSessions: Session[] = [
     model: 'claude-sonnet-4-6',
     message_count: 24,
     pinned: false,
-  },
-];
-
-export const mockMemories: Memory[] = [
-  {
-    id: 1,
-    category: 'best_practice',
-    content: 'Always check data distributions before running parametric tests',
-    importance: 8,
-    source_session: 'demo-001',
-    active: 1,
-    tags: 'statistics, data quality',
-    created_at: Date.now() / 1000 - 172800,
-    updated_at: Date.now() / 1000 - 172800,
-    access_count: 5,
   },
 ];
 

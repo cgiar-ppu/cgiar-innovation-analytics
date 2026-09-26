@@ -11,15 +11,13 @@ function resetStore(
   overrides: Partial<{
     theme: 'dark' | 'light'
     sidebarOpen: boolean
-    sidebarTab: 'sessions' | 'files' | 'memory'
-    desktopPanelOpen: boolean
+    sidebarTab: 'sessions' | 'files'
   }> = {}
 ) {
   useUIStore.setState({
     theme: 'dark',
     sidebarOpen: false,
     sidebarTab: 'sessions',
-    desktopPanelOpen: false,
     ...overrides,
   })
 }
@@ -55,25 +53,14 @@ describe('ui store', () => {
   })
 
   // -----------------------------------------------------------------------
-  // toggleDesktopPanel
+  // Removed Synapsis surfaces (2026-09-26): no desktop (VNC) or git panel
+  // state any more - their backends were removed.
   // -----------------------------------------------------------------------
-  it('test_toggleDesktopPanel', () => {
-    useUIStore.setState({ desktopPanelOpen: false })
-
-    useUIStore.getState().toggleDesktopPanel()
-    expect(useUIStore.getState().desktopPanelOpen).toBe(true)
-
-    useUIStore.getState().toggleDesktopPanel()
-    expect(useUIStore.getState().desktopPanelOpen).toBe(false)
-  })
-
-  it('test_setDesktopPanelOpen', () => {
-    useUIStore.setState({ desktopPanelOpen: false })
-    useUIStore.getState().setDesktopPanelOpen(true)
-    expect(useUIStore.getState().desktopPanelOpen).toBe(true)
-
-    useUIStore.getState().setDesktopPanelOpen(false)
-    expect(useUIStore.getState().desktopPanelOpen).toBe(false)
+  it('test_no_desktop_or_git_panel_state', () => {
+    const state = useUIStore.getState() as unknown as Record<string, unknown>
+    for (const key of ['desktopPanelOpen', 'toggleDesktopPanel', 'setDesktopPanelOpen', 'gitPanelOpen', 'toggleGitPanel', 'setGitPanelOpen']) {
+      expect(state[key]).toBeUndefined()
+    }
   })
 
   // -----------------------------------------------------------------------
@@ -101,9 +88,6 @@ describe('ui store', () => {
   it('test_setSidebarTab', () => {
     useUIStore.getState().setSidebarTab('files')
     expect(useUIStore.getState().sidebarTab).toBe('files')
-
-    useUIStore.getState().setSidebarTab('memory')
-    expect(useUIStore.getState().sidebarTab).toBe('memory')
 
     useUIStore.getState().setSidebarTab('sessions')
     expect(useUIStore.getState().sidebarTab).toBe('sessions')

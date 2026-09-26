@@ -12,7 +12,6 @@ import {
   mockWorkflows,
   mockDashboardStats,
   mockSessions,
-  mockMemories,
   mockActivityData,
 } from '../mockData'
 
@@ -107,16 +106,10 @@ describe('mockData', () => {
   })
 
   // -----------------------------------------------------------------------
-  // mockMemories
+  // mockMemories removed with the shared Memory feature (2026-09-26)
   // -----------------------------------------------------------------------
-  it('test_mockMemories_have_required_fields', () => {
-    expect(mockMemories.length).toBeGreaterThan(0)
-    for (const m of mockMemories) {
-      expect(m).toHaveProperty('id')
-      expect(m).toHaveProperty('category')
-      expect(m).toHaveProperty('content')
-      expect(m).toHaveProperty('importance')
-    }
+  it('test_no_memory_mock_after_memory_feature_removal', () => {
+    expect((mockModule as Record<string, unknown>).mockMemories).toBeUndefined()
   })
 
   // -----------------------------------------------------------------------

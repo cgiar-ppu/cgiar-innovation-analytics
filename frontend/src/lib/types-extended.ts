@@ -155,15 +155,6 @@ export interface WorkflowRunDetail extends WorkflowRunSummary {
   steps: WorkflowRunStep[];
 }
 
-// Settings
-export interface SettingsConfig {
-  theme: 'dark' | 'light';
-  model: string;
-  fallback_model: string;
-  max_turns: number;
-  memory_categories: string[];
-}
-
 // PRMS Dashboard
 // A KPI whose backend query failed is null (never a stand-in 0) — see
 // `kpi_errors` — so the UI can say "unavailable" instead of showing a number.
