@@ -70,9 +70,22 @@ from synapsis.session_manager import (
 from synapsis.handlers.utils import launch_streaming_task
 
 
+def _turn_meta(scope, persona) -> dict:
+    """Specialist and data scope of this question, kept on the saved user row
+    so answer feedback can report what the rated answer was asked with
+    (Lane H). Empty selections add nothing; the SDK message is unchanged."""
+    meta = {}
+    if not persona_is_empty(persona):
+        meta["agent"] = persona
+    if not scope_is_empty(scope):
+        meta["scope"] = scope
+    return meta
+
+
 # ---------------------------------------------------------------------------
 # handle_cancel
 # ---------------------------------------------------------------------------
+
 
 async def handle_cancel(
     payload: dict,
@@ -276,7 +289,7 @@ async def handle_retry(
         retry_lock_acquired = True
 
     # Persist the user's text unmodified; only the SDK copy carries the scope.
-    await save_message(session_id, "user", {"content": retry_message})
+    await save_message(session_id, "user", {"content": retry_message, **_turn_meta(scope, persona)})
 
     await launch_streaming_task(
         session_id, retry_client,
@@ -432,7 +445,7 @@ async def handle_user_message(
     await send_json({"type": "session", "session_id": session_id}, sid=session_id)
 
     # Persist the user's message to the database
-    await save_message(session_id, "user", {"content": user_message})
+    await save_message(session_id, "user", {"content": user_message, **_turn_meta(scope, persona)})
 
     # Check if this session has initial context (e.g. from workflow continuation)
     # that needs to be prepended to the first message sent to the SDK.

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from synapsis.auth.middleware import get_current_user, resolve_role, resolve_user_id
 from synapsis.voice import health, sessions
-from synapsis.voice.config import enabled
+from synapsis.voice.config import enabled, feedback_prompt
 from synapsis.voice.knowledge import lookup, data_catalog
 
 
@@ -45,7 +45,7 @@ async def status(user=Depends(get_current_user)):
     # provider_ok: True/False from a cached real provider probe, None when no key is configured.
     # A non-empty key string ("configured") is not proof the provider accepts it.
     body = {'enabled': enabled(), 'configured': health.configured(), 'provider_ok': await health.provider_ok(),
-            'max_seconds': sessions.MAX_SECONDS}
+            'max_seconds': sessions.MAX_SECONDS, 'feedback_prompt': feedback_prompt()}
     if resolve_role(user) == 'admin':
         body['usage_today'] = await sessions.usage_today()
     return body
