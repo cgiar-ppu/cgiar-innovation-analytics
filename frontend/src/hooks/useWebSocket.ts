@@ -72,6 +72,10 @@ export function useWebSocket(): UseWebSocketReturn {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   // Dedup guard for session_complete, exposed to the router via RouterContext.
   const lastSessionCompleteRef = useRef<{ sessionId: string; timestamp: number } | null>(null)
+  // L4-05: set once the owner unmounts (every sign-out). A socket closed by us
+  // must never schedule a reconnect, or a token-less "zombie" socket keeps
+  // retrying and later feeds the next user's stores a second time.
+  const disposedRef = useRef(false)
   const [isConnected, setIsConnected] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected' as const)
 
@@ -82,7 +86,8 @@ export function useWebSocket(): UseWebSocketReturn {
   })
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return
+    if (disposedRef.current) return
+    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return
 
     // When deployed on Amplify (static CDN), the WebSocket must connect
     // directly to the backend host rather than window.location.host.
@@ -147,10 +152,12 @@ export function useWebSocket(): UseWebSocketReturn {
     }
 
     ws.onclose = () => {
+      // Ignore sockets we already replaced or deliberately closed.
+      if (wsRef.current !== ws) return
       setIsConnected(false)
       setConnectionStatus('disconnected')
       wsRef.current = null
-      scheduleReconnect()
+      if (!disposedRef.current) scheduleReconnect()
     }
 
     ws.onerror = () => {
@@ -163,6 +170,7 @@ export function useWebSocket(): UseWebSocketReturn {
    * The delay doubles on each failure up to {@link MAX_BACKOFF}.
    */
   const scheduleReconnect = useCallback(() => {
+    if (disposedRef.current) return
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
     setConnectionStatus('connecting')
     const delay = backoffRef.current
@@ -182,11 +190,23 @@ export function useWebSocket(): UseWebSocketReturn {
 
   const disconnect = useCallback(() => {
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
-    wsRef.current?.close()
+    reconnectTimerRef.current = undefined
+    const ws = wsRef.current
     wsRef.current = null
+    if (ws) {
+      // Detach handlers first: a close we asked for must not re-arm a reconnect.
+      ws.onclose = null
+      ws.onmessage = null
+      ws.onerror = null
+      ws.onopen = null
+      ws.close()
+    }
+    setIsConnected(false)
+    setConnectionStatus('disconnected')
   }, [])
 
   useEffect(() => {
+    disposedRef.current = false
     connect()
 
     // When the tab regains focus after being hidden, reload history for the
@@ -208,6 +228,7 @@ export function useWebSocket(): UseWebSocketReturn {
     document.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
+      disposedRef.current = true
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       disconnect()
     }

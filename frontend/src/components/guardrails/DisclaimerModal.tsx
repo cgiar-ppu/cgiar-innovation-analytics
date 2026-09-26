@@ -15,13 +15,19 @@
  * same pattern used by AgentDetailModal.
  */
 
+import { useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { ShieldCheck } from 'lucide-react'
 import { useAuthStore } from '../../stores/auth'
-import { GUARDRAIL_CONTACTS, CONTACT_LEAD_IN } from './contacts'
+import { useGuardrailContacts } from '../../stores/appConfig'
+import { CONTACT_LEAD_IN } from './contacts'
 
 export default function DisclaimerModal() {
   const acknowledge = useAuthStore((s) => s.acknowledgeDisclaimer)
+  const contacts = useGuardrailContacts()
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  // Start keyboard focus inside the dialog (the background is inert).
+  useEffect(() => { buttonRef.current?.focus() }, [])
 
   return (
     <motion.div
@@ -77,7 +83,7 @@ export default function DisclaimerModal() {
           {/* "Reach out if in doubt" — the contact half of Jules-call item 2. */}
           <p className="text-xs text-[var(--text-muted)]" data-testid="disclaimer-contact">
             {CONTACT_LEAD_IN}{' '}
-            {GUARDRAIL_CONTACTS.map((c, i) => (
+            {contacts.map((c, i) => (
               <span key={c.email}>
                 {i > 0 && ' or '}
                 <a
@@ -96,6 +102,7 @@ export default function DisclaimerModal() {
         {/* Footer / action */}
         <div className="flex justify-end gap-2 p-5 border-t border-[var(--border)]">
           <button
+            ref={buttonRef}
             type="button"
             onClick={acknowledge}
             className="px-5 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 transition"

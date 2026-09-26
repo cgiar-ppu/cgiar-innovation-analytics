@@ -35,11 +35,19 @@ export function sendChatQuery(text: string, send: SendChat) {
   if (id) useSessionsStore.getState().markSessionBusy(id)
 }
 
+/** The chat that was open when a `new_session` was sent and not yet confirmed. */
+let pendingNewChat: { previous: string | null } | null = null
+/** Take (and clear) the pending new-chat record; used when the server refuses it. */
+export function takePendingNewChat() { const p = pendingNewChat; pendingNewChat = null; return p }
+export function clearPendingNewChat() { pendingNewChat = null }
+
 export function newChat(send: SendChat) {
   selection++
   const current = useSessionsStore.getState().activeSessionId
-  if (current) useChatStore.getState().cacheCurrentSession(current)
+  // Throws while disconnected (L4-10): nothing below runs, the chat stays open.
   send({ type: 'new_session' })
+  if (current) useChatStore.getState().cacheCurrentSession(current)
+  pendingNewChat = { previous: current }
   useChatStore.getState().clearMessages()
   useSessionsStore.getState().setActiveSession(null)
 }

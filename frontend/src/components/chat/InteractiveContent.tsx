@@ -6,7 +6,7 @@
  * parent falls back to regular text rendering with zero impact.
  */
 
-import { useState, useMemo, useCallback, Component, type ReactNode, type ErrorInfo } from 'react'
+import { useState, useMemo, Component, type ReactNode, type ErrorInfo } from 'react'
 import { Globe, ChevronDown, ChevronUp, Code2 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { detectChartData } from './chartDetector'
@@ -45,15 +45,16 @@ function isHtmlDocument(content: string): boolean {
   return trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<!doctype') || trimmed.startsWith('<html')
 }
 
-function HtmlDashboard({ content }: { content: string }) {
-  const openInNewTab = useCallback(() => {
-    const blob = new Blob([content], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    window.open(url, '_blank')
-    // Clean up after a delay
-    setTimeout(() => URL.revokeObjectURL(url), 5000)
-  }, [content])
+/**
+ * Model- or tool-produced HTML runs in an OPAQUE-origin sandbox (L4-01/L1-05):
+ * `allow-scripts` only, never `allow-same-origin`, so its script cannot read
+ * the app's storage (login token) or call the API as the user. The former
+ * "Open in new tab" (a same-origin blob: URL, i.e. full app privileges) is
+ * gone; downloadable dashboards come from the Files area instead.
+ */
+export const HTML_SANDBOX = 'allow-scripts'
 
+function HtmlDashboard({ content }: { content: string }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
@@ -64,16 +65,11 @@ function HtmlDashboard({ content }: { content: string }) {
       <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--surface-2)]/50 text-xs text-[var(--text-muted)]">
         <Globe size={12} />
         <span className="flex-1">Interactive Dashboard</span>
-        <button
-          onClick={openInNewTab}
-          className="hover:text-[var(--text)] transition-colors"
-        >
-          Open in new tab &#x2197;
-        </button>
       </div>
       <iframe
         srcDoc={content}
-        sandbox="allow-scripts allow-same-origin"
+        sandbox={HTML_SANDBOX}
+        referrerPolicy="no-referrer"
         className="w-full bg-white"
         style={{ height: 500 }}
         title="Interactive content"

@@ -31,7 +31,12 @@ export type ServerMessage =
   /** The run was cancelled at the user's request. */
   | { type: 'cancelled' }
   /** A non-recoverable error occurred on the server. */
-  | { type: 'error'; message: string }
+  /**
+   * `code` (Lane D, 2026-09-26): rate_limited, capacity, model_not_allowed,
+   * daily_limit, turn_budget, max_turns, stalled, stream_ended, provider_busy,
+   * provider_auth, context_window, refusal, cli_disconnected, internal.
+   */
+  | { type: 'error'; message: string; code?: string }
   /** AUP/policy violation detected — suggests a fallback model. */
   | { type: 'aup_error'; message: string; fallback_model: string }
   /** Confirmation that the active session's model was switched. */

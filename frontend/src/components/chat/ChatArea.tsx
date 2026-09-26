@@ -1,4 +1,5 @@
 import { sendChatQuery } from '../../lib/chatCommands'
+import { runWhileConnected } from '../../lib/connectionNotice'
 import { useEffect, useCallback } from 'react'
 import { Maximize2, Minimize2, Wrench, Loader2 } from 'lucide-react'
 import { useChatStore } from '../../stores/chat'
@@ -46,12 +47,14 @@ export function ChatArea({ send, onFileUpload }: Props) {
     useTTSStore.getState().loadVoices()
   }, [])
 
-  const handleSend = useCallback((text: string) => {
-    sendChatQuery(text, send)
+  // L4-10: while disconnected, keep the draft and say so instead of failing silently.
+  const handleSend = useCallback((text: string): boolean => {
+    return runWhileConnected(() => sendChatQuery(text, send))
   }, [send])
 
   const handleCancel = useCallback(() => {
-    send({ type: 'cancel' })
+    runWhileConnected(() => send({ type: 'cancel' }),
+      'Connection lost - the answer could not be stopped. It will stop once the connection is back, or try again.')
   }, [send])
 
   return (
