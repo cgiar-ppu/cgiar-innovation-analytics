@@ -1,14 +1,76 @@
 """
 Shared pytest fixtures for the Synapsis backend test suite.
 
+Environment pinning (review L7-06 / L7-09, 2026-09-26)
+------------------------------------------------------
+This module is imported by pytest BEFORE any test module, so the environment
+is fixed here, before the first ``import synapsis``:
+
+* ``SYNAPSIS_WORKSPACE`` -> a throw-away temp dir unless the caller set one.
+  Importing ``synapsis`` creates the workspace; without the pin a plain
+  ``pytest`` on the Mac would write into ``~/workspace``.
+* ``IA_AUTH_DISABLED=false`` -> the suite always runs with authentication
+  ENFORCED, exactly like every deployed environment. It used to follow the
+  platform default (bypass on macOS, enforced on Linux), so 30 tests only
+  passed on a Mac and nobody noticed. Tests that exercise the dev bypass patch
+  ``AUTH_DISABLED`` explicitly.
+* ``IA_JWT_SECRET`` -> a fixed test-only secret, so tokens minted by
+  :func:`auth_headers` validate.
+* Host leakage scrubbed: every other ``IA_*`` / ``SYNAPSIS_*`` variable (the
+  Synapsis agent's own shell exports ``SYNAPSIS_MODEL=...`` etc.) and the
+  provider keys are removed, so a test can never reach a paid API by accident.
+  ``SYNAPSIS_PLATFORM`` (macOS vs prod-auth/Linux mode) and ``PRMS_DB_PATH``
+  (the PRMS snapshot the data tests use) are deliberately kept.
+  Set ``IA_TEST_KEEP_ENV=1`` to skip the scrub (debugging only).
+
 Provides:
 - tmp_db_path: A temporary SQLite database file path (cleaned up after each test).
 - initialized_db: A fully-initialized database (all tables created via init_db())
   with DB_PATH and SYNAPSIS_DIR patched to use isolated temp directories.
-- test_client: An httpx.AsyncClient wired to the FastAPI app with DB patching,
-  eliminating the 3-line boilerplate repeated across route tests.
+- test_client: an ANONYMOUS httpx.AsyncClient wired to the FastAPI app with DB
+  patching (auth enforced -> protected routes answer 401).
+- auth_headers: factory for ``Authorization: Bearer`` headers of a synthetic
+  identity (``auth_headers("researcher")``, ``auth_headers("admin", "x@y")``).
+- admin_client / researcher_client: the same client, signed in as a synthetic
+  admin / researcher.
 - assert_json_response: Shared assertion helper for HTTP JSON responses.
 """
+
+import atexit
+import os
+import shutil
+import tempfile
+
+# ---------------------------------------------------------------------------
+# Environment pin -- MUST run before anything imports ``synapsis``.
+# ---------------------------------------------------------------------------
+
+#: Kept from the caller's environment on purpose (see module docstring).
+_KEEP_ENV = {"SYNAPSIS_WORKSPACE", "SYNAPSIS_PLATFORM", "IA_TEST_KEEP_ENV"}
+#: Provider credentials / host-agent variables that must never reach a test.
+_SCRUB_EXTRA = {
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL",
+    "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CLAUDECODE",
+}
+TEST_JWT_SECRET = "pytest-only-jwt-secret-not-used-anywhere-else"
+
+
+def _pin_test_environment() -> None:
+    if os.environ.get("IA_TEST_KEEP_ENV") != "1":
+        for name in list(os.environ):
+            if name in _KEEP_ENV:
+                continue
+            if name.startswith(("IA_", "SYNAPSIS_")) or name in _SCRUB_EXTRA:
+                os.environ.pop(name, None)
+    if not os.environ.get("SYNAPSIS_WORKSPACE"):
+        workspace = tempfile.mkdtemp(prefix="ia-pytest-ws-")
+        os.environ["SYNAPSIS_WORKSPACE"] = workspace
+        atexit.register(shutil.rmtree, workspace, ignore_errors=True)
+    os.environ["IA_AUTH_DISABLED"] = "false"
+    os.environ["IA_JWT_SECRET"] = TEST_JWT_SECRET
+
+
+_pin_test_environment()
 
 import asyncio
 import pytest
@@ -87,11 +149,15 @@ async def initialized_db(tmp_path: Path):
 
 @pytest_asyncio.fixture(scope="function")
 async def test_client(initialized_db):
-    """Shared async test client with proper DB patching.
+    """Shared ANONYMOUS async test client with proper DB patching.
 
     Yields an httpx.AsyncClient wired to the FastAPI ASGI app so route tests
-    can simply do ``response = await test_client.get("/api/agents")`` without
+    can simply do ``response = await test_client.get("/api/health")`` without
     repeating the DB patch + app import + AsyncClient context-manager block.
+
+    Authentication is enforced (see the environment pin above), so protected
+    routes answer 401 here. Use ``admin_client`` / ``researcher_client`` or pass
+    ``headers=auth_headers(...)`` for signed-in calls.
     """
     with patch("synapsis.database.DB_PATH", initialized_db):
         from synapsis.server import app
@@ -100,6 +166,61 @@ async def test_client(initialized_db):
             base_url="http://test",
         ) as client:
             yield client
+
+
+# ---------------------------------------------------------------------------
+# Authenticated clients (synthetic identities, test-only JWT secret)
+# ---------------------------------------------------------------------------
+
+#: Default synthetic identities. ``example.org`` addresses never match a real
+#: account and the tokens are signed with ``TEST_JWT_SECRET`` only.
+TEST_ADMIN_ID = "pytest-admin@example.org"
+TEST_RESEARCHER_ID = "pytest-researcher@example.org"
+
+
+def make_auth_headers(role: str = "researcher", user_id: str | None = None,
+                      auth_source: str = "password") -> dict:
+    """Return ``Authorization: Bearer`` headers for a synthetic identity.
+
+    ``auth_source`` defaults to ``password`` because password login is enabled
+    by default in the test configuration (``sso`` needs ``IA_SSO_ENABLED``).
+    """
+    from synapsis.auth.tokens import create_access_token
+
+    uid = user_id or (TEST_ADMIN_ID if role == "admin" else TEST_RESEARCHER_ID)
+    token = create_access_token(uid, uid.split("@")[0], role, auth_source=auth_source)
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def auth_headers():
+    """Factory fixture: ``auth_headers("admin")``, ``auth_headers("researcher", "b@x.org")``."""
+    return make_auth_headers
+
+
+async def _client_with_headers(db_path: Path, headers: dict):
+    with patch("synapsis.database.DB_PATH", db_path):
+        from synapsis.server import app
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers=headers,
+        ) as client:
+            yield client
+
+
+@pytest_asyncio.fixture(scope="function")
+async def admin_client(initialized_db):
+    """Async test client signed in as a synthetic ADMIN (auth enforced)."""
+    async for client in _client_with_headers(initialized_db, make_auth_headers("admin")):
+        yield client
+
+
+@pytest_asyncio.fixture(scope="function")
+async def researcher_client(initialized_db):
+    """Async test client signed in as a synthetic RESEARCHER (auth enforced)."""
+    async for client in _client_with_headers(initialized_db, make_auth_headers("researcher")):
+        yield client
 
 
 # ---------------------------------------------------------------------------

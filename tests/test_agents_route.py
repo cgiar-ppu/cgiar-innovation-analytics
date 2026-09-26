@@ -2,9 +2,11 @@
 Tests for synapsis/routes/agents.py
 
 Uses httpx.AsyncClient with FastAPI's ASGITransport to hit the real route
-handlers without starting a network server. The ``test_client`` fixture
-(defined in conftest.py) provides a properly DB-patched async client so
-each test operates on an isolated temp database.
+handlers without starting a network server. The ``admin_client`` fixture
+(defined in conftest.py) provides a properly DB-patched async client signed
+in as a synthetic admin (auth is always enforced in the suite; these tests
+used to rely on the macOS dev bypass, which also returned an admin), so each
+test operates on an isolated temp database.
 """
 
 import json
@@ -37,13 +39,13 @@ async def _insert_custom_agent(db_path: Path, agent_id: str = "my_custom_agent",
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_list_agents_includes_builtins(test_client, initialized_db: Path):
+async def test_list_agents_includes_builtins(admin_client, initialized_db: Path):
     """GET /api/agents includes the IA builtin agents and the orchestrator.
 
     The Synapsis GUI/shell specialists (computer_use, code_automation) are no
     longer part of the IA roster (sandbox 2026-09-26).
     """
-    resp = await test_client.get("/api/agents")
+    resp = await admin_client.get("/api/agents")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -55,11 +57,11 @@ async def test_list_agents_includes_builtins(test_client, initialized_db: Path):
 
 
 @pytest.mark.asyncio
-async def test_list_agents_includes_custom(test_client, initialized_db: Path):
+async def test_list_agents_includes_custom(admin_client, initialized_db: Path):
     """GET /api/agents includes custom agents stored in the database."""
     await _insert_custom_agent(initialized_db, agent_id="test_custom_001", name="Test Custom Agent")
 
-    resp = await test_client.get("/api/agents")
+    resp = await admin_client.get("/api/agents")
 
     agent_ids = {a["id"] for a in resp.json()["agents"]}
     assert "test_custom_001" in agent_ids
@@ -70,9 +72,9 @@ async def test_list_agents_includes_custom(test_client, initialized_db: Path):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_get_builtin_agent(test_client):
+async def test_get_builtin_agent(admin_client):
     """GET /api/agents/data_analysis returns the correct builtin agent details."""
-    resp = await test_client.get("/api/agents/data_analysis")
+    resp = await admin_client.get("/api/agents/data_analysis")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -83,9 +85,9 @@ async def test_get_builtin_agent(test_client):
 
 
 @pytest.mark.asyncio
-async def test_get_orchestrator(test_client):
+async def test_get_orchestrator(admin_client):
     """GET /api/agents/orchestrator returns the special orchestrator entry."""
-    resp = await test_client.get("/api/agents/orchestrator")
+    resp = await admin_client.get("/api/agents/orchestrator")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -94,9 +96,9 @@ async def test_get_orchestrator(test_client):
 
 
 @pytest.mark.asyncio
-async def test_get_nonexistent_agent_404(test_client):
+async def test_get_nonexistent_agent_404(admin_client):
     """GET /api/agents/<unknown_id> returns HTTP 404."""
-    resp = await test_client.get("/api/agents/definitely_does_not_exist_xyz")
+    resp = await admin_client.get("/api/agents/definitely_does_not_exist_xyz")
 
     assert resp.status_code == 404
 
@@ -106,7 +108,7 @@ async def test_get_nonexistent_agent_404(test_client):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_create_agent_valid(test_client):
+async def test_create_agent_valid(admin_client):
     """POST /api/agents with a valid payload creates an agent and returns it."""
     payload = {
         "name": "My New Agent",
@@ -116,7 +118,7 @@ async def test_create_agent_valid(test_client):
         "model": "sonnet",
         "color": "#aabbcc",
     }
-    resp = await test_client.post("/api/agents", json=payload)
+    resp = await admin_client.post("/api/agents", json=payload)
 
     assert resp.status_code == 200
     data = resp.json()
@@ -127,7 +129,7 @@ async def test_create_agent_valid(test_client):
 
 
 @pytest.mark.asyncio
-async def test_create_agent_validates_tools(test_client):
+async def test_create_agent_validates_tools(admin_client):
     """POST /api/agents with an invalid tool name returns HTTP 400."""
     payload = {
         "name": "Bad Tools Agent",
@@ -136,13 +138,13 @@ async def test_create_agent_validates_tools(test_client):
         "tools": ["Read", "FakeTool"],
         "model": "sonnet",
     }
-    resp = await test_client.post("/api/agents", json=payload)
+    resp = await admin_client.post("/api/agents", json=payload)
 
     assert resp.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_create_agent_validates_model(test_client):
+async def test_create_agent_validates_model(admin_client):
     """POST /api/agents with an invalid model returns HTTP 400."""
     payload = {
         "name": "Bad Model Agent",
@@ -151,13 +153,13 @@ async def test_create_agent_validates_model(test_client):
         "tools": [],
         "model": "gpt-4-turbo",  # not allowed
     }
-    resp = await test_client.post("/api/agents", json=payload)
+    resp = await admin_client.post("/api/agents", json=payload)
 
     assert resp.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_create_agent_validates_name_length(test_client):
+async def test_create_agent_validates_name_length(admin_client):
     """POST /api/agents with an empty name returns HTTP 400."""
     payload = {
         "name": "",  # empty name is invalid
@@ -166,7 +168,7 @@ async def test_create_agent_validates_name_length(test_client):
         "tools": [],
         "model": "sonnet",
     }
-    resp = await test_client.post("/api/agents", json=payload)
+    resp = await admin_client.post("/api/agents", json=payload)
 
     assert resp.status_code == 400
 
@@ -176,11 +178,11 @@ async def test_create_agent_validates_name_length(test_client):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_update_agent(test_client, initialized_db: Path):
+async def test_update_agent(admin_client, initialized_db: Path):
     """PUT /api/agents/{id} updates only the provided fields."""
     await _insert_custom_agent(initialized_db, agent_id="update_me", name="Original Name")
 
-    resp = await test_client.put(
+    resp = await admin_client.put(
         "/api/agents/update_me",
         json={"name": "Updated Name", "model": "opus"},
     )
@@ -192,9 +194,9 @@ async def test_update_agent(test_client, initialized_db: Path):
 
 
 @pytest.mark.asyncio
-async def test_update_builtin_blocked(test_client):
+async def test_update_builtin_blocked(admin_client):
     """PUT /api/agents/<builtin_id> must return HTTP 403."""
-    resp = await test_client.put(
+    resp = await admin_client.put(
         "/api/agents/data_analysis",
         json={"name": "Hacked Name"},
     )
@@ -207,11 +209,11 @@ async def test_update_builtin_blocked(test_client):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_delete_agent_soft_delete(test_client, initialized_db: Path):
+async def test_delete_agent_soft_delete(admin_client, initialized_db: Path):
     """DELETE /api/agents/{id} sets is_active=0, not a hard delete."""
     await _insert_custom_agent(initialized_db, agent_id="to_delete", name="Deleteable")
 
-    resp = await test_client.delete("/api/agents/to_delete")
+    resp = await admin_client.delete("/api/agents/to_delete")
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "deleted"
@@ -228,9 +230,9 @@ async def test_delete_agent_soft_delete(test_client, initialized_db: Path):
 
 
 @pytest.mark.asyncio
-async def test_delete_builtin_blocked(test_client):
+async def test_delete_builtin_blocked(admin_client):
     """DELETE /api/agents/<builtin_id> must return HTTP 403."""
-    resp = await test_client.delete("/api/agents/data_analysis")
+    resp = await admin_client.delete("/api/agents/data_analysis")
 
     assert resp.status_code == 403
 
@@ -240,9 +242,9 @@ async def test_delete_builtin_blocked(test_client):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_clone_builtin_agent(test_client):
+async def test_clone_builtin_agent(admin_client):
     """POST /api/agents/<builtin_id>/clone creates a new custom agent."""
-    resp = await test_client.post("/api/agents/data_analysis/clone")
+    resp = await admin_client.post("/api/agents/data_analysis/clone")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -252,11 +254,11 @@ async def test_clone_builtin_agent(test_client):
 
 
 @pytest.mark.asyncio
-async def test_clone_custom_agent(test_client, initialized_db: Path):
+async def test_clone_custom_agent(admin_client, initialized_db: Path):
     """POST /api/agents/<custom_id>/clone creates a copy of a custom agent."""
     await _insert_custom_agent(initialized_db, agent_id="original_custom", name="Original Custom")
 
-    resp = await test_client.post("/api/agents/original_custom/clone")
+    resp = await admin_client.post("/api/agents/original_custom/clone")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -270,9 +272,9 @@ async def test_clone_custom_agent(test_client, initialized_db: Path):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_test_agent_valid_config(test_client):
+async def test_test_agent_valid_config(admin_client):
     """POST /api/agents/<builtin_id>/test returns valid=True for a well-configured builtin."""
-    resp = await test_client.post("/api/agents/data_analysis/test", json={})
+    resp = await admin_client.post("/api/agents/data_analysis/test", json={})
 
     assert resp.status_code == 200
     data = resp.json()
@@ -281,7 +283,7 @@ async def test_test_agent_valid_config(test_client):
 
 
 @pytest.mark.asyncio
-async def test_test_agent_invalid_config(test_client, initialized_db: Path):
+async def test_test_agent_invalid_config(admin_client, initialized_db: Path):
     """POST /api/agents/{id}/test returns valid=False for an agent with empty system_prompt."""
     # Insert a custom agent with an empty system_prompt to trigger a validation issue
     now = time.time()
@@ -294,7 +296,7 @@ async def test_test_agent_invalid_config(test_client, initialized_db: Path):
         )
         await db.commit()
 
-    resp = await test_client.post("/api/agents/bad_config_agent/test", json={})
+    resp = await admin_client.post("/api/agents/bad_config_agent/test", json={})
 
     assert resp.status_code == 200
     data = resp.json()

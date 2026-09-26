@@ -1,4 +1,8 @@
-"""Exercise the real app WebSocket/model switch/tool path with a synthetic owner."""
+"""Exercise the real app WebSocket/model switch/tool path with a synthetic owner.
+
+The owner is an ADMIN: since 2026-09-26 the model list is role-aware (researchers and
+invited testers get Sonnet 5 only; switch_model to any other model is refused with
+model_not_allowed), so only an administrator can exercise the switch to every model."""
 import asyncio,json,time
 import httpx,websockets
 from synapsis.auth.tokens import create_access_token
@@ -6,7 +10,7 @@ from synapsis import config
 
 async def main():
  owner='release-chat-qa-'+str(int(time.time()))
- token=create_access_token(owner,'Synthetic release chat QA','researcher',auth_source='sso',lifetime_seconds=900)
+ token=create_access_token(owner,'Synthetic release chat QA','admin',auth_source='sso',lifetime_seconds=900)
  results=[];sid=None
  async with websockets.connect('ws://localhost:7780/ws/chat?token='+token,open_timeout=30,max_size=8*1024*1024) as ws:
   async def until(kind,timeout=240):

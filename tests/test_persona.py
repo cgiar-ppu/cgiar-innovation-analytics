@@ -383,8 +383,9 @@ async def test_invalid_agent_tells_the_user_why():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_personas_endpoint_shape(test_client):
-    resp = await test_client.get("/api/personas")
+async def test_personas_endpoint_shape(researcher_client):
+    # Any signed-in user (the persona picker); auth is enforced in the suite.
+    resp = await researcher_client.get("/api/personas")
     assert resp.status_code == 200
     body = resp.json()
     assert body["default"] is None, "no selection is the default"
@@ -396,8 +397,13 @@ async def test_personas_endpoint_shape(test_client):
 
 
 @pytest.mark.asyncio
-async def test_api_query_rejects_an_unknown_agent(test_client):
-    resp = await test_client.post(
+async def test_personas_endpoint_requires_sign_in(test_client):
+    assert (await test_client.get("/api/personas")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_api_query_rejects_an_unknown_agent(researcher_client):
+    resp = await researcher_client.post(
         "/api/query", json={"message": "hi", "agent": "not_an_agent"}
     )
     assert resp.status_code == 422

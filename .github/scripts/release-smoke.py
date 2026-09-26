@@ -8,6 +8,52 @@ from synapsis import config
 from synapsis.database.connection import get_db,close_db
 from synapsis.exporters.watermark import WATERMARK_BANNER
 
+REMOVED_WS_PATHS=('/ws/agent/qa-probe','/ws/workflow/qa-probe','/ws/fleet/qa-probe')
+
+def iter_routes(routes,prefix=''):
+ """(full_path, route) for every route, descending into included routers: FastAPI 0.141 keeps them as
+ lazy entries whose own path is '', so a flat app.routes scan misses every router-registered route."""
+ for r in routes:
+  ctx,inner=getattr(r,'include_context',None),getattr(r,'original_router',None)
+  if ctx is not None and inner is not None:yield from iter_routes(inner.routes,prefix+(ctx.prefix or ''))
+  else:yield prefix+getattr(r,'path',''),r
+
+def websocket_routes(app):
+ from starlette.routing import WebSocketRoute
+ from fastapi.routing import APIWebSocketRoute
+ return sorted({p for p,r in iter_routes(app.routes) if isinstance(r,(WebSocketRoute,APIWebSocketRoute))})
+
+async def ws_refused(url):
+ """Promotion gate for sockets (review L7-02): openapi.json never lists WebSockets, so the anonymous sweep
+ below could not see /ws/agent (anonymous, shell-capable) until 2026-09-26. A socket passes only if the
+ anonymous handshake is refused (HTTP 403) or closed with 1008 before any frame."""
+ import websockets
+ from websockets.exceptions import ConnectionClosed,InvalidHandshake
+ try:
+  async with websockets.connect(url,open_timeout=15) as ws:
+   try:await asyncio.wait_for(ws.recv(),3)
+   except ConnectionClosed as e:
+    code=e.rcvd.code if e.rcvd else None
+    assert code in (1008,1003,4401,4403),('socket accepted then closed with',code);return 'closed %s'%code
+   except asyncio.TimeoutError:pass
+   raise AssertionError('WebSocket accepted an anonymous handshake')
+ except InvalidHandshake as e:
+  status=getattr(getattr(e,'response',None),'status_code',None)
+  assert status is None or status>=400,('unexpected handshake status',status);return 'refused %s'%status
+
+async def websocket_probe(base='ws://localhost:7780'):
+ from synapsis.server import app
+ paths=websocket_routes(app);assert paths,'route walker found no WebSocket route'
+ import re
+ out={p:await ws_refused(base+re.sub(r'\{[^}]+\}','qa-probe',p)) for p in paths}
+ for p in REMOVED_WS_PATHS:out[p]=await ws_refused(base+p)
+ return 'websocket probe: all %d registered sockets %s + removed %s refuse anonymous handshakes'%(len(paths),paths,list(REMOVED_WS_PATHS))
+
+def quiet_http_logs():
+ """httpx logs each request URL at INFO and the export calls below carry ?token=: keep tokens out of logs."""
+ import logging
+ for name in ('httpx','httpcore','websockets'):logging.getLogger(name).setLevel(logging.WARNING)
+
 def check_voice_status(payload):
  """Promotion gate for voice. 'configured' is only a non-empty-key check; on 2026-09-14 a dead key
  passed this smoke and shipped a voice button that could only 503. When voice is enabled the server's
@@ -18,6 +64,7 @@ def check_voice_status(payload):
  return 'voice enabled=%s configured provider_ok=%s'%(payload.get('enabled'),payload.get('provider_ok'))
 
 async def main():
+ quiet_http_logs()
  run_id='release-qa-'+str(int(time.time()))
  admin_token=create_access_token(run_id,'Release QA operator','admin',auth_source='sso',lifetime_seconds=300)
  other_token=create_access_token(run_id+'-other','Release QA other','researcher',auth_source='sso',lifetime_seconds=300)
@@ -45,6 +92,7 @@ async def main():
     if r.status_code not in (401,403):open_routes.append(method.upper()+' '+path+' -> '+str(r.status_code))
   assert not open_routes,('unauthenticated routes',open_routes)
   results.append('anonymous sweep: all '+str(len(schema))+' schema paths deny unauthenticated access (public allow-list excepted)')
+  results.append(await websocket_probe())
   # An administrator must not inherit any old or other-user history.
   r=await c.get('/api/sessions',headers=headers);assert r.status_code==200 and r.json()['sessions']==[]
   async with get_db() as db:

@@ -234,8 +234,8 @@ async def test_invalid_scope_tells_the_user_why():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_api_query_rejects_an_invalid_scope(test_client):
-    resp = await test_client.post(
+async def test_api_query_rejects_an_invalid_scope(researcher_client):
+    resp = await researcher_client.post(
         "/api/query", json={"message": "hi", "scope": {"years": [1999]}}
     )
     assert resp.status_code == 422
@@ -243,8 +243,8 @@ async def test_api_query_rejects_an_invalid_scope(test_client):
 
 
 @pytest.mark.asyncio
-async def test_scope_options_shape(test_client):
-    resp = await test_client.get("/api/scope/options")
+async def test_scope_options_shape(researcher_client):
+    resp = await researcher_client.get("/api/scope/options")
     assert resp.status_code == 200
     body = resp.json()
     assert body["years"] == [2022, 2023, 2024, 2025]
