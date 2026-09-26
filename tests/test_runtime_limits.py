@@ -681,3 +681,25 @@ async def test_agent_options_carry_role_budget_and_fallback(initialized_db):
         assert opts.max_budget_usd == 5.0 and opts.fallback_model == "claude-opus-5"
         opts = await build_agent_options(model_override="claude-opus-5")
         assert opts.fallback_model is None  # CLI rejects fallback == main model
+
+
+@pytest.mark.parametrize("env,expected", [
+    ({}, 60),
+    ({"SYNAPSIS_MAX_TURNS": "200"}, 60),   # what deploy.yml still passes
+    ({"SYNAPSIS_MAX_TURNS": "30"}, 30),
+    ({"IA_MAX_TURNS": "100", "SYNAPSIS_MAX_TURNS": "200"}, 100),
+])
+def test_max_turns_default_is_60_and_legacy_env_can_only_lower_it(env, expected, tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    clean = {k: v for k, v in os.environ.items()
+             if not k.startswith(("SYNAPSIS_", "IA_"))}
+    clean.update(env, SYNAPSIS_WORKSPACE=str(tmp_path))
+    out = subprocess.run(
+        [sys.executable, "-c", "import synapsis.config as c; print(c.MAX_TURNS)"],
+        cwd=root, env=clean, capture_output=True, text=True, check=True,
+    ).stdout.strip().splitlines()[-1]
+    assert int(out) == expected

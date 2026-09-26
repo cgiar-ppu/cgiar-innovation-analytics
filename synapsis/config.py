@@ -70,10 +70,15 @@ MAX_SESSIONS: int = _get_int_env("SYNAPSIS_MAX_SESSIONS", 10)
 
 MODEL: str = os.getenv("SYNAPSIS_MODEL", DEFAULT_MODEL)
 FALLBACK_MODEL: str = os.getenv("SYNAPSIS_FALLBACK_MODEL", DEFAULT_FALLBACK_MODEL)
-# Agent turns per question. 60 is the IA cost-policy default (was 200); the
-# IA_MAX_TURNS name wins over the legacy SYNAPSIS_MAX_TURNS so a deploy that
-# still passes SYNAPSIS_MAX_TURNS=200 can be tightened without editing it.
-MAX_TURNS: int = _get_int_env("IA_MAX_TURNS", _get_int_env("SYNAPSIS_MAX_TURNS", 60))
+# Agent turns per question. 60 is the IA cost-policy default (was 200).
+# The legacy SYNAPSIS_MAX_TURNS can only LOWER it (deploy.yml still passes
+# SYNAPSIS_MAX_TURNS=200); an explicit IA_MAX_TURNS sets any value.
+MAX_TURNS_DEFAULT: int = 60
+MAX_TURNS: int = (
+    _get_int_env("IA_MAX_TURNS", MAX_TURNS_DEFAULT)
+    if os.getenv("IA_MAX_TURNS")
+    else min(_get_int_env("SYNAPSIS_MAX_TURNS", MAX_TURNS_DEFAULT), MAX_TURNS_DEFAULT)
+)
 
 
 def _get_float_env(name: str, default: float) -> float:
