@@ -96,6 +96,12 @@ async def cleanup_session_client(session_id: str) -> None:
     return await session_manager.cleanup_session_client(session_id)
 
 
+async def replace_session_client(session_id: str, sessions_dict: dict, *, model, resume: bool = True):
+    return await session_manager.replace_session_client(
+        session_id, sessions_dict, model=model, resume=resume,
+    )
+
+
 async def cleanup_orphaned_sessions() -> int:
     return await session_manager.cleanup_orphaned_sessions()
 
@@ -153,6 +159,7 @@ __all__ = [
     "broadcast_to_all",
     "cleanup_session_client",
     "cleanup_orphaned_sessions",
+    "replace_session_client",
     "handle_new_session",
     "handle_switch_session",
     "ensure_session",

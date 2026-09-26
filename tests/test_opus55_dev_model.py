@@ -43,3 +43,27 @@ def test_deploy_exposes_opus55_on_dev_only():
     # Staging/prod list is unchanged from the 14-Sep release.
     assert other == ["claude-sonnet-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-4-6", "claude-opus-4-8[1m]"]
     assert "SYNAPSIS_MODEL=claude-sonnet-5" in DEPLOY  # default unchanged
+
+
+def test_dev_exposes_opus55_to_admins_but_not_researchers():
+    """Role policy on top of the DEV list: admins keep Opus 5.5, researchers
+    (and invited testers) get only the default Sonnet 5 unless
+    IA_RESEARCHER_MODELS says otherwise."""
+    from unittest.mock import patch
+    from synapsis.runtime_policy import allowed_models_for_role
+
+    m = re.search(
+        r"SYNAPSIS_AVAILABLE_MODELS=\\\"\$\{\{ env\.STAGE == 'dev' && '([^']+)' \|\| '([^']+)' \}\}\\\"",
+        DEPLOY,
+    )
+    dev = m.group(1).split(",")
+    with (
+        patch("synapsis.config.MODEL", "claude-sonnet-5"),
+        patch("synapsis.config.AVAILABLE_MODELS", dev),
+        patch("synapsis.config.ADMIN_MODELS", dev),
+        patch("synapsis.config.RESEARCHER_MODELS", ["claude-sonnet-5"]),
+    ):
+        assert "claude-opus-5-5" in allowed_models_for_role("admin")
+        assert allowed_models_for_role("researcher") == ["claude-sonnet-5"]
+        assert allowed_models_for_role("user") == ["claude-sonnet-5"]
+        assert allowed_models_for_role(None) == ["claude-sonnet-5"]

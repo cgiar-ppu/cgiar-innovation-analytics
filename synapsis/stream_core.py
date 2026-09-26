@@ -11,11 +11,75 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from synapsis.config import logger, FALLBACK_MODEL
-from synapsis.constants import is_aup_error
+from synapsis.config import logger
+from synapsis.constants import (
+    CLI_RECONNECT_FAILED_ERROR,
+    CONTEXT_WINDOW_ERROR,
+    GENERIC_TURN_ERROR,
+    PROVIDER_AUTH_ERROR,
+    PROVIDER_BUSY_ERROR,
+    REFUSAL_NO_FALLBACK_ERROR,
+    is_aup_error,
+)
 
 if TYPE_CHECKING:
     from synapsis.stream_callbacks import StreamCallbacks
+
+
+_CONTEXT_MARKERS = (
+    "prompt is too long",
+    "prompt_too_long",
+    "context_length_exceeded",
+    "context window",
+    "maximum context length",
+)
+_BUSY_MARKERS = (
+    "rate_limit", "rate limit", "overloaded", "too many requests",
+    "error code: 429", "error code: 529", "status code 429", "status code 529",
+)
+_AUTH_MARKERS = ("invalid x-api-key", "authentication_error", "invalid api key", "authentication_failed")
+
+
+def classify_error(error: BaseException) -> tuple[str, str]:
+    """Map an exception from a streaming turn to (code, user-facing message).
+
+    Classification is by SDK error *type* first, then by specific provider
+    phrases -- never by loose keywords (L3-13: any text containing "token"
+    or "maximum", e.g. a 429 "input tokens per minute", used to be reported
+    as "context window limit reached"). The raw text is only logged.
+    """
+    try:
+        from claude_agent_sdk._errors import CLIConnectionError
+    except Exception:  # pragma: no cover
+        CLIConnectionError = ()  # type: ignore[assignment]
+
+    if CLIConnectionError and isinstance(error, CLIConnectionError):
+        return "cli_disconnected", CLI_RECONNECT_FAILED_ERROR
+    text = str(error).lower()
+    status = getattr(error, "status_code", None) or getattr(error, "status", None)
+    if status in (429, 529) or any(m in text for m in _BUSY_MARKERS):
+        return "provider_busy", PROVIDER_BUSY_ERROR
+    if any(m in text for m in _CONTEXT_MARKERS):
+        return "context_window", CONTEXT_WINDOW_ERROR
+    if status == 401 or any(m in text for m in _AUTH_MARKERS):
+        return "provider_auth", PROVIDER_AUTH_ERROR
+    return "internal", GENERIC_TURN_ERROR
+
+
+async def send_refusal(send, detail: str = "") -> None:
+    """Tell the user the model refused; offer a retry only if their role has
+    a fallback model (non-admins by default do not -> plain message)."""
+    from synapsis.runtime_policy import fallback_model_for_role
+
+    fallback = fallback_model_for_role()
+    if fallback:
+        await send({
+            "type": "aup_error",
+            "message": (detail or REFUSAL_NO_FALLBACK_ERROR)[:500],
+            "fallback_model": fallback,
+        })
+    else:
+        await send({"type": "error", "code": "refusal", "message": REFUSAL_NO_FALLBACK_ERROR})
 
 
 async def handle_stream_error(
@@ -25,27 +89,17 @@ async def handle_stream_error(
 ) -> None:
     """Shared error handler for stream exceptions.
 
-    Detects context-window and AUP errors and sends appropriate
-    typed events. Always sends a generic error event as well.
+    Logs the full exception, then sends ONE friendly English ``error`` frame
+    (with a ``code``) -- plus an ``aup_error`` frame when the error text is a
+    genuine usage-policy refusal and the caller's role has a fallback model.
     """
     logger.exception("Error in %s stream", context_label)
-    err_msg = str(error)
-
-    # Provide more actionable message for context-length errors
-    if any(kw in err_msg.lower() for kw in ("context", "token", "too long", "maximum")):
-        err_msg = (
-            f"Context window limit reached: {err_msg}. "
-            "Please reduce input size or split into smaller steps."
-        )
-
-    if is_aup_error(err_msg):
-        await send({
-            "type": "aup_error",
-            "message": err_msg[:500],
-            "fallback_model": FALLBACK_MODEL,
-        })
-
-    await send({"type": "error", "message": err_msg})
+    raw = str(error)
+    if is_aup_error(raw):
+        await send_refusal(send, raw)
+        return
+    code, message = classify_error(error)
+    await send({"type": "error", "code": code, "message": message})
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 import time
 
 from synapsis.config import logger
-from synapsis.database.connection import _get_shared_db
+from synapsis.database.connection import _get_shared_db, shared_write
 
 
 async def create_session(session_id: str, title: str = "", user_id: str | None = None) -> None:
@@ -23,13 +23,12 @@ async def create_session(session_id: str, title: str = "", user_id: str | None =
     # context (set by the WebSocket handler at connect time), which itself
     # defaults to the legacy sentinel.
     owner = user_id or get_current_user_id()
-    db = await _get_shared_db()
-    await db.execute(
-        "INSERT OR IGNORE INTO sessions (session_id, title, created_at, updated_at, model, user_id) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (session_id, title, now, now, MODEL, owner),
-    )
-    await db.commit()
+    async with shared_write() as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO sessions (session_id, title, created_at, updated_at, model, user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, title, now, now, MODEL, owner),
+        )
 
 
 async def get_session_owner(session_id: str) -> str | None:
@@ -76,13 +75,12 @@ async def update_session_model(session_id: str, model: str) -> None:
         session_id: The application-level session identifier.
         model:      The new model ID (already validated against SELECTABLE_MODELS).
     """
-    db = await _get_shared_db()
-    await db.execute(
-        "UPDATE sessions SET model = ?, updated_at = ? WHERE session_id = ?",
-        (model, time.time(), session_id),
-    )
-    await db.commit()
-    logger.info("Session %s model updated to %s", session_id, model)
+    async with shared_write() as db:
+        await db.execute(
+            "UPDATE sessions SET model = ?, updated_at = ? WHERE session_id = ?",
+            (model, time.time(), session_id),
+        )
+        logger.info("Session %s model updated to %s", session_id, model)
 
 
 async def save_claude_session_id(app_session_id: str, claude_session_id: str) -> None:
@@ -92,13 +90,12 @@ async def save_claude_session_id(app_session_id: str, claude_session_id: str) ->
         app_session_id:    The application-level session identifier.
         claude_session_id: The opaque session UUID returned by the Claude SDK.
     """
-    db = await _get_shared_db()
-    await db.execute(
-        "UPDATE sessions SET claude_session_id = ? WHERE session_id = ?",
-        (claude_session_id, app_session_id),
-    )
-    await db.commit()
-    logger.info("Mapped app session %s -> Claude session %s", app_session_id, claude_session_id)
+    async with shared_write() as db:
+        await db.execute(
+            "UPDATE sessions SET claude_session_id = ? WHERE session_id = ?",
+            (claude_session_id, app_session_id),
+        )
+        logger.info("Mapped app session %s -> Claude session %s", app_session_id, claude_session_id)
 
 
 async def get_claude_session_id(app_session_id: str) -> str:
@@ -130,12 +127,11 @@ async def save_initial_context(session_id: str, context: str) -> None:
         session_id: The application-level session identifier.
         context:    The context text to prepend to the first user message.
     """
-    db = await _get_shared_db()
-    await db.execute(
-        "UPDATE sessions SET initial_context = ? WHERE session_id = ?",
-        (context, session_id),
-    )
-    await db.commit()
+    async with shared_write() as db:
+        await db.execute(
+            "UPDATE sessions SET initial_context = ? WHERE session_id = ?",
+            (context, session_id),
+        )
 
 
 async def consume_initial_context(session_id: str) -> str:
@@ -150,18 +146,17 @@ async def consume_initial_context(session_id: str) -> str:
     Returns:
         The context string, or an empty string if none was stored.
     """
-    db = await _get_shared_db()
-    cursor = await db.execute(
-        "SELECT initial_context FROM sessions WHERE session_id = ?",
-        (session_id,),
-    )
-    row = await cursor.fetchone()
-    context = ""
-    if row and row["initial_context"]:
-        context = row["initial_context"]
-        await db.execute(
-            "UPDATE sessions SET initial_context = '' WHERE session_id = ?",
+    async with shared_write() as db:
+        cursor = await db.execute(
+            "SELECT initial_context FROM sessions WHERE session_id = ?",
             (session_id,),
         )
-        await db.commit()
-    return context
+        row = await cursor.fetchone()
+        context = ""
+        if row and row["initial_context"]:
+            context = row["initial_context"]
+            await db.execute(
+                "UPDATE sessions SET initial_context = '' WHERE session_id = ?",
+                (session_id,),
+            )
+        return context

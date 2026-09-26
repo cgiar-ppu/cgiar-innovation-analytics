@@ -20,10 +20,20 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import StreamEvent
 
-from synapsis.config import logger, FALLBACK_MODEL
-from synapsis.constants import CONTEXT_WINDOW_ERROR, is_aup_error
+import synapsis.config as _config
+from synapsis.config import logger
+from synapsis.constants import (
+    CONTEXT_WINDOW_ERROR,
+    MAX_TURNS_ERROR,
+    PROVIDER_BUSY_ERROR,
+    STALL_ERROR,
+    STREAM_ENDED_EARLY_ERROR,
+    TURN_BUDGET_ERROR,
+    is_aup_error,
+    is_refusal_stop,
+)
 from synapsis.chat_run_manager import chat_run_manager
-from synapsis.stream_core import handle_stream_error
+from synapsis.stream_core import handle_stream_error, send_refusal
 from synapsis.message_handlers import (
     handle_assistant_block,
     handle_system_message,
@@ -72,11 +82,27 @@ async def stream_response(
     # Set to True once we receive a ResultMessage (marks a clean stream end)
     got_result = False
 
-    # Accumulate all streamed text for AUP/policy error detection
-    accumulated_text = ""
+    # Set when the stall watchdog stopped the turn
+    stalled = False
+
+    stall_timeout = _config.STALL_TIMEOUT_SECONDS
 
     try:
-        async for message in client.receive_response():
+        stream = client.receive_response().__aiter__()
+        while True:
+            # --- Stall watchdog: no SDK event for STALL_TIMEOUT seconds ---
+            try:
+                if stall_timeout and stall_timeout > 0:
+                    message = await asyncio.wait_for(stream.__anext__(), timeout=stall_timeout)
+                else:
+                    message = await stream.__anext__()
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                stalled = True
+                await _handle_stall(session_id, client, send_event, stall_timeout)
+                break
+
             # Honour a cancellation request as quickly as possible
             if cancel_event and cancel_event.is_set():
                 break
@@ -92,7 +118,6 @@ async def stream_response(
                     delta_type = delta.get("type", "")
                     if delta_type == "text_delta" and delta.get("text"):
                         streamed_text = True
-                        accumulated_text += delta.get("text", "")
                     elif delta_type == "thinking_delta" and delta.get("thinking"):
                         streamed_thinking = True
 
@@ -111,24 +136,24 @@ async def stream_response(
             elif isinstance(message, ResultMessage):
                 got_result = True
                 await handle_result_message(message, session_id, send_event)
-                # Check for AUP/policy errors in accumulated text
-                if accumulated_text and is_aup_error(accumulated_text):
-                    await send_event({
-                        "type": "aup_error",
-                        "message": accumulated_text[:500],
-                        "fallback_model": FALLBACK_MODEL,
-                    }, sid=session_id)
+                await _account_result(message, session_id, client)
+                # Friendly explanation for limits/errors, and refusal handling
+                # based on the SDK's stop reason -- no longer a substring scan
+                # of the answer text (L3-13: "aup"/"violate" in normal answers
+                # triggered a bogus policy-violation prompt).
+                await _explain_result(message, session_id, client, send_event)
 
         # If the generator ended without a ResultMessage and the user did not
-        # cancel, this almost always means the context window was exhausted.
-        if not got_result and not (cancel_event and cancel_event.is_set()):
+        # cancel, the CLI stopped mid-answer (crash, OOM, killed). Say so
+        # plainly instead of claiming the conversation is too long (L3-13).
+        if not got_result and not stalled and not (cancel_event and cancel_event.is_set()):
             logger.warning(
-                "stream_response ended without ResultMessage (session %s) — "
-                "possible context window exhaustion", session_id
+                "stream_response ended without ResultMessage (session %s)", session_id
             )
             await send_event({
                 "type": "error",
-                "message": CONTEXT_WINDOW_ERROR,
+                "code": "stream_ended",
+                "message": STREAM_ENDED_EARLY_ERROR,
             }, sid=session_id)
 
     except asyncio.CancelledError:
@@ -158,7 +183,7 @@ async def stream_response(
         # SystemMessage payloads are forwarded; any other type signals the
         # start of a new turn's content and we stop immediately.
         # ------------------------------------------------------------------
-        if not (cancel_event and cancel_event.is_set()):
+        if not (cancel_event and cancel_event.is_set()) and not stalled:
             try:
                 async def _drain_queued() -> None:
                     async for leftover in client.receive_response():
@@ -176,6 +201,7 @@ async def stream_response(
                             # A background task produced a result — persist the
                             # session UUID via the standard handler then stop.
                             await handle_result_message(leftover, session_id, send_event)
+                            await _account_result(leftover, session_id, client)
                             break
                         else:
                             # Unexpected message type — do not consume it.
@@ -211,6 +237,108 @@ async def stream_response(
                 await send_event({"type": "session_complete", "session_id": session_id}, sid=session_id)
             except (RuntimeError, ConnectionError):
                 pass  # WebSocket may already be closed
+
+
+# ---------------------------------------------------------------------------
+# Runtime accounting, limits and watchdog (Lane D, 2026-09-26)
+# ---------------------------------------------------------------------------
+
+def _client_model(client) -> str:
+    model = getattr(client, "_ia_model", None)
+    if not model:
+        model = getattr(getattr(client, "options", None), "model", None)
+    return str(model or _config.MODEL)
+
+
+async def _account_result(message: ResultMessage, session_id: str, client) -> None:
+    """Record this question's cost in the usage ledger and decide whether
+    the CLI process must be recycled before the next question.
+
+    ``total_cost_usd`` is the running total of the Claude conversation, so
+    the question's cost is the difference to the previous total kept on the
+    client (see ``session.client_registry.tag_client``).
+    """
+    from synapsis.database.usage import record_turn_usage, turn_cost_from_totals
+    from synapsis.runtime_policy import current_role, current_user_id
+
+    total = message.total_cost_usd
+    baseline = getattr(client, "_ia_cost_baseline", 0.0) or 0.0
+    cost = turn_cost_from_totals(total, baseline)
+    try:
+        if total is not None:
+            client._ia_cost_baseline = float(total)
+        client._ia_spent = float(getattr(client, "_ia_spent", 0.0) or 0.0) + cost
+        budget = getattr(client, "_ia_budget", None)
+        # The CLI's max_budget_usd counts spend since the process started;
+        # replace the process once less than (1 - fraction) x ceiling is left
+        # so the next question gets (nearly) the full per-question ceiling.
+        if message.subtype == "error_max_budget_usd" or (
+            budget and client._ia_spent > budget * _config.BUDGET_RECYCLE_FRACTION
+        ):
+            client._ia_recycle = True
+    except Exception:
+        logger.debug("Could not update client accounting for %s", session_id, exc_info=True)
+
+    await record_turn_usage(
+        user_id=current_user_id(),
+        role=current_role(),
+        session_id=session_id,
+        model=_client_model(client),
+        turn_cost_usd=cost,
+        cumulative_cost_usd=float(total) if total is not None else None,
+        num_turns=message.num_turns,
+        duration_ms=message.duration_ms,
+        is_error=bool(message.is_error),
+        subtype=message.subtype,
+        source="chat",
+    )
+
+
+async def _explain_result(message: ResultMessage, session_id: str, client, send_event) -> None:
+    """Send one friendly English frame for a turn that ended on a limit or a
+    provider error (the ``result`` frame itself stays unchanged)."""
+    send = lambda payload: send_event(payload, sid=session_id)  # noqa: E731
+    subtype = message.subtype or ""
+    if subtype == "error_max_budget_usd":
+        from synapsis.runtime_policy import turn_budget_usd
+        limit = getattr(client, "_ia_budget", None) or turn_budget_usd() or 0.0
+        await send({"type": "error", "code": "turn_budget", "message": TURN_BUDGET_ERROR.format(limit=limit)})
+        return
+    if subtype == "error_max_turns":
+        await send({"type": "error", "code": "max_turns", "message": MAX_TURNS_ERROR.format(limit=_config.MAX_TURNS)})
+        return
+    if is_refusal_stop(message.stop_reason):
+        await send_refusal(send)
+        return
+    if not message.is_error:
+        return
+    errors = " ".join(str(e) for e in (getattr(message, "errors", None) or []))
+    if is_aup_error(errors):
+        await send_refusal(send, errors)
+    elif getattr(message, "terminal_reason", None) == "prompt_too_long":
+        await send({"type": "error", "code": "context_window", "message": CONTEXT_WINDOW_ERROR})
+    elif getattr(message, "api_error_status", None) in (429, 529):
+        await send({"type": "error", "code": "provider_busy", "message": PROVIDER_BUSY_ERROR})
+
+
+async def _handle_stall(session_id: str, client, send_event, timeout: int) -> None:
+    """Stop a turn that produced no SDK event for ``timeout`` seconds."""
+    logger.warning("Stall watchdog: no SDK event for %ss in session %s — stopping the turn", timeout, session_id)
+    try:
+        client._ia_recycle = True
+    except Exception:
+        pass
+    try:
+        await asyncio.wait_for(client.interrupt(), timeout=5.0)
+    except Exception:
+        logger.debug("Interrupt after stall failed for %s", session_id, exc_info=True)
+    minutes = max(1, round(timeout / 60))
+    duration = "1 minute" if minutes == 1 else f"{minutes} minutes"
+    await send_event({
+        "type": "error",
+        "code": "stalled",
+        "message": STALL_ERROR.format(duration=duration),
+    }, sid=session_id)
 
 
 # ---------------------------------------------------------------------------

@@ -17,7 +17,16 @@ from synapsis.db_manager import DatabaseManager
 # The lambda goes through the config module object so that test fixtures
 # patching ``synapsis.config.DB_PATH`` are picked up at call time.
 
-_manager = DatabaseManager(db_path_func=lambda: str(_config.DB_PATH))
+# WAL + busy_timeout (L3-10): WAL lets readers proceed while a write is in
+# flight and is what Litestream requires anyway (it switches the file to WAL
+# itself when replicating; setting it here makes local/no-Litestream runs
+# behave the same). busy_timeout mirrors the connect timeout explicitly.
+_manager = DatabaseManager(
+    db_path_func=lambda: str(_config.DB_PATH),
+    pragmas=[f"PRAGMA busy_timeout={int(_config.SYNAPSIS_DB_TIMEOUT) * 1000}"],
+    timeout=float(_config.SYNAPSIS_DB_TIMEOUT),
+    wal=True,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +67,16 @@ async def _get_shared_db() -> aiosqlite.Connection:
         The open aiosqlite connection.
     """
     return await _manager.get_shared()
+
+
+def shared_write():
+    """Serialised, cancellation-safe write transaction on the shared connection.
+
+    ``async with shared_write() as db: ...`` commits on success and rolls back
+    on any exception (including ``CancelledError``). Use it for every write
+    that goes through the shared connection.
+    """
+    return _manager.shared_write()
 
 
 async def close_db() -> None:

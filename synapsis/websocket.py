@@ -29,6 +29,8 @@ from starlette.websockets import WebSocketState
 from claude_agent_sdk._errors import CLIConnectionError
 
 from synapsis.config import logger, AUTH_DISABLED, LEGACY_USER_ID
+from synapsis.constants import CLI_RECONNECT_FAILED_ERROR, GENERIC_TURN_ERROR
+from synapsis.runtime_policy import PolicyError
 from synapsis.auth.tokens import verify_token
 from synapsis.auth.context import set_current_user_id
 from synapsis.auth.middleware import resolve_user_id, resolve_role
@@ -98,7 +100,10 @@ async def ws_chat(websocket: WebSocket, token: Optional[str] = Query(default=Non
       {"type": "result",      "estimated_cost": float, "turns": int, ...}
       {"type": "session",     "session_id": "..."}
       {"type": "cancelled"}
-      {"type": "error",       "message": "..."}
+      {"type": "error",       "message": "...", "code": "..."}
+        code (optional): rate_limited | capacity | model_not_allowed |
+        daily_limit | turn_budget | max_turns | stalled | provider_busy |
+        context_window | cli_disconnected | internal
 
     Every outgoing frame carries a "session_id" field so the frontend can
     route it to the correct conversation panel.
@@ -202,63 +207,65 @@ async def ws_chat(websocket: WebSocket, token: Optional[str] = Query(default=Non
 
             msg_type = payload.get("type", "message")
 
-            # --- Cancel in-flight response ---
-            if msg_type == "cancel":
-                client = await handle_cancel(
-                    payload, session_id, client, send_json
-                )
-                continue
-
-            # --- Switch to / resume a different session ---
-            if msg_type == "switch_session":
-                # Existing sessions must belong to this user, including for admins.
-                requested_sid = payload.get("session_id", "")
-                if requested_sid and not AUTH_DISABLED:
-                    from synapsis.database import get_session_owner
-                    owner = await get_session_owner(requested_sid)
-                    if not is_visible_to(owner, user_id, role):
-                        logger.warning(
-                            "Blocked cross-user session access: user %s (role=%s) -> session %s (owner %s)",
-                            user_id, role, requested_sid, owner,
-                        )
-                        await send_json(
-                            {"type": "error", "message": "Session not found."},
-                            sid=requested_sid,
-                        )
-                        continue
-                old_sid = session_id
-                session_id, client, needs_attach = await handle_switch_session(
-                    payload, session_id, send_json
-                )
-                # Detach from the old session's managed task if we switched to a different one
-                if old_sid and old_sid != session_id:
-                    await detach_from_session(old_sid)
-                if needs_attach and session_id:
-                    await attach_to_session(session_id)
-                continue
-
-            # --- Create a brand-new session ---
-            if msg_type == "new_session":
-                session_id, client = await handle_new_session(
-                    session_id, send_json
-                )
-                continue
-
-            # --- Switch the active session's model mid-conversation ---
-            if msg_type == "switch_model":
-                result = await handle_switch_model(
-                    payload, session_id, send_json
-                )
-                if result is not None:
-                    client = result
-                continue
-
             # ----------------------------------------------------------
-            # All remaining message types (retry_with_model, regular
-            # user message) are wrapped in per-message error handling so
-            # a single SDK failure does not kill the WebSocket connection.
+            # EVERY frame type is handled inside this per-message try, so
+            # a rate-limit / capacity / policy error or an SDK failure
+            # produces an error frame and the WebSocket stays open (L3-03:
+            # new_session/switch_session/cancel used to sit outside it, so
+            # the 6th "New chat" in a minute dropped the connection).
             # ----------------------------------------------------------
             try:
+                # --- Cancel in-flight response ---
+                if msg_type == "cancel":
+                    client = await handle_cancel(
+                        payload, session_id, client, send_json
+                    )
+                    continue
+
+                # --- Switch to / open a different session ---
+                if msg_type == "switch_session":
+                    # Existing sessions must belong to this user, including for admins.
+                    requested_sid = payload.get("session_id", "")
+                    if requested_sid and not AUTH_DISABLED:
+                        from synapsis.database import get_session_owner
+                        owner = await get_session_owner(requested_sid)
+                        if not is_visible_to(owner, user_id, role):
+                            logger.warning(
+                                "Blocked cross-user session access: user %s (role=%s) -> session %s (owner %s)",
+                                user_id, role, requested_sid, owner,
+                            )
+                            await send_json(
+                                {"type": "error", "message": "Session not found."},
+                                sid=requested_sid,
+                            )
+                            continue
+                    old_sid = session_id
+                    session_id, client, needs_attach = await handle_switch_session(
+                        payload, session_id, send_json
+                    )
+                    # Detach from the old session's managed task if we switched to a different one
+                    if old_sid and old_sid != session_id:
+                        await detach_from_session(old_sid)
+                    if needs_attach and session_id:
+                        await attach_to_session(session_id)
+                    continue
+
+                # --- Create a brand-new session ---
+                if msg_type == "new_session":
+                    session_id, client = await handle_new_session(
+                        session_id, send_json
+                    )
+                    continue
+
+                # --- Switch the active session's model mid-conversation ---
+                if msg_type == "switch_model":
+                    result = await handle_switch_model(
+                        payload, session_id, send_json
+                    )
+                    if result is not None:
+                        client = result
+                    continue
+
                 if msg_type == "retry_with_model":
                     result = await handle_retry(
                         payload, session_id, send_json
@@ -281,6 +288,17 @@ async def ws_chat(websocket: WebSocket, token: Optional[str] = Query(default=Non
             except ValueError:
                 # Empty message -- skip silently (handle_user_message raises ValueError)
                 continue
+            except PolicyError as policy_err:
+                # Rate limit, capacity, model not allowed, daily cap: a normal,
+                # expected refusal with a user-facing English message.
+                logger.info(
+                    "Policy refusal for user %s (session %s, %s): %s",
+                    user_id, session_id, policy_err.code, policy_err.user_message,
+                )
+                await send_json(
+                    {"type": "error", "code": policy_err.code, "message": policy_err.user_message},
+                    sid=session_id,
+                )
             except CLIConnectionError as cli_err:
                 # The SDK subprocess died — the auto-recovery in launch_streaming_task
                 # already tried to recreate the client.  If we still reach here, show
@@ -290,29 +308,28 @@ async def ws_chat(websocket: WebSocket, token: Optional[str] = Query(default=Non
                     session_id, cli_err,
                 )
                 await send_json(
-                    {
-                        "type": "error",
-                        "message": (
-                            "La sesión se desconectó y no se pudo reconectar automáticamente. "
-                            "Por favor, recarga la página para continuar. Tu historial de conversación se conserva."
-                        ),
-                    },
+                    {"type": "error", "code": "cli_disconnected", "message": CLI_RECONNECT_FAILED_ERROR},
                     sid=session_id,
                 )
-            except Exception as msg_err:
-                logger.exception("Error handling message (session %s)", session_id)
+            except Exception:
+                # Details go to the log only (L3-13: raw exception text was
+                # shown to users).
+                logger.exception("Error handling %s frame (session %s)", msg_type, session_id)
                 await send_json(
-                    {"type": "error", "message": str(msg_err)},
+                    {"type": "error", "code": "internal", "message": GENERIC_TURN_ERROR},
                     sid=session_id,
                 )
 
     except WebSocketDisconnect:
         logger.info("Client disconnected (session %s)", session_id)
 
-    except Exception as e:
+    except Exception:
         logger.exception("WebSocket error")
         try:
-            await send_json({"type": "error", "message": str(e)}, sid=session_id)
+            await send_json(
+                {"type": "error", "code": "internal", "message": GENERIC_TURN_ERROR},
+                sid=session_id,
+            )
         except (RuntimeError, ConnectionError):
             pass  # WebSocket may already be closed
 

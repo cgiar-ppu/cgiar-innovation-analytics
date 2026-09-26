@@ -22,6 +22,7 @@ from synapsis.tools import synapsis_mcp
 from synapsis.hooks import audit_logger, audit_logger_post
 from synapsis.hooks.sandbox import build_sandbox_hooks
 from synapsis.agents import build_system_prompt, load_all_agents
+from synapsis.runtime_policy import sdk_fallback_model, turn_budget_usd  # Lane D: role-aware cost policy
 
 
 # ---------------------------------------------------------------------------
@@ -230,8 +231,12 @@ async def build_agent_options(
         system_prompt=sp,
         cwd=str(WORKSPACE),
         model=model_override if model_override else MODEL,
-        fallback_model=FALLBACK_MODEL,
+        # Lane D: no silent escalation to a model the caller's role may not use.
+        fallback_model=sdk_fallback_model(model_override),
         max_turns=MAX_TURNS,
+        # Lane D: per-question spend ceiling for the caller's role (SDK stops
+        # the turn with subtype error_max_budget_usd).
+        max_budget_usd=turn_budget_usd(),
         agents=all_agents,
         include_partial_messages=True,
         mcp_servers={"synapsis": synapsis_mcp},

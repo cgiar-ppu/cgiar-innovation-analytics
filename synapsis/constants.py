@@ -24,10 +24,15 @@ SESSION_CREATION_RATE_WINDOW: int = 60
 """Sliding window (seconds) for the session creation rate limiter."""
 
 SESSION_CREATION_RATE_LIMIT: int = 5
-"""Max new sessions allowed within ``SESSION_CREATION_RATE_WINDOW`` seconds.
+"""Max new chats ONE USER may start within ``SESSION_CREATION_RATE_WINDOW`` seconds.
 
-If exceeded, session creation is rejected with an error.  This prevents
-runaway reconnection loops from exhausting system resources."""
+Per user (was deployment-wide until 2026-09-26, so the 6th person to click
+"New chat" in a minute was refused). Exceeding it returns an error frame and
+keeps the WebSocket open. Override via ``IA_NEW_CHATS_PER_USER``."""
+
+SESSION_CREATION_GLOBAL_RATE_LIMIT: int = 30
+"""Deployment-wide safety net against reconnect storms (all users together).
+Override via ``IA_NEW_CHATS_GLOBAL``."""
 
 IDLE_SESSION_REAPER_INTERVAL: int = 300
 """Seconds between idle session reaper runs (5 minutes)."""
@@ -113,7 +118,11 @@ Passed to ClaudeAgentOptions.max_buffer_size.
 """
 
 STALL_TIMEOUT: int = 300
-"""Seconds with no messages before considering a stream stalled (5 min)."""
+"""Seconds with no messages before considering a stream stalled (5 min).
+
+Default for the stall watchdog in stream_handler.stream_response; the live
+value is ``synapsis.config.STALL_TIMEOUT_SECONDS`` (env
+``IA_STALL_TIMEOUT_SECONDS``)."""
 
 TASK_CLEANUP_TIMEOUT: float = 5.0
 """Seconds to wait for cancelled tasks during cleanup."""
@@ -126,6 +135,80 @@ CONTEXT_WINDOW_ERROR: str = (
     "This conversation has become too long for the model's context window. "
     "Please start a new chat to continue. Your history is preserved and can "
     "be reviewed in this session."
+)
+
+# ---------------------------------------------------------------------------
+# User-facing runtime messages (English, no raw exception text -- details go
+# to the server log only; see stream_core.classify_error)
+# ---------------------------------------------------------------------------
+
+CLI_RECONNECT_FAILED_ERROR: str = (
+    "The assistant's session was interrupted and could not be restarted "
+    "automatically. Please reload the page to continue. Your conversation "
+    "history is preserved."
+)
+
+GENERIC_TURN_ERROR: str = (
+    "Something went wrong while preparing this answer. Please try again. "
+    "If it keeps happening, start a new chat."
+)
+
+STREAM_ENDED_EARLY_ERROR: str = (
+    "The answer ended unexpectedly before it was complete. Please try again; "
+    "if it keeps happening, start a new chat."
+)
+
+PROVIDER_BUSY_ERROR: str = (
+    "The AI model provider is busy right now (rate limit or overload). "
+    "Please wait a minute and try again."
+)
+
+PROVIDER_AUTH_ERROR: str = (
+    "The assistant could not reach the AI model provider (service "
+    "configuration). Please try again later or tell the administrator."
+)
+
+STALL_ERROR: str = (
+    "This answer stopped making progress for {duration} and was stopped. "
+    "Please try again, or ask a narrower question."
+)
+
+TURN_BUDGET_ERROR: str = (
+    "This answer reached the per-question cost limit (${limit:.2f}) and was "
+    "stopped. Try a narrower question or split it into smaller steps."
+)
+
+MAX_TURNS_ERROR: str = (
+    "This answer reached the maximum number of steps ({limit}) and was "
+    "stopped. Try a narrower question or split it into smaller steps."
+)
+
+REFUSAL_NO_FALLBACK_ERROR: str = (
+    "The model declined to answer this request under its usage policy. "
+    "Please rephrase the question."
+)
+
+NEW_CHAT_RATE_LIMIT_ERROR: str = (
+    "You have started {limit} new chats in the last {window} seconds. "
+    "Please wait a moment, or continue in one of your open chats."
+)
+
+GLOBAL_RATE_LIMIT_ERROR: str = (
+    "Many new chats are being started right now. Please wait a few seconds "
+    "and try again."
+)
+
+CAPACITY_ERROR: str = (
+    "The assistant is at capacity ({limit} answers in progress). Please try "
+    "again in a minute."
+)
+
+MODEL_NOT_ALLOWED_ERROR: str = "The model '{model}' is not available for your account."
+
+DAILY_LIMIT_ERROR: str = (
+    "You have reached today's usage limit for this test environment "
+    "(${limit:.2f} per day). It resets at midnight UTC. If you need more, "
+    "please contact {contact}."
 )
 
 # ---------------------------------------------------------------------------
@@ -184,20 +267,43 @@ SELECTABLE_MODEL_IDS: set[str] = {m["id"] for m in SELECTABLE_MODELS}
 
 AUP_ERROR_PATTERNS: list[str] = [
     "usage policy",
-    "Usage Policy",
+    "acceptable use policy",
+    "appears to violate",
     "violate",
     "unable to respond to this request",
-    "appears to violate",
     "aup",
-    "/aup",
     "content policy",
     "safety policy",
 ]
+"""Phrases that mark an *error string* as a policy refusal.
+
+Only ever applied to error details (``ResultMessage.errors`` / the exception
+of a failed turn), never to normal answer text -- the old code also scanned
+every streamed answer, so ordinary answers mentioning e.g. "violate" raised a
+bogus policy prompt (L3-13). Short tokens ("aup", "violate") match whole
+words only, so "Taupe" or "inviolate" do not count."""
+
+import re as _re
+
+_AUP_RE = _re.compile(
+    "|".join(
+        (r"\b" + _re.escape(p) + r"\b") if p.isalpha() and len(p) <= 8 else _re.escape(p)
+        for p in AUP_ERROR_PATTERNS
+    ),
+    _re.IGNORECASE,
+)
 
 
 def is_aup_error(error_message: str) -> bool:
-    """Check if an error message indicates an AUP/policy violation."""
-    return any(p.lower() in error_message.lower() for p in AUP_ERROR_PATTERNS)
+    """Check if an *error* string indicates an AUP/policy refusal."""
+    if not error_message:
+        return False
+    return _AUP_RE.search(error_message) is not None
+
+
+def is_refusal_stop(stop_reason: str | None) -> bool:
+    """True when the SDK reports the model refused (stop_reason ``refusal``)."""
+    return (stop_reason or "").lower() == "refusal"
 
 
 DEFAULT_FALLBACK_MODEL: str = "claude-opus-5"
