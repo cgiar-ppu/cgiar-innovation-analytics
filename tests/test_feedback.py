@@ -114,15 +114,17 @@ async def test_owner_rates_an_answer_once_and_can_edit_it(http, initialized_db):
     assert [(f["message_id"], f["rating"]) for f in mine] == [("r1", -1)]
 
 
-async def test_second_answer_uses_client_picker_state_only_as_a_validated_fallback(http, initialized_db):
+async def test_answers_without_recorded_specialist_or_scope_store_none(http, initialized_db):
     await seed_chat(initialized_db)
-    r = await http.post("/api/feedback", headers=ALICE, json={
-        "session_id": "chat-a", "message_id": "r2", "rating": 1,
-        "persona": "not-a-real-specialist", "scope": {"years": [2024]}})
+    r = await http.post("/api/feedback", headers=ALICE, json={"session_id": "chat-a", "message_id": "r2", "rating": 1})
     assert r.status_code == 200
     row = (await rows(initialized_db))[0]
-    assert row["persona"] == "" and json.loads(row["scope"]) == {"years": [2024], "programs": []}
+    assert row["persona"] == "" and row["scope"] == ""
     assert row["model"] == "claude-sonnet-5", "falls back to the chat's model without a ledger row"
+    # The browser cannot supply them.
+    r = await http.post("/api/feedback", headers=ALICE, json={
+        "session_id": "chat-a", "message_id": "r2", "rating": 1, "persona": "prms_data_analyst"})
+    assert r.status_code == 422
 
 
 async def test_sharing_the_answer_is_opt_in_and_uses_server_side_text(http, initialized_db):

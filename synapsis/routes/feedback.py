@@ -69,10 +69,6 @@ class FeedbackIn(BaseModel):
     comment: str = Field(default="", max_length=2000)
     expected: str = Field(default="", max_length=4000)
     share_answer: bool = False
-    # Picker state at rating time; used only when the chat turn predates the
-    # server-side record of specialist/scope. Validated, never trusted blindly.
-    persona: Optional[str] = Field(default=None, max_length=80)
-    scope: Optional[dict] = None
 
     @field_validator("comment", "expected")
     @classmethod
@@ -91,16 +87,6 @@ def _scope_text(scope: Optional[dict]) -> str:
     if scope_is_empty(normalized):
         return ""
     return json.dumps(normalized, sort_keys=True)
-
-
-def _persona_text(persona: Optional[str]) -> str:
-    if not persona:
-        return ""
-    try:
-        from synapsis.persona import normalize_persona
-        return normalize_persona(persona)
-    except Exception:
-        return ""
 
 
 async def _require_own_chat(session_id: str, user: dict) -> None:
@@ -142,8 +128,10 @@ async def save_feedback(body: FeedbackIn, user: dict = Depends(get_current_user)
             shared_question=context["question"][: store.MAX_SHARED_QUESTION] if body.share_answer else None,
             shared_answer=context["answer"][: store.MAX_SHARED_ANSWER] if body.share_answer else None,
             model=context["model"],
-            persona=context["persona"] or _persona_text(body.persona),
-            scope=_scope_text(context["scope"]) if context["scope"] is not None else _scope_text(body.scope),
+            # Specialist/scope as recorded with the question (answers from before
+            # 2026-09-26 have none; the browser's current picker is not a proxy).
+            persona=context["persona"],
+            scope=_scope_text(context["scope"]),
         )
     else:
         try:
