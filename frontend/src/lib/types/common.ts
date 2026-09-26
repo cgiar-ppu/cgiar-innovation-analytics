@@ -70,14 +70,14 @@ export interface AppConfig {
   available_models?: string[]
   /** Maximum number of agentic turns per run. */
   max_turns: number
-  /** Billing / authentication method in use. */
-  auth_method: 'subscription' | 'api_key' | 'none'
+  /** Billing / authentication method in use (signed-in callers only, QA-4 D15). */
+  auth_method?: 'subscription' | 'api_key' | 'none'
   /** Backend version string. */
   version: string
-  /** Agent personality / type identifier. */
-  agent_type: string
-  /** Available persona names. */
-  personas: string[]
+  /** Agent personality / type identifier (signed-in callers only). */
+  agent_type?: string
+  /** Available persona names (signed-in callers only). */
+  personas?: string[]
   /**
    * The caller's model/cost policy (role-aware, Lane D 2026-09-26). The UI
    * hides the cost pill unless `show_cost` is true (administrators only).

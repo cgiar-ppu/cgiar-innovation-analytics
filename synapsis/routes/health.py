@@ -118,7 +118,7 @@ async def get_config(user=Depends(get_optional_user)):
     as anonymous, never as an error, because the login screen calls this too.
     """
     role = resolve_role(user) if user else None
-    return {
+    body = {
         "model": MODEL,
         "fallback_model": fallback_model_for_role(role) if role else "",
         "selectable_models": selectable_models_for_role(role),
@@ -145,3 +145,10 @@ async def get_config(user=Depends(get_optional_user)):
         "password_login_enabled": PASSWORD_LOGIN_ENABLED,
         "invited_login_enabled": INVITED_LOGIN_ENABLED,
     }
+    if user is None:
+        # QA-4 D15: the login page needs none of these; they only describe the
+        # deployment's internals (auth backend, agent build, OS, SDK persona
+        # ids). Signed-in callers still get them.
+        for key in ("auth_method", "agent_type", "platform", "personas"):
+            body.pop(key, None)
+    return body

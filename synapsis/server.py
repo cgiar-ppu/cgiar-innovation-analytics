@@ -50,7 +50,10 @@ from synapsis.websocket import ws_chat, get_activity_stats, cleanup_session_clie
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="CGIAR Innovation Analytics Platform", version="0.1.0")
+# FastAPI's default /docs, /redoc and /openapi.json are disabled; guarded
+# versions are registered below (QA-4 D15).
+app = FastAPI(title="CGIAR Innovation Analytics Platform", version="0.1.0",
+              docs_url=None, redoc_url=None, openapi_url=None)
 
 # -- HTTP hardening (review 2026-09-23 L1-07/L1-08/L4-12) --
 # Order: the last middleware added is the outermost. CORS is outermost so
@@ -89,6 +92,62 @@ app.include_router(scope_router)
 # git, agent_query, skills, fleet, images, dashboard (/api/dashboard/stats).
 # They were global across users and, for agent_query/workflows, replaced the
 # IA system prompt. tests/test_leftover_routes.py pins their absence.
+
+# -- API documentation (QA-4 D15) --
+# The schema and the Swagger/ReDoc pages are API-surface disclosure: every
+# operation is still gated, but an anonymous visitor on a deployed stage has
+# no business listing them. They stay available:
+#   * in local development (IA_AUTH_DISABLED=true);
+#   * to in-container callers talking to the app directly on the loopback
+#     interface WITHOUT an X-Forwarded-For header (release-smoke.py and the
+#     DEV QA smoke walk /openapi.json from inside the container; every request
+#     through the load balancer carries X-Forwarded-For);
+#   * /openapi.json to administrators (Bearer token).
+# Anyone else gets a plain 404 (the SPA catch-all must not answer these).
+from fastapi import Depends  # noqa: E402
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html  # noqa: E402
+
+from synapsis.auth import middleware as _auth_mw  # noqa: E402
+
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+def api_docs_allowed(request: Request, user: dict | None, *, admin_ok: bool = True) -> bool:
+    """Whether this caller may read the API schema/docs (see above)."""
+    if _auth_mw.AUTH_DISABLED:
+        return True
+    host = request.client.host if request.client else ""
+    if host in _LOOPBACK and "x-forwarded-for" not in request.headers:
+        return True
+    return admin_ok and bool(user) and _auth_mw.resolve_role(user) == "admin"
+
+
+def _not_found() -> JSONResponse:
+    return JSONResponse({"detail": "Not Found"}, status_code=404)
+
+
+@app.get("/openapi.json", include_in_schema=False)
+async def openapi_schema(request: Request, user=Depends(_auth_mw.get_optional_user)):
+    if not api_docs_allowed(request, user):
+        return _not_found()
+    return JSONResponse(app.openapi())
+
+
+@app.get("/docs", include_in_schema=False)
+async def swagger_docs(request: Request, user=Depends(_auth_mw.get_optional_user)):
+    # The page fetches /openapi.json without a token, so it only works where
+    # the schema is open without one (local / in-container).
+    if not api_docs_allowed(request, user, admin_ok=False):
+        return _not_found()
+    return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{app.title} - API")
+
+
+@app.get("/redoc", include_in_schema=False)
+async def redoc_docs(request: Request, user=Depends(_auth_mw.get_optional_user)):
+    if not api_docs_allowed(request, user, admin_ok=False):
+        return _not_found()
+    return get_redoc_html(openapi_url="/openapi.json", title=f"{app.title} - API")
+
 
 # -- Register WebSocket endpoints --
 # /ws/chat is the ONLY WebSocket. The Synapsis-era /ws/agent, /ws/workflow and

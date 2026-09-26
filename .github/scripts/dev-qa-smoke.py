@@ -41,7 +41,9 @@ WHAT IT CHECKS (one JSON line on stdout; exit 1 if any check FAILS)
                     the container's Chromium: no browser header/footer (no file:// URL, no
                     temp-file name), the seeded table text present, result codes as /URI links
   ui_config         [Lane E] anonymous /api/health hides the model list, /api/config
-                    serves contacts and drops leftovers, /api/activity needs a login
+                    serves contacts and drops leftovers and internals, /api/activity needs
+                    a login, /openapi.json /docs /redoc are 404 for public callers (admin:
+                    schema 200)
   feedback          [Lane H] owner-only answer feedback, admin list + CSV, 404 for others
   cohort_invites    [Lane H] bulk cohort invitation + cohort revoke (links never printed).
                     Opt-in (IA_QA_INVITES=1): a revoked invitation cannot be deleted, so
@@ -519,8 +521,22 @@ class QA:
             problems.append('contacts missing or without email')
         if (await self.get('/api/activity')).status_code != 401:
             problems.append('/api/activity open to anonymous callers')
+        # QA-4 D15: no internals in the anonymous config; the API docs are not public.
+        # Requests through the load balancer always carry X-Forwarded-For; the smoke runs
+        # on the container's loopback, so it sends one to look like a public caller.
+        internals = [k for k in ('auth_method', 'agent_type', 'platform', 'personas') if k in anon_cfg]
+        if internals:
+            problems.append(f'anonymous /api/config exposes {internals}')
+        public = {'X-Forwarded-For': '203.0.113.7'}
+        docs = {p: (await self.get(p, headers=dict(public))).status_code for p in ('/openapi.json', '/docs', '/redoc')}
+        if any(code != 404 for code in docs.values()):
+            problems.append(f'API docs public: {docs}')
+        admin_schema = (await self.get('/openapi.json', self.tok['admin'], headers=dict(public))).status_code
+        if admin_schema != 200:
+            problems.append(f'admin /openapi.json -> {admin_schema}')
         assert not problems, problems
-        return {'contacts': [c.get('remit') for c in contacts], 'health_anonymous': 'no model list'}
+        return {'contacts': [c.get('remit') for c in contacts], 'health_anonymous': 'no model list',
+                'config_anonymous': 'no internals', 'api_docs_public': docs, 'api_docs_admin': admin_schema}
 
     async def c_feedback(self):
         probe = await self.get('/api/admin/feedback?days=1', self.tok['admin'])

@@ -114,3 +114,67 @@ async def test_config_contacts_are_env_configurable(http, monkeypatch):
     monkeypatch.setenv("IA_CONTACT_SCOPE_EMAIL", "")
     contacts = (await http.get("/api/config")).json()["contacts"]
     assert contacts == [{"name": "IA support desk", "email": "ia-support@example.org", "remit": "technical"}]
+
+
+# ---------------------------------------------------------------------------
+# QA-4 D15: anonymous /api/config internals and the public API docs
+# ---------------------------------------------------------------------------
+
+_INTERNALS = ("auth_method", "agent_type", "platform", "personas")
+_PUBLIC = {"X-Forwarded-For": "203.0.113.7"}   # what every request through the ALB carries
+
+
+@pytest.mark.asyncio
+async def test_anonymous_config_has_no_internals(http):
+    anon = (await http.get("/api/config")).json()
+    for key in _INTERNALS:
+        assert key not in anon, key
+    # The login page still gets what it needs.
+    for key in ("sso_enabled", "password_login_enabled", "invited_login_enabled", "self_signup",
+                "signup_allowed_domains", "contacts", "model", "version"):
+        assert key in anon, key
+    forged = (await http.get("/api/config", headers={"Authorization": "Bearer not-a-jwt"})).json()
+    assert not any(k in forged for k in _INTERNALS)
+
+
+@pytest.mark.asyncio
+async def test_signed_in_config_keeps_its_fields(http):
+    body = (await http.get("/api/config", headers=_bearer("researcher"))).json()
+    for key in _INTERNALS:
+        assert key in body, key
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/openapi.json", "/docs", "/redoc"])
+async def test_api_docs_are_not_public(http, path):
+    r = await http.get(path, headers=_PUBLIC)
+    assert r.status_code == 404, path
+    assert "<html" not in r.text.lower()           # not the SPA shell either
+    r = await http.get(path, headers={**_PUBLIC, **_bearer("researcher")})
+    assert r.status_code == 404, path
+
+
+@pytest.mark.asyncio
+async def test_admin_can_read_the_schema_through_the_proxy(http):
+    r = await http.get("/openapi.json", headers={**_PUBLIC, **_bearer("admin")})
+    assert r.status_code == 200 and "/api/config" in r.json()["paths"]
+    assert (await http.get("/docs", headers={**_PUBLIC, **_bearer("admin")})).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_in_container_loopback_keeps_the_schema(http):
+    """release-smoke.py walks /openapi.json anonymously from inside the container."""
+    r = await http.get("/openapi.json")   # ASGI client = 127.0.0.1, no X-Forwarded-For
+    assert r.status_code == 200
+    paths = r.json()["paths"]
+    assert "/api/sessions" in paths and "/openapi.json" not in paths and "/docs" not in paths
+    assert (await http.get("/docs")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_local_dev_keeps_the_docs():
+    from synapsis.server import app
+    with patch("synapsis.auth.middleware.AUTH_DISABLED", True):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            assert (await c.get("/docs", headers=_PUBLIC)).status_code == 200
+            assert (await c.get("/openapi.json", headers=_PUBLIC)).status_code == 200
