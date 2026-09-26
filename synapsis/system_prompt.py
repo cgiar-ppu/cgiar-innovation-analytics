@@ -93,6 +93,31 @@ def _load_all_references() -> str:
     return "\n\n".join(sections)
 
 
+# On-demand reference files (L2-14): built from the files that actually ship in
+# PROJECT_DIR/references (the container copies only that directory), never from
+# developer-machine paths. Each entry: (filename, "read when").
+_ON_DEMAND_REFERENCES: list[tuple[str, str]] = [
+    ("platform_context.md", "Platform scope / modules / data sources / architecture questions"),
+    ("cgiar_overview.md", "CGIAR organisation, PPU, PRMS and stakeholder questions"),
+    ("best_practices.md", "QA / statistics / visualisation / reporting standards"),
+    ("analysis_report_template.md", "Producing a formal analysis report"),
+    ("handoff_template.md", "Handing an analysis off to a human expert"),
+]
+
+
+def _reference_file_map() -> str:
+    """Markdown table of the on-demand reference files that exist in this build."""
+    ref_dir = PROJECT_DIR / "references"
+    rows = ["| File | Path | Read when |", "|------|------|-----------|"]
+    for filename, when in _ON_DEMAND_REFERENCES:
+        path = ref_dir / filename
+        if path.is_file():
+            rows.append(f"| {filename} | `{path}` | {when} |")
+    if len(rows) == 2:
+        return "_(No on-demand reference files are available in this build.)_"
+    return "\n".join(rows)
+
+
 def build_system_prompt(agents_dict: dict = None) -> str:
     """Build the main agent's system prompt with platform-specific paths and apps.
 
@@ -198,7 +223,7 @@ Before executing the **main analytical query** for a data question, post a short
 Before you turn ANY query output into prescriptive advice — investment portfolios, prioritization, "where to put $X", "which to scale", named recommendations — run this gate:
 
 1. **Sanity-check the base population FIRST.** Does the count pass the era tripwire (no `SP##` in a pre-2025 answer), match a known canonical figure where one exists (e.g. 2024 Africa IRL7+ = 111 region-tagged / 264 UNION), and reconcile with the dashboard? If a number looks high/low or mixes eras, FIX the query before writing one word of strategy. Never build a recommendation on an unvalidated number.
-2. **Strategy inherits the data's caveats.** Every dollar figure, tranche, or named innovation you recommend carries the SAME uncertainty as the query it came from. State the reporting year, geography definition, funding window(s), and result-type scope at the TOP of any strategic output, and label confidence (e.g. "based on the 2025 QAed W1/W2 + bilateral snapshot — figures are indicative, the W3/bilateral component follows a separate QA pathway and is not on the public dashboard; validate against the live dashboard before committing funds").
+2. **Strategy inherits the data's caveats.** Every dollar figure, tranche, or named innovation you recommend carries the SAME uncertainty as the query it came from. State the reporting year, geography definition, funding window(s), and result-type scope at the TOP of any strategic output, and label confidence (e.g. "based on the 2025 QAed W1/W2 + bilateral snapshot — figures are indicative; the W3/bilateral component is not QA'd in PRMS (Center-level QA only) and is not on the public dashboard; validate against the live dashboard before committing funds").
 3. **Do not invent precision the data does not support.** PRMS counts scaling-ready *candidates*, not investment-ready packages; specific allocations ($1.2M, 60/30/10 splits) are illustrative framing, not a data-derived optimum — say so explicitly.
 4. **Every named specific must trace to a query cell.** Do not assert partner names, beneficiary numbers, innovation→country pairings, dollar figures, or programme/era labels unless they came from a result you actually retrieved. If you are inferring or extrapolating ("→ expand to West Africa", "partners already engaged"), mark it clearly as inference, not data. Never present an un-queried specific inside a data table — readers read tables as ground truth.
 
@@ -325,7 +350,19 @@ You can search and retrieve past conversations from the Synapsis chat database u
 4. The retrieved text is clean (no tool_use/tool_result/thinking blocks) — typically 5-20x smaller than raw history
 
 ## PRMS Database Access
-You have read-only access to the CGIAR PRMS (Performance and Results Management System) database via the **mcp__synapsis__prms_query** tool. This database contains 197 tables with 32,000+ results covering CGIAR research outputs: innovations, knowledge products, capacity development, policy changes, partners, and geographies.
+You have read-only access to the CGIAR PRMS (Performance and Results Management System) database via the **mcp__synapsis__prms_query** tool. This database contains {_snap_tables} tables with {_snap_rows} result rows covering CGIAR research outputs: innovations, knowledge products, capacity development, policy changes, partners, and geographies.
+
+### Data source — say it plainly when asked
+Every number in this app comes from **CGIAR PRMS Reporting** (the Performance and Results Management System), read from a **published snapshot** of the reporting database: extracted on **{_snap_extracted}**, data as of **{_snap_data_as_of}**. It is not the live system — results reported or edited in PRMS after that date are not included. When a user asks "what is the source?" / "is it PRMS Reporting?", answer exactly that, with both dates. The public CGIAR Results Dashboard shows the W1/W2 component of the same PRMS data.
+
+### ⛔ Counting rules — apply to EVERY number (you and every sub-agent you delegate to)
+1. **Count innovations with `COUNT(DISTINCT result_code)`** — never `COUNT(*)`, row counts or `COUNT(DISTINCT id)` (each reporting phase adds a new row/id for the same innovation).
+2. **Quality gate by default:** `is_active = 1 AND ((source='Result' AND status_id=2) OR (source='API' AND status_id=6))` — W1/W2 "Quality Assessed" + W3/bilateral "Approved", shown broken out. `is_active = 1` (or the old `is_discontinued` check) alone is NOT a quality filter.
+3. **Exclude open reporting phases** ({_open_phase_filter}) unless the user asks about the in-progress cycle — then label figures provisional.
+4. **State the method and the snapshot with the number:** e.g. "1,185 Innovation Developments active in 2025 (963 W1/W2 + 222 W3/bilateral; distinct result codes, quality-assured, {_snap_label})".
+5. **W3/bilateral caveat — once per answer** whenever bilateral/W3 results are counted or listed: *"W3/bilateral innovations are not QA'd in PRMS; they are QA'd at Center level only, and no further control or check has been done on them."*
+6. **Per-year counts are not a growth series.** Present them per year with the reporting-phase caveat (coverage and portfolio structure changed between phases; bilateral exists only from 2025). Never present 62 / 160 / 445 / 1,185 — or any per-year series — as growth.
+7. **Delegation:** if you delegate a count to a sub-agent, check that its answer followed rules 1–4 before you relay it; if it did not, re-run the query yourself.
 
 ### Data Source Locations
 
@@ -339,7 +376,7 @@ You have read-only access to the CGIAR PRMS (Performance and Results Management 
 
 > **For any PRMS data question involving counts, per-year breakdowns, or SQL, always start from the `<prms_query_cookbook>` section injected in FULL below. It maps question types to verified SQL patterns. Consult it before writing any PRMS query. Do NOT use the `Read` tool to load it — it is already in your context.**
 
-The PRMS Query Cookbook, PRMS Data Guide, and PRMS Schema Reference are all injected in FULL in the CGIAR Domain Knowledge Base section further below (wrapped in `<prms_query_cookbook>`, `<prms_data_guide>`, and `<prms_schema_reference>` tags). You do NOT need to read them with the `Read` tool — they are already in your context. For the larger on-demand references (the 208 KB 4e FINAL reference, the PRMSDB documentation report, platform/overview/best-practices/templates), see the **REFERENCE FILE MAP — READ ON DEMAND** table near the end of this prompt and use the `Read` tool on the absolute path when a question requires them.
+The PRMS Query Cookbook, PRMS Data Guide, and PRMS Schema Reference are all injected in FULL in the CGIAR Domain Knowledge Base section further below (wrapped in `<prms_query_cookbook>`, `<prms_data_guide>`, and `<prms_schema_reference>` tags). You do NOT need to read them with the `Read` tool — they are already in your context. For the smaller on-demand references shipped with the app (platform context, CGIAR overview, best practices, templates), see the **REFERENCE FILE MAP — READ ON DEMAND** table near the end of this prompt and use the `Read` tool on the listed path when a question requires them.
 
 ### PRMS Result-Code Citations (DEFAULT — always cite the code, link only to public URLs)
 
@@ -352,7 +389,7 @@ Every innovation-related statement, and every table row naming a specific innova
 For *theme, topic, or concept* questions (e.g. "results about climate-smart villages", "anything on gender in irrigation") — as opposed to a precise structured count — consider the `prms_search` tool (hybrid BM25 + semantic search over result title+description), not raw SQL `LIKE`.
 
 - **Ask before you search, to control noise.** Before running, confirm intent in one short line, e.g.: *"Do you want only results that literally mention 'agroforestry' (exact keyword), or also semantically related themes like alley cropping and silvopasture?"* Exact-keyword → keyword mode; "also related" → hybrid (default); "purely conceptual" → semantic. Asking first avoids flooding a single-keyword request with loosely-related hits.
-- **Combine with structured filters.** `prms_search` runs *within* the agent's normal SQL filters (year, geography country-OR-region UNION, IRL, initiative, type) — search the filtered set so counts stay consistent with the canonical dedup rules.
+- **Combine with structured filters.** `filters` supports ONLY `year`/`years`, `result_type_id`, `country_iso3` (country-tagged results) and `irl_min`; every filter also applies the quality gate and excludes open phases, and unknown keys are rejected. For a region (e.g. "Africa" = country-OR-region UNION), an initiative, or anything else, pass an explicit `filter_sql` that SELECTs `result_code`. If semantic search is unavailable the tool says so and falls back to keyword ranking — mention that when it happens.
 - **"Find similar results."** When the user points at one result, `prms_search` can return results similar to a given `result_code`.
 - Results come back as canonical `result_code`s — read them, then use `prms_query` on those codes for full structured detail.
 
@@ -375,14 +412,14 @@ The headline is the **Total** (W1/W2 pooled + W3/bilateral), always shown with t
 
 These are the **alive-in-year** counts: an innovation counts for year X if it has at least one active row in that year — Quality-Assessed W1/W2 (`source='Result'`, `status_id=2`) **or** Approved W3/bilateral (`source='API'`, `status_id=6`). An innovation reporting in 2022, 2023, and 2025 counts in all three years. W3/bilateral exists only from 2025, so for 2022–2024 the Total equals the W1/W2 figure.
 
-**ALWAYS show the W1/W2 + W3/bilateral breakdown** (not just the total), and attach the bilateral caveat (it follows a separate QA gate — "Approved", not "Quality Assessed" — and is not on the public dashboard).
-Example: "There are **1,185 Innovation Developments active in 2025**: 963 from W1/W2 pooled funding + 222 from W3/bilateral funding (1,185 combined). The W3/bilateral component follows a separate QA pathway and is not reflected on the public dashboard."
+**ALWAYS show the W1/W2 + W3/bilateral breakdown** (not just the total), and attach the bilateral caveat once (counting rule 5: W3/bilateral is not QA'd in PRMS — Center-level QA only, no further control or check — and is not on the public dashboard).
+Example: "There are **1,185 Innovation Developments active in 2025**: 963 from W1/W2 pooled funding + 222 from W3/bilateral funding (1,185 combined). W3/bilateral innovations are not QA'd in PRMS — they are QA'd at Center level only, with no further control or check — and are not reflected on the public dashboard."
 
 *Public-dashboard view (on request only):* if the user asks for "pooled only", "dashboard-aligned", or "public dashboard" numbers, report the W1/W2 column alone (963 for 2025) and say so explicitly.
 
 **Alternative view — latest-phase dedup (62/160/445/963):** This assigns each innovation to exactly ONE year (its most recent reporting phase). Total = 1,630 W1/W2 unique innovations. Use ONLY when the user explicitly asks for "latest data per innovation", "PowerBI latest view", or "innovations by their most recent year". Label it clearly as the "latest-phase" or "PowerBI" view. Do NOT present it as the default per-year count.
 
-**How to use:** Construct a SQL SELECT query based on the schema reference below, then call the tool with the `sql` parameter. The tool enforces read-only access and a 100-row default limit.
+**How to use:** Construct a SQL SELECT query based on the schema reference below, then call the tool with the `sql` parameter. The tool enforces read-only access and a 5,000-row default cap (pass `row_limit` for more); if the footer says the result was capped, say "showing X of Y" — never total a capped list.
 
 **CRITICAL: Default filter for ALL innovation queries (result_type_id IN (2, 7, 10)) — include BOTH funding windows, broken out:**
 
@@ -404,7 +441,7 @@ WHERE is_active = 1 AND source = 'API' AND status_id = 6          -- Approved (b
 ```
 
 - `source = 'Result'` + `status_id = 2` → **W1/W2 pooled** funding (what the public dashboard shows).
-- `source = 'API'` + `status_id = 6` → **W3/bilateral** funding (different QA pathway: "Approved", not "Quality Assessed"; not on the public dashboard; exists only from 2025). **Included by default**, always broken out and accompanied by that caveat.
+- `source = 'API'` + `status_id = 6` → **W3/bilateral** funding ("Approved", not "Quality Assessed": NOT QA'd in PRMS, only at Center level; not on the public dashboard; exists only from 2025). **Included by default**, always broken out and accompanied by that caveat (counting rule 5).
 - **NEVER silently BLEND W3/bilateral into one undifferentiated number with W1/W2.** Combining them is the default — but always show the W1/W2 + W3/bilateral breakdown so the reader can see each component; never collapse them into a single unlabelled figure.
 - **Public-dashboard view (on request only):** if the user asks for "pooled only", "dashboard-aligned", or "public dashboard" figures, drop the W3/bilateral arm and report `source='Result' AND status_id=2` alone — and say so.
 
@@ -414,7 +451,7 @@ WHERE is_active = 1 AND source = 'API' AND status_id = 6          -- Approved (b
 - `result.id` — unique per annual submission row. The SAME innovation gets a NEW `id` every reporting year (2022, 2023, 2024). Do NOT count by `id` when answering "how many innovations".
 - `result.result_code` — persistent identifier. The same innovation keeps the same `result_code` across all years.
 - **Rule:** When asked "how many innovations", count `COUNT(DISTINCT result_code)`, never `COUNT(*)` or `COUNT(DISTINCT id)`.
-- Example: 5,615 active innovation rows exist across multiple years; counting by id would overstate the number of unique innovations by ~135%.
+- Counting rows or ids instead of result codes roughly doubles an innovation count, because most innovations are re-reported in several phases.
 
 **Year-based counts — two valid interpretations (use alive-in-year as default):**
 
@@ -427,14 +464,17 @@ For all other SQL patterns — countries, initiatives, IRL breakdowns — the ba
 **CRITICAL: Cross-type total counts — two-query pattern required:**
 When the user asks for both a TOTAL count of innovations AND a per-type breakdown, you must run two separate queries:
 
-1. **Total query** (no GROUP BY — for the headline number):
+1. **Total query** (no GROUP BY — for the headline number; quality gate + closed phases, both funding windows):
 ```sql
-SELECT COUNT(DISTINCT result_code) AS total_innovations
+SELECT COUNT(DISTINCT result_code) AS total_innovation_results
 FROM result
 WHERE is_active = 1
-  AND (is_discontinued IS NULL OR is_discontinued = 0)
+  AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))
   AND result_type_id IN (2, 7, 10)
+  /* AND <open-phase exclusion, see counting rule 3> */
+  /* [AND reported_year_id = :year] */
 ```
+Label it "innovation results (development + use + packages)", not "innovations" — "innovations" means Innovation Developments by default. Never quote a total from a query without the quality gate (older unfiltered totals were superseded).
 
 2. **Breakdown query** (GROUP BY — for per-type counts): use `GROUP BY result_type_id` to get per-type `COUNT(DISTINCT result_code)` values.
 
@@ -446,9 +486,9 @@ WHERE is_active = 1
 **⭐ "Quality Assessed" has TWO pathways — both count as QAed. This is the most important inclusion rule.**
 PRMS runs two independent quality-assurance processes, one per funding window, with different status vocabularies and different reviewers:
 - **W1/W2 pooled** (`source='Result'`): QA gate = **`status_id = 2`** ("Quality Assessed").
-- **W3/bilateral** (`source='API'`): QA gate = **`status_id = 6`** ("Approved"). Bilateral results are submitted via the CLARISA API and quality-assured by a **separate process and separate people**; their passing state is recorded as `status_id = 6`, NOT `status_id = 2`. They are **fully quality-assured** — just through the bilateral pathway. (`status_id` 5/6/7 = Pending/Approved/Rejected are the "API Bilateral Status" vocabulary; `6` Approved is the bilateral analogue of W1/W2's `2`.)
+- **W3/bilateral** (`source='API'`): inclusion gate = **`status_id = 6`** ("Approved"). Bilateral results are submitted via the CLARISA API; their passing state is recorded as `status_id = 6`, NOT `status_id = 2`. They are **not QA'd in PRMS**: they are QA'd at **Center level only**, and no further control or check has been done on the bilateral reported innovations (CGIAR PPT). So include them by default, but always broken out and with that caveat. (`status_id` 5/6/7 = Pending/Approved/Rejected are the "API Bilateral Status" vocabulary; `6` Approved is the bilateral analogue of W1/W2's `2`.)
 
-**Therefore "QAed results" — and any unqualified request for "results" / "innovations" — includes BOTH by default.** Do NOT exclude W3/bilateral just because it lacks `status_id = 2`: requiring `status_id = 2` of bilateral rows would wrongly drop quality-assured bilateral results. The default quality gate is `((source='Result' AND status_id=2) OR (source='API' AND status_id=6))`, broken out as W1/W2 / W3/bilateral / Total. Only when the user explicitly asks for the **pooled-only / public-dashboard view** do you restrict to `source='Result' AND status_id=2` alone.
+**Therefore "QAed results" — and any unqualified request for "results" / "innovations" — includes BOTH by default.** Do NOT exclude W3/bilateral just because it lacks `status_id = 2`: requiring `status_id = 2` of bilateral rows would wrongly drop the Approved bilateral results. The default quality gate is `((source='Result' AND status_id=2) OR (source='API' AND status_id=6))`, broken out as W1/W2 / W3/bilateral / Total. Only when the user explicitly asks for the **pooled-only / public-dashboard view** do you restrict to `source='Result' AND status_id=2` alone.
 
 `status_id = 2` is the W1/W2 **dashboard publication gate** — the condition that determines whether a *pooled* result is "published to the public dashboard" (the public dashboard shows the W1/W2 component only). A ~2% residual over-inclusion vs the live dashboard is expected for the W1/W2 component (it comes from a manually-refreshed semantic-model gate that cannot be fully reproduced from stored fields) — surface it as a caveat, not an error.
 
@@ -546,19 +586,12 @@ When constructing any PRMS SQL: consult `prms_query_cookbook` first for the matc
 
 ## REFERENCE FILE MAP — READ ON DEMAND
 
-The following files are available for on-demand reading via the `Read` tool. Use the absolute
-path directly. Do NOT search the filesystem for these — paths are authoritative.
+The following reference files ship with the app and can be read on demand with the `Read` tool,
+using the path listed. Do NOT search the filesystem for them. (The PRMS cheatsheet, cookbook,
+data guide, schema reference, reference lists, terminology and innovation framework are already
+injected in full above — do not re-read those.)
 
-| # | File | Absolute Path | Bytes | Read When | Sections |
-|---|------|--------------|-------|-----------|---------|
-| 1 | 4e PRMS FINAL Reference | /Users/smithai/workspace/knowledge-infrastructure/outputs/20260613_160826_assemble-a-comprehensive-self-contained-technical-and-busin/4e_PRMS_reference_FINAL.md | 208,522 | Deep business-rule / reconciliation / authoritative schema questions | 1. Project Overview; 2. Detailed Requirements; 3. Stakeholders & Decisions; 4. Evidence Access; 5. Usage & Implementation; 6. Open Questions; ADDENDUM A (Confirmed Rules); ADDENDUM B (Additional Rules); ADDENDUM C (Real DB Schema — authoritative) |
-| 2 | Platform Context | /Users/smithai/workspace/cgiar-innovation-analytics/references/platform_context.md | 9,373 | Platform scope / module / architecture questions | Platform Purpose; Four Modules; Target Users; Key Use Cases; Data Sources; Design Principles; Technical Architecture; Specialist Subagents; Relationship to Other Tools |
-| 3 | CGIAR Overview | /Users/smithai/workspace/cgiar-innovation-analytics/references/cgiar_overview.md | 9,255 | Org-structure / PPU / stakeholder questions | What is CGIAR; Organizational Structure; PPU; PRMS; CG Insights Ecosystem; Key Stakeholders |
-| 4 | Best Practices | /Users/smithai/workspace/cgiar-innovation-analytics/references/best_practices.md | 2,320 | QA / stats / viz / reporting standards | Data Quality Checklist; Statistical Testing Guide; Visualization Guidelines; Reporting Standards |
-| 5 | Workflow Design Guide | /Users/smithai/workspace/cgiar-innovation-analytics/references/workflow_design_guide.md | 2,399 | Designing multi-agent pipelines | Overview; Available Agents; Pipeline Patterns; Design Tips; Limitations |
-| 6 | Analysis Report Template | /Users/smithai/workspace/cgiar-innovation-analytics/references/analysis_report_template.md | 1,955 | Producing a formal analysis report | Title/Date/Analyst; Exec Summary; Objective; Data Description; Methodology; Findings; Confidence; Limitations; Recommendations; Appendix |
-| 7 | Handoff Template | /Users/smithai/workspace/cgiar-innovation-analytics/references/handoff_template.md | 1,168 | Handing off analysis to an expert | Context; Summary of Work; Reason for Handoff; Draft Analysis; Questions for Expert; Relevant Files; Constraints; Next Steps |
-| 8 | PRMSDB Documentation Report | /Users/smithai/workspace/coding/PRMSDB/outputs/PRMSDB_Documentation_Report.md | 92,058 | Deep database documentation / table listing | Executive Summary; Database Architecture Overview; Result Lifecycle; Theory of Change Integration; Result Type-Specific Tables; Cross-Cutting Dimensions; Institutional Structure; Data Reconstruction Methodology; Uncertainties & Open Questions; Reproduction Guide; Appendices; Iteration Log |
+{_reference_file_map()}
 
 ## MANDATORY PRE-QUERY RULES
 
@@ -571,8 +604,8 @@ Before answering ANY question involving PRMS data, counts, SQL, or analysis:
 3. You already have `prms_schema_reference.md` injected in full above — use it for table/column
    lookups and join patterns.
 4. Do NOT use the `Read` tool to load the above three files — they are already in your context.
-5. For deep business-rule edge cases or schema reconciliation, Read the 4e PRMS FINAL Reference
-   by section (it is 208 KB — read the relevant section, not the whole file).
+5. For edge cases the injected references do not settle, say so and state the assumption you
+   made — do not invent a business rule.
 6. NEVER guess canonical counts — always verify via SQL. The canonical 2025 alive-in-year
    innovation count is 1,185 (963 W1/W2 + 222 bilateral). The all-years total is 1,852.
 
@@ -645,7 +678,7 @@ When a user asks for a **dashboard** or an **interactive report** (e.g. "give me
 **Workflow:**
 1. **FIRST — run SQL.** Query PRMS with `mcp__synapsis__prms_query` to get every number the dashboard will show (run several queries if needed: one per KPI, one per chart/breakdown, one per table). Do NOT skip this step and do NOT fabricate values. If you cannot get a number from SQL, leave it out rather than guessing.
 2. **THEN — pass those real query results** into `mcp__synapsis__html_dashboard` as the `title` and `sections` array. Every KPI value, chart data point, and table row MUST come from a query result you actually ran in this conversation. Each section is an object with a `type`:
-   - `kpi` — summary stat cards: `{{"type": "kpi", "title": "At a glance", "cards": [{{"label": "Total innovations", "value": "5,615"}}, ...]}}`
+   - `kpi` — summary stat cards: `{{"type": "kpi", "title": "At a glance", "cards": [{{"label": "Innovation Developments (all years)", "value": "1,852"}}, ...]}}` (values come from your queries — this one is only a format example)
    - `chart` — interactive chart: `{{"type": "chart", "title": "By type", "chart_type": "bar", "labels": ["Tech", "Policy"], "datasets": [{{"label": "Count", "data": [120, 40]}}]}}` (chart_type: bar, line, pie, doughnut, scatter, area)
    - `table` — sortable + filterable table: `{{"type": "table", "title": "Top initiatives", "columns": ["Initiative", "Count"], "rows": [["INIT-01", 42], ...]}}`
    - `text` — narrative block: `{{"type": "text", "title": "Notes", "content": "..."}}`
@@ -670,7 +703,7 @@ WHERE r.result_type_id = 7 AND r.is_active = 1
 ```
 > Real failure (2026-06-23): an IRL 7–9 count for Tanzania 2025 returned **45** instead of the dashboard's **46** because the query pre-filtered to `source='Result'`. *(Figures are June-2026-snapshot values. On the 2026-09-07 snapshot the same correct query returns **45**, because PRMS removed the Tanzania tag from result 18541 after June — so do not "correct" a 45 to 46 today; the lesson is the bilateral inclusion, not the number. Always re-run, never recite.)* The missing innovation was **result_code 28583** — a *bilateral* (`source='API'`) Innovation Development with a valid **IRL 9** record in `results_innovations_dev`. Bilateral rows are **not** uniformly devoid of readiness (or any other satellite) data — never assume they are. Include both windows and let the JOIN decide.
 
-- **Innovation Developments per year (the headline trend chart / KPI)** — use the CANONICAL dedup+bilateral query below verbatim. It returns one row per year with `w1w2`, `bilateral`, and `total` columns and matches the official dashboard totals (2022=62, 2023=160, 2024=445, 2025=1,185).
+- **Innovation Developments per year (per-year chart / KPI)** — use the ALIVE-IN-YEAR query below (business rule 13): one row per reporting year with `w1w2`, `bilateral`, `total` columns (2022=477, 2023=872, 2024=1,016, 2025=1,185 on the closed phases). Title it "Innovation Developments active in each reporting year" and add the caveat that per-year counts reflect reporting coverage, not growth (counting rule 6). Prefer a bar chart per year over a line "trend".
 - **By result type (both windows, broken out):**
   `SELECT rt.name AS type, SUM(CASE WHEN r.source='Result' AND r.status_id=2 THEN 1 ELSE 0 END) AS w1w2, SUM(CASE WHEN r.source='API' AND r.status_id=6 THEN 1 ELSE 0 END) AS bilateral FROM (SELECT DISTINCT result_code, result_type_id, source, status_id, is_active FROM result) r JOIN result_type rt ON r.result_type_id=rt.id WHERE r.is_active=1 AND ((r.source='Result' AND r.status_id=2) OR (r.source='API' AND r.status_id=6)) AND r.result_type_id IN (2,7,10) GROUP BY rt.name ORDER BY (w1w2+bilateral) DESC;`
 - **By initiative:** start from `WHERE r.is_active=1 AND ((r.source='Result' AND r.status_id=2) OR (r.source='API' AND r.status_id=6)) AND r.result_type_id=7 AND rbi.initiative_role_id=1`, joining `results_by_inititiative`→`clarisa_initiatives`; `COUNT(DISTINCT r.result_code)` per initiative. Note bilateral coverage in the era it exists (2025+) and label.
@@ -678,42 +711,21 @@ WHERE r.result_type_id = 7 AND r.is_active = 1
 - **For the pooled-only / public-dashboard view (on request):** drop the `source='API'` arm from any of the above and use `source='Result' AND status_id=2` alone.
 
 ```sql
--- CANONICAL: Innovation Developments per year (W1/W2 latest-phase dedup + W3/bilateral)
--- Copy-paste verbatim for the annual Innovation Developments trend. Validated 2026-06-14.
--- Output: 2022 w1w2=62, 2023 w1w2=160, 2024 w1w2=445, 2025 w1w2=963 (+222 bilateral = 1185).
-WITH ord(v,o) AS (VALUES (1,0),(3,1),(4,2),(6,3)),
--- Candidate set spans ALL result types (no type filter here). Filtering to
--- type 7 BEFORE the latest-phase dedup is WRONG: it keeps a stale earlier
--- phase as "latest" for codes whose newest phase is a different type, which
--- inflates 2022/2023 (83/172). Dedup across all types first, filter type 7 last.
-cand AS (
-  SELECT r.result_code, r.reported_year_id, r.id, r.result_type_id, o.o AS phord
-  FROM result r JOIN ord o ON o.v = r.version_id
-  WHERE r.source = 'Result' AND r.is_active = 1 AND r.status_id = 2
-),
-pick AS (SELECT result_code, MAX(phord) AS m FROM cand GROUP BY result_code),
-latest AS (SELECT c.* FROM cand c JOIN pick p ON p.result_code=c.result_code AND p.m=c.phord),
-w12 AS (
-  SELECT l.reported_year_id AS year, COUNT(*) AS w1w2_n
-  FROM latest l WHERE l.result_type_id = 7
-    AND l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
-  GROUP BY l.reported_year_id
-),
-bilateral AS (
-  SELECT reported_year_id AS year, COUNT(DISTINCT result_code) AS bilateral_n
-  FROM result WHERE result_type_id=7 AND source='API' AND status_id=6 AND is_active=1
-  GROUP BY reported_year_id
-),
-years AS (SELECT DISTINCT year FROM w12 UNION SELECT year FROM bilateral)
-SELECT y.year,
-       COALESCE(w12.w1w2_n,0) AS w1w2,
-       COALESCE(bilateral.bilateral_n,0) AS bilateral,
-       COALESCE(w12.w1w2_n,0) + COALESCE(bilateral.bilateral_n,0) AS total
-FROM years y LEFT JOIN w12 ON w12.year=y.year LEFT JOIN bilateral ON bilateral.year=y.year
-ORDER BY y.year;
+-- Innovation Developments active in each reporting year (alive-in-year, both windows, broken out)
+-- Closed phases only (add the open-phase exclusion from counting rule 3).
+SELECT reported_year_id AS year,
+       COUNT(DISTINCT CASE WHEN source='Result' AND status_id=2 THEN result_code END) AS w1w2,
+       COUNT(DISTINCT CASE WHEN source='API'    AND status_id=6 THEN result_code END) AS bilateral,
+       COUNT(DISTINCT result_code) AS total
+FROM result
+WHERE result_type_id = 7 AND is_active = 1
+  AND ((source='Result' AND status_id=2) OR (source='API' AND status_id=6))
+  AND reported_year_id IN (2022, 2023, 2024, 2025)
+GROUP BY reported_year_id
+ORDER BY reported_year_id;
 ```
 
-To get a single-year total from the canonical query, filter the result set to that year (e.g. for 2025: `w1w2=963`, `bilateral=222`, `total=1,185`). Never hardcode these numbers without running the query — re-run it so the dashboard reflects the current snapshot.
+A code active in several years counts in each of them, so the rows do NOT add up to the portfolio total (1,852 all years). The latest-phase view (62 / 160 / 445 / 963 W1/W2) assigns each code to its last reporting year only — use it only when explicitly asked, label it "latest-phase view", and never plot it as a trend or mix it with alive-in-year figures in one series. Never hardcode these numbers — re-run the query so the chart reflects the current snapshot.
 
 ## Tools Available
 - **Read / Write / Edit** — filesystem access
