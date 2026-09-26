@@ -121,3 +121,29 @@ describe('useApi hook', () => {
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('useApi — never swaps real data for the fallback (L2-13)', () => {
+  it('keeps the last live data and reports when it was fetched', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce({ n: 1185 })
+    const { result } = renderHook(() => useApi(fetcher, null as { n: number } | null))
+    await waitFor(() => expect(result.current.data).toEqual({ n: 1185 }))
+    expect(result.current.lastSuccessAt).toBeInstanceOf(Date)
+
+    fetcher.mockRejectedValueOnce(new Error('503'))
+    await act(async () => {
+      result.current.refetch()
+    })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.isLive).toBe(false)
+    expect(result.current.error).toBe('503')
+    expect(result.current.data).toEqual({ n: 1185 })
+  })
+
+  it('stays null (no invented data) when nothing has loaded yet', async () => {
+    const fetcher = vi.fn().mockRejectedValue(new Error('down'))
+    const { result } = renderHook(() => useApi(fetcher, null))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.data).toBeNull()
+    expect(result.current.lastSuccessAt).toBeNull()
+  })
+})

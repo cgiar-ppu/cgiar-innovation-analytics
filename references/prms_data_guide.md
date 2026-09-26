@@ -6,6 +6,16 @@
 
 > Companion file: `prms_schema_reference.md` (full table-by-table schema). This guide is the practical query/counting layer on top of it. Where the two disagree on a counting method, **this guide wins** — the schema reference predates the corrected dedup investigation.
 
+## 0. Data source and QA notes (say these to users — client asks, Sep 2026)
+
+**Source.** Every figure in this app comes from **CGIAR PRMS Reporting** — the Performance and Results Management System, CGIAR's reporting system for research results. The app reads a **published snapshot** of the PRMS reporting database, not the live system. Each snapshot has an **extraction date** and a **data-as-of date** (the latest update it contains); both are printed in every `prms_query` footer, in the system prompt and on the dashboard. When someone asks "where does this come from — is it PRMS Reporting?", the answer is: *yes — CGIAR PRMS Reporting, snapshot extracted on &lt;date&gt;, data as of &lt;date&gt;*. Never type a remembered date.
+
+**Different QA approach for W3/bilateral.** W1/W2 (pooled) results are quality-assessed **in PRMS** (`status_id = 2`). W3/bilateral results (`source = 'API'`, "Approved" = `status_id = 6`) are **not QA'd in PRMS**: they are QA'd at **Center level only**, and **no further control or check has been done on the bilateral reported innovations** (CGIAR PPT, 14 Sep 2026). They are included by default and always shown broken out; whenever an answer, table or chart counts or lists bilateral/W3 results, state this caveat **once** (not per row).
+
+**Counting method, stated with every number.** Count `COUNT(DISTINCT result_code)`; apply the quality gate `is_active = 1 AND ((source='Result' AND status_id=2) OR (source='API' AND status_id=6))`; exclude open reporting phases (§1.1); name the method (alive-in-year / all-years latest report / union of years) and the snapshot.
+
+**"All years" vs selecting 2022–2025.** The dashboard's "All years" counts each innovation once at its **latest** quality-assured report (Innovation Developments: 1,852). Selecting 2022–2025 counts every code that was a quality-assured Innovation Development in **any** of those years (1,885): 33 codes were re-reported later as another result type (e.g. innovation use) and count in the year selection only. All other cards are identical in both views.
+
 ---
 
 ## 1. Canonical Counts (Ground Truth)
@@ -292,7 +302,7 @@ ORDER BY reported_year_id;
 -- OUTPUT: 2025 = 222 (2022/2023/2024 = 0)
 ```
 
-**Presentation rule (default):** Report the combined **Total** as the headline and always show the funding breakdown as a callout, e.g.: *"1,185 total = 963 W1/W2 pooled + 222 W3/bilateral (Approved). The W3/bilateral component follows a separate QA pathway and is not on the public dashboard."* Apply this to any year/scope, not just 2025 (for 2022–2024 bilateral = 0, so Total = W1/W2 — state that). Only when the user explicitly asks for the pooled-only / public-dashboard view, report W1/W2 alone and say so.
+**Presentation rule (default):** Report the combined **Total** as the headline and always show the funding breakdown as a callout, e.g.: *"1,185 total = 963 W1/W2 pooled + 222 W3/bilateral (Approved). W3/bilateral innovations are not QA'd in PRMS — they are QA'd at Center level only, with no further control or check — and they are not on the public dashboard."* Apply this to any year/scope, not just 2025 (for 2022–2024 bilateral = 0, so Total = W1/W2 — state that). Only when the user explicitly asks for the pooled-only / public-dashboard view, report W1/W2 alone and say so.
 
 ---
 
@@ -668,7 +678,8 @@ Three counts exist and do not reconcile:
 
 | Source | Count | Filter |
 |--------|-------|--------|
-| Dashboard KPI (`_SQL_INNOVATION_USES`) | **675** | `is_active=1, result_type_id=2` (naive) |
+| Dashboard KPI (`_SQL_INNOVATION_USES`) since 2026-09-26 | **609** | quality gate (W1/W2 status 2 + W3/bilateral status 6), distinct codes, closed phases |
+| Former dashboard KPI (until 2026-09-25) | 675 | `is_active=1, result_type_id=2` (naive — counted Editing/Submitted/Discontinued and bilateral *Rejected*) |
 | Canon CTE (dedup + status_id=2) | **550** | `source='Result', is_active=1, status_id=2, result_type_id=2` |
 | Export (row count from CSV) | **~624** | per-year filter on the PRMS export |
 
@@ -690,7 +701,8 @@ agreed-upon figure.
 
 | Source | Count | Filter |
 |--------|-------|--------|
-| Dashboard KPI (`_SQL_INNOVATION_PACKAGES`) | **96** | `is_active=1, result_type_id=10` (naive) |
+| Dashboard KPI (`_SQL_INNOVATION_PACKAGES`) since 2026-09-26 | **74** | quality gate, distinct codes, closed phases (= the 74 QAed codes) |
+| Former dashboard KPI (until 2026-09-25) | 96 | `is_active=1, result_type_id=10` (naive) |
 | Raw QAed (`source='Result' AND status_id=2`) | **164 rows / 74 codes** | `source='Result', is_active=1, status_id=2, result_type_id=10` |
 | Canon CTE (dedup + status_id=2) | **0** | same filter, then the all-years latest-phase dedup CTE |
 
@@ -731,16 +743,21 @@ and compare against the live PRMS dashboard package count. Do NOT invent a
 corrected canonical type-10 number — it remains open. Define and document the
 canonical methodology before any further changes to the Innovation Package count.
 
-### 11.4 Dashboard chart — current state (Phase 2 close)
+### 11.4 Dashboard — current state (one quality gate, 2026-09-26)
 
-The all-years `results_by_type` chart currently uses:
+Every all-years KPI and chart bucket now uses the default quality gate
+(W1/W2 Quality Assessed + W3/bilateral Approved), distinct result codes,
+closed phases only (13-Sep-2026 snapshot):
 
-| Type | Methodology | Expected value | KPI match? |
-|------|-------------|----------------|------------|
-| Innovation Development | Canon CTE + bilateral | **1,852** | ✅ |
-| Innovation Use | Naive (`is_active=1`) | **675** | ✅ |
-| Innovation Package | Naive (`is_active=1`) | **96** | ✅ |
+| Card / bucket | Methodology | All years | 2022–2025 selected |
+|---|---|---|---|
+| Innovations (type 7) | Canon CTE + bilateral (latest report per code) | **1,852** | 1,885 (union of years) |
+| Innovations in use (type 2) | quality-gated distinct codes | **609** (was 675) | 609 |
+| Innovation packages (type 10) | quality-gated distinct codes | **74** (was 96) | 74 |
+| Total results (types 2+7+10) | quality-gated distinct codes, both windows | **2,553** (was 2,274, W1/W2 only) | 2,553 |
+| Countries | quality-gated, both windows | **118** (was 117) | 118 |
 
-All three chart buckets match their KPI cards (no visible contradictions).
-Types 2 and 10 are intentionally left on naive counts until their canonical
-methodologies are established in a follow-up investigation.
+All chart buckets match their KPI cards, the all-years pie (2,535) no longer
+exceeds Total results, and the multi-year readiness chart counts each
+innovation once at its latest level. The phase-chain canon for types 2/10
+(OI-2/OI-3) is still open; the gated distinct counts are the interim method.

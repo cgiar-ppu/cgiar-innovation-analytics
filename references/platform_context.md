@@ -72,10 +72,10 @@ Users can explore: "Are there innovations across different programmes that addre
 ## Data Sources
 
 ### Primary: PRMS Database
-- **Format:** SQLite database (197 tables, ~398MB)
-- **Content:** 32,005 results including 5,236 innovation developments, 13,800 knowledge products, 4,844 capacity sharing events, 1,228 innovation use records, 682 policy changes
-- **Coverage:** All CGIAR Initiatives and Science Programmes, 2022-2024 reporting cycles
-- **Refresh:** Snapshot from March 2026; periodic refresh planned
+- **Source:** CGIAR **PRMS Reporting** (Performance and Results Management System), read from a published snapshot of the reporting database (SQLite, 200+ tables, 32K+ result rows).
+- **Coverage:** All CGIAR Initiatives (2022–2024) and Science Programs & Accelerators (2025+); closed reporting phases by default, open phases only on request and labelled provisional
+- **Dates:** each snapshot's extraction date and data-as-of date are shown on the dashboard and in every query footer — quote those, never a remembered date
+- **QA:** W1/W2 results are quality-assessed in PRMS; W3/bilateral results are QA'd at Center level only (not in PRMS)
 - **Schema reference:** See PRMS schema analysis documentation
 
 ### Supplementary: Innovation Excel Export

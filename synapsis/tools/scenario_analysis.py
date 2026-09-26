@@ -24,7 +24,7 @@ from typing import Any
 from claude_agent_sdk import tool
 
 from synapsis.utils.responses import error_response, success_response
-from synapsis.prms_snapshot import resolve_db_path
+from synapsis.prms_snapshot import get_snapshot_info, resolve_db_path
 
 logger = logging.getLogger("synapsis.tools.scenario_analysis")
 
@@ -86,26 +86,81 @@ def _query_scalar(conn: sqlite3.Connection, sql: str) -> Any:
 # ---------------------------------------------------------------------------
 # Baseline data functions
 # ---------------------------------------------------------------------------
+#
+# L2-06 (2026-09-26): the baselines used to be raw ROW counts over every status,
+# phase and year (COUNT(*) with is_active=1 only) — "4,391 innovations" against
+# the canonical 1,852 and "1,836 IRL 7+" against ~850 — yet were labelled
+# [PRMS-VALIDATED] with no snapshot date. They are now built on ONE canonical
+# population, the same counting rules as the dashboard and the agent prompt:
+#
+#   * quality gate: W1/W2 'Quality Assessed' (source='Result', status_id=2) OR
+#     W3/bilateral 'Approved' (source='API', status_id=6);
+#   * closed reporting phases only (open phases are provisional);
+#   * ONE row per result_code — its latest quality-assured report (latest
+#     reporting year, then highest id) — so every count is a count of distinct
+#     result codes, attributed to that report's lead programme / initiative.
+#
+# On the 13-Sep-2026 snapshot this gives total_innovations = 1,852, identical to
+# the dashboard's all-years Innovations card.
+
+BASELINE_METHOD = (
+    "each result counted once by PRMS result code at its latest quality-assured "
+    "report (W1/W2 Quality Assessed + W3/bilateral Approved), closed reporting "
+    "phases only, attributed to that report's lead programme/initiative"
+)
+
+
+def _closed_phase_clause() -> str:
+    """``AND r.version_id NOT IN (...)`` for the snapshot's open phases, or ``""``."""
+    ids = get_snapshot_info(PRMS_DB_PATH).open_phase_ids
+    if not ids:
+        return ""
+    return " AND r.version_id NOT IN (" + ", ".join(str(int(i)) for i in ids) + ")"
+
+
+def _canon_cte() -> str:
+    """CTE ``canon(id, result_code, result_type_id)``: one row per result code."""
+    return f"""
+        WITH gated AS (
+            SELECT r.id, r.result_code, r.result_type_id, r.reported_year_id
+            FROM result r
+            WHERE r.is_active = 1
+              AND ((r.source = 'Result' AND r.status_id = 2)
+                   OR (r.source = 'API' AND r.status_id = 6)){_closed_phase_clause()}
+        ),
+        ranked AS (
+            SELECT g.*, ROW_NUMBER() OVER (
+                       PARTITION BY g.result_code
+                       ORDER BY g.reported_year_id DESC, g.id DESC) AS rn
+            FROM gated g
+        ),
+        canon AS (SELECT id, result_code, result_type_id FROM ranked WHERE rn = 1)
+    """
+
+
+def baseline_provenance() -> str:
+    """One line stating the snapshot and the counting method of the baselines."""
+    return f"*{get_snapshot_info(PRMS_DB_PATH).citation} · Method: {BASELINE_METHOD}.*"
 
 
 def _get_initiative_baselines(conn: sqlite3.Connection) -> list[dict]:
-    """Get per-initiative result counts, broken down by type.
+    """Get per-initiative distinct-result-code counts, broken down by type.
 
     Returns list of dicts with keys:
         short_name, innovations, innovation_uses, knowledge_products,
         policy_changes, total_results
     """
-    sql = """
+    sql = _canon_cte() + """
         SELECT i.short_name,
-               SUM(CASE WHEN r.result_type_id = 7 THEN 1 ELSE 0 END) AS innovations,
-               SUM(CASE WHEN r.result_type_id = 2 THEN 1 ELSE 0 END) AS innovation_uses,
-               SUM(CASE WHEN r.result_type_id = 6 THEN 1 ELSE 0 END) AS knowledge_products,
-               SUM(CASE WHEN r.result_type_id = 1 THEN 1 ELSE 0 END) AS policy_changes,
-               COUNT(*) AS total_results
-        FROM results_by_inititiative rbi
+               COUNT(DISTINCT CASE WHEN c.result_type_id = 7 THEN c.result_code END) AS innovations,
+               COUNT(DISTINCT CASE WHEN c.result_type_id = 2 THEN c.result_code END) AS innovation_uses,
+               COUNT(DISTINCT CASE WHEN c.result_type_id = 6 THEN c.result_code END) AS knowledge_products,
+               COUNT(DISTINCT CASE WHEN c.result_type_id = 1 THEN c.result_code END) AS policy_changes,
+               COUNT(DISTINCT c.result_code) AS total_results
+        FROM canon c
+        JOIN results_by_inititiative rbi
+             ON rbi.result_id = c.id AND rbi.initiative_role_id = 1 AND rbi.is_active = 1
         JOIN clarisa_initiatives i ON rbi.inititiative_id = i.id
-        JOIN result r ON r.id = rbi.result_id
-        WHERE r.is_active = 1 AND rbi.initiative_role_id = 1
         GROUP BY i.short_name
         ORDER BY total_results DESC;
     """
@@ -113,25 +168,28 @@ def _get_initiative_baselines(conn: sqlite3.Connection) -> list[dict]:
 
 
 def _get_irl_distribution(conn: sqlite3.Connection) -> list[dict]:
-    """Get IRL distribution per initiative.
+    """Get the IRL distribution of Innovation Developments per initiative.
 
     Returns list of dicts with keys:
         short_name, irl_7plus, irl_4to6, irl_1to3, irl_0, total
     """
-    sql = """
+    sql = _canon_cte() + """
         SELECT i.short_name,
-               SUM(CASE WHEN rid.innovation_readiness_level_id >= 18 THEN 1 ELSE 0 END) AS irl_7plus,
-               SUM(CASE WHEN rid.innovation_readiness_level_id BETWEEN 15 AND 17
-                        THEN 1 ELSE 0 END) AS irl_4to6,
-               SUM(CASE WHEN rid.innovation_readiness_level_id BETWEEN 12 AND 14
-                        THEN 1 ELSE 0 END) AS irl_1to3,
-               SUM(CASE WHEN rid.innovation_readiness_level_id = 11 THEN 1 ELSE 0 END) AS irl_0,
-               COUNT(*) AS total
-        FROM results_by_inititiative rbi
+               COUNT(DISTINCT CASE WHEN rid.innovation_readiness_level_id >= 18
+                                   THEN c.result_code END) AS irl_7plus,
+               COUNT(DISTINCT CASE WHEN rid.innovation_readiness_level_id BETWEEN 15 AND 17
+                                   THEN c.result_code END) AS irl_4to6,
+               COUNT(DISTINCT CASE WHEN rid.innovation_readiness_level_id BETWEEN 12 AND 14
+                                   THEN c.result_code END) AS irl_1to3,
+               COUNT(DISTINCT CASE WHEN rid.innovation_readiness_level_id = 11
+                                   THEN c.result_code END) AS irl_0,
+               COUNT(DISTINCT c.result_code) AS total
+        FROM canon c
+        JOIN results_by_inititiative rbi
+             ON rbi.result_id = c.id AND rbi.initiative_role_id = 1 AND rbi.is_active = 1
         JOIN clarisa_initiatives i ON rbi.inititiative_id = i.id
-        JOIN result r ON r.id = rbi.result_id
-        JOIN results_innovations_dev rid ON rid.results_id = r.id AND rid.is_active = 1
-        WHERE r.is_active = 1 AND rbi.initiative_role_id = 1
+        JOIN results_innovations_dev rid ON rid.results_id = c.id AND rid.is_active = 1
+        WHERE c.result_type_id = 7
         GROUP BY i.short_name
         ORDER BY total DESC;
     """
@@ -143,13 +201,13 @@ def _get_geographic_reach(conn: sqlite3.Connection) -> list[dict]:
 
     Returns list of dicts with keys: short_name, countries
     """
-    sql = """
+    sql = _canon_cte() + """
         SELECT i.short_name, COUNT(DISTINCT rc.country_id) AS countries
-        FROM results_by_inititiative rbi
+        FROM canon c
+        JOIN results_by_inititiative rbi
+             ON rbi.result_id = c.id AND rbi.initiative_role_id = 1 AND rbi.is_active = 1
         JOIN clarisa_initiatives i ON rbi.inititiative_id = i.id
-        JOIN result r ON r.id = rbi.result_id
-        JOIN result_country rc ON rc.result_id = r.id AND rc.is_active = 1
-        WHERE r.is_active = 1 AND rbi.initiative_role_id = 1
+        JOIN result_country rc ON rc.result_id = c.id AND rc.is_active = 1
         GROUP BY i.short_name
         ORDER BY countries DESC;
     """
@@ -157,35 +215,33 @@ def _get_geographic_reach(conn: sqlite3.Connection) -> list[dict]:
 
 
 def _get_portfolio_totals(conn: sqlite3.Connection) -> dict:
-    """Get portfolio-wide summary metrics.
+    """Get portfolio-wide summary metrics (distinct result codes, canonical set).
 
     Returns dict with keys:
         total_results, total_innovations, irl_7plus, total_countries,
         total_initiatives
     """
-    total_results = _query_scalar(conn, """
-        SELECT COUNT(*) FROM result WHERE is_active = 1;
+    cte = _canon_cte()
+    total_results = _query_scalar(conn, cte + "SELECT COUNT(*) FROM canon;")
+    total_innovations = _query_scalar(
+        conn, cte + "SELECT COUNT(*) FROM canon WHERE result_type_id = 7;"
+    )
+    irl_7plus = _query_scalar(conn, cte + """
+        SELECT COUNT(DISTINCT c.result_code)
+        FROM canon c
+        JOIN results_innovations_dev rid ON rid.results_id = c.id AND rid.is_active = 1
+        WHERE c.result_type_id = 7 AND rid.innovation_readiness_level_id >= 18;
     """)
-    total_innovations = _query_scalar(conn, """
-        SELECT COUNT(*)
-        FROM result r
-        JOIN results_innovations_dev rid ON rid.results_id = r.id AND rid.is_active = 1
-        WHERE r.is_active = 1 AND r.result_type_id = 7;
-    """)
-    irl_7plus = _query_scalar(conn, """
-        SELECT COUNT(*)
-        FROM result r
-        JOIN results_innovations_dev rid ON rid.results_id = r.id AND rid.is_active = 1
-        WHERE r.is_active = 1 AND rid.innovation_readiness_level_id >= 18;
-    """)
-    total_countries = _query_scalar(conn, """
+    total_countries = _query_scalar(conn, cte + """
         SELECT COUNT(DISTINCT rc.country_id)
-        FROM result_country rc
-        JOIN result r ON rc.result_id = r.id
-        WHERE rc.is_active = 1 AND r.is_active = 1;
+        FROM canon c
+        JOIN result_country rc ON rc.result_id = c.id AND rc.is_active = 1;
     """)
-    total_initiatives = _query_scalar(conn, """
-        SELECT COUNT(*) FROM clarisa_initiatives WHERE active = 1;
+    total_initiatives = _query_scalar(conn, cte + """
+        SELECT COUNT(DISTINCT rbi.inititiative_id)
+        FROM canon c
+        JOIN results_by_inititiative rbi
+             ON rbi.result_id = c.id AND rbi.initiative_role_id = 1 AND rbi.is_active = 1;
     """)
 
     return {
@@ -983,6 +1039,8 @@ def _format_reallocation_response(
 
     # Baseline
     lines.append("### Baseline (Current Portfolio) [PRMS-VALIDATED]")
+    lines.append(baseline_provenance())
+    lines.append("")
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
     pt = portfolio_totals
@@ -1087,6 +1145,8 @@ def _format_irl_response(
 
     # Baseline
     lines.append("### Baseline (Current Portfolio) [PRMS-VALIDATED]")
+    lines.append(baseline_provenance())
+    lines.append("")
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
     pt = portfolio_totals
@@ -1191,6 +1251,8 @@ def _format_scaling_response(
 
     # Baseline
     lines.append("### Baseline (Current Portfolio) [PRMS-VALIDATED]")
+    lines.append(baseline_provenance())
+    lines.append("")
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
     pt = portfolio_totals
@@ -1311,6 +1373,8 @@ def _format_focus_response(
 
     # Baseline
     lines.append("### Baseline (Current Portfolio) [PRMS-VALIDATED]")
+    lines.append(baseline_provenance())
+    lines.append("")
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
     pt = portfolio_totals
