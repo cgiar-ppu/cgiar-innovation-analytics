@@ -135,3 +135,122 @@ async def test_admin_is_assigned_by_configured_subject_not_email_or_claim(client
     assert (await resolve_identity({**claims, "sub": "other-subject", "role": "admin"}))["role"] == "researcher"
     monkeypatch.setattr(config, "SSO_ADMIN_SUBJECTS", ())
     assert (await resolve_identity(claims))["role"] == "researcher"
+
+
+# ---------------------------------------------------------------------------
+# Test cohorts (Lane H, 2026-09-26): bulk links for a named test group
+# ---------------------------------------------------------------------------
+
+def fragment_token(url):
+    parsed = urlparse(url)
+    assert not parsed.query and parsed.path == "/"
+    return parse_qs(parsed.fragment)["invite"][0]
+
+
+@pytest.mark.asyncio
+async def test_bulk_invitations_for_a_named_cohort(client, caplog):
+    caplog.set_level("DEBUG")
+    body = {"cohort": "  WB TTLs   Oct-2026 ", "expires_in_days": 14, "invitees": [
+        {"email": "TTL.One@worldbank.example", "name": "TTL One"},
+        {"email": "ttl.two@worldbank.example", "name": "TTL Two"},
+        {"email": "ttl.one@worldbank.example", "name": "Duplicate"},
+        {"email": "staff@cgiar.org", "name": "Staff"},
+        {"email": "not-an-email", "name": "Broken"},
+    ]}
+    before = time.time()
+    response = await client.post("/api/auth/invitations/bulk", json=body)
+    assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
+    data = response.json()
+    assert data["cohort"] == "WB TTLs Oct-2026" and data["expires_in_days"] == 14
+    assert [i["email"] for i in data["invitations"]] == ["ttl.one@worldbank.example", "ttl.two@worldbank.example"]
+    assert [e["email"] for e in data["errors"]] == ["ttl.one@worldbank.example", "staff@cgiar.org", "not-an-email"]
+    assert data["errors"][1]["error"] == "CGIAR staff should use CGIAR SSO"
+    tokens = [fragment_token(i["invitation_url"]) for i in data["invitations"]]
+    for token in tokens:  # links are returned to the admin only, never logged
+        assert token not in caplog.text
+
+    listing = {a["email"]: a for a in (await client.get("/api/auth/invitations")).json()}
+    assert listing["ttl.one@worldbank.example"]["cohort"] == "WB TTLs Oct-2026"
+    assert 13.9 * 86400 < listing["ttl.two@worldbank.example"]["expires_at"] - before < 14.1 * 86400
+    assert all(token not in str(listing) for token in tokens)
+
+    # One-use semantics unchanged; the cohort sticks to the account.
+    accepted = await client.post("/api/auth/invitation/accept", json={"token": tokens[0], "password": "long-test-password"})
+    assert accepted.status_code == 200
+    assert (await client.post("/api/auth/invitation/accept", json={"token": tokens[0], "password": "long-test-password"})).status_code == 410
+    async with get_db() as db:
+        row = await (await db.execute("SELECT cohort FROM invited_accounts WHERE user_id=?",
+                                      (accepted.json()["user"]["user_id"],))).fetchone()
+    assert row["cohort"] == "WB TTLs Oct-2026"
+
+
+@pytest.mark.asyncio
+async def test_bulk_invitations_are_admin_only_origin_checked_and_bounded(client):
+    researcher = create_access_token("sso:researcher", "Researcher", "researcher", auth_source="sso")
+    body = {"cohort": "Pilot", "invitees": [{"email": "a@example.org", "name": "A"}]}
+    assert (await client.post("/api/auth/invitations/bulk", json=body, headers={"Authorization": "Bearer " + researcher})).status_code == 403
+    assert (await client.post("/api/auth/invitations/bulk", json=body, headers={"Authorization": ""})).status_code == 401
+    assert (await client.post("/api/auth/invitations/bulk", json=body, headers={"Origin": "https://evil.example"})).status_code == 403
+    assert (await client.post("/api/auth/invitations/bulk", json={**body, "expires_in_days": 31})).status_code == 422
+    assert (await client.post("/api/auth/invitations/bulk", json={**body, "cohort": "<script>"})).status_code == 422
+    too_many = [{"email": f"u{i}@example.org", "name": f"U{i}"} for i in range(51)]
+    assert (await client.post("/api/auth/invitations/bulk", json={"invitees": too_many})).status_code == 422
+    assert (await client.post("/api/auth/invitations/bulk", json={"invitees": []})).status_code == 422
+    assert (await client.get("/api/auth/invitations")).json() == []
+
+
+@pytest.mark.asyncio
+async def test_single_invite_cohort_expiry_reissue_and_relabel(client):
+    response = await client.post("/api/auth/invitations", json={
+        "email": "r@example.org", "name": "R", "cohort": "FCDO Oct-2026", "expires_in_days": 3})
+    assert response.json()["expires_in_days"] == 3 and response.json()["cohort"] == "FCDO Oct-2026"
+    # Reissue without a cohort keeps the label (the old single-invite body still works).
+    await invite(client, "r@example.org")
+    accounts = await client.get("/api/auth/invitations")
+    assert accounts.json()[0]["cohort"] == "FCDO Oct-2026"
+    moved = await client.post("/api/auth/invitations/cohort", json={"email": "R@example.org", "cohort": "WB TTLs Oct-2026"})
+    assert moved.status_code == 200
+    assert (await client.get("/api/auth/invitations")).json()[0]["cohort"] == "WB TTLs Oct-2026"
+    assert (await client.post("/api/auth/invitations/cohort", json={"email": "nobody@example.org", "cohort": "X"})).status_code == 404
+    await client.post("/api/auth/invitations", json={"email": "r@example.org", "name": "R", "cohort": ""})
+    assert (await client.get("/api/auth/invitations")).json()[0]["cohort"] == ""
+
+
+@pytest.mark.asyncio
+async def test_revoking_a_cohort_ends_the_test_round_only_for_that_cohort(client):
+    made = (await client.post("/api/auth/invitations/bulk", json={"cohort": "Round 1", "invitees": [
+        {"email": "a@example.org", "name": "A"}, {"email": "b@example.org", "name": "B"}]})).json()
+    other = (await client.post("/api/auth/invitations/bulk", json={"cohort": "Round 2", "invitees": [
+        {"email": "c@example.org", "name": "C"}]})).json()
+    a_token, b_token = (fragment_token(i["invitation_url"]) for i in made["invitations"])
+    c_token = fragment_token(other["invitations"][0]["invitation_url"])
+    signed_in = (await client.post("/api/auth/invitation/accept", json={"token": a_token, "password": "long-test-password"})).json()["token"]
+    kept = (await client.post("/api/auth/invitation/accept", json={"token": c_token, "password": "long-test-password"})).json()["token"]
+
+    researcher = create_access_token("sso:researcher", "Researcher", "researcher", auth_source="sso")
+    assert (await client.post("/api/auth/invitations/revoke-cohort", json={"cohort": "Round 1"},
+                              headers={"Authorization": "Bearer " + researcher})).status_code == 403
+    result = await client.post("/api/auth/invitations/revoke-cohort", json={"cohort": "Round 1"})
+    assert result.json() == {"cohort": "Round 1", "revoked": 2}
+    assert verify_token(signed_in) is None                      # issued sessions end
+    assert (await client.post("/api/auth/invitation/inspect", json={"token": b_token})).status_code == 410  # unused link dies
+    assert (await client.post("/api/auth/login", json={"email": "a@example.org", "password": "long-test-password"})).status_code == 401
+    assert verify_token(kept)                                   # other cohort untouched
+    states = {a["email"]: a["enabled"] for a in (await client.get("/api/auth/invitations")).json()}
+    assert states == {"a@example.org": 0, "b@example.org": 0, "c@example.org": 1}
+
+
+@pytest.mark.asyncio
+async def test_pre_cohort_database_upgrades_in_place(client):
+    async with get_db() as db:
+        await db.execute("DROP TABLE invited_accounts")
+        await db.execute("""CREATE TABLE invited_accounts (
+          email TEXT PRIMARY KEY, user_id TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
+          password_hash TEXT, enabled INTEGER NOT NULL DEFAULT 1,
+          credential_version INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL)""")
+        await db.execute("INSERT INTO invited_accounts (email,user_id,name,created_at) VALUES ('old@example.org','invited:old','Old',0)")
+        await db.commit()
+    await store.init_invited_tables()
+    await store.init_invited_tables()  # idempotent
+    listing = (await client.get("/api/auth/invitations")).json()
+    assert listing[0]["email"] == "old@example.org" and listing[0]["cohort"] == ""
