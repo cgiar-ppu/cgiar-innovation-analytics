@@ -46,12 +46,19 @@ async def sdk_check():
 
 async def app_check():
     owner = 'dev-opus55-qa-' + str(int(time.time()))
-    token = create_access_token(owner, 'Synthetic Opus 5.5 QA', 'researcher',
+    # Opus 5.5 is admin-only on DEV (role-aware model policy): the synthetic
+    # identity is an admin, and a researcher token must NOT be offered it.
+    token = create_access_token(owner, 'Synthetic Opus 5.5 QA', 'admin',
                                 auth_source='sso', lifetime_seconds=900)
+    r_token = create_access_token(owner + '-r', 'Synthetic researcher QA', 'researcher',
+                                  auth_source='sso', lifetime_seconds=300)
     async with httpx.AsyncClient() as c:
         cfg = (await c.get(BASE + '/api/config', headers={'Authorization': 'Bearer ' + token})).json()
+        r_cfg = (await c.get(BASE + '/api/config', headers={'Authorization': 'Bearer ' + r_token})).json()
     ids = [m['id'] for m in cfg.get('selectable_models', [])]
     assert MODEL in ids, ('not selectable in /api/config', ids)
+    r_ids = [m['id'] for m in r_cfg.get('selectable_models', [])]
+    assert MODEL not in r_ids, ('researcher offered an admin-only model', r_ids)
 
     async with websockets.connect(BASE.replace('http', 'ws') + '/ws/chat?token=' + token,
                                   open_timeout=30, max_size=8 * 1024 * 1024) as ws:
@@ -82,7 +89,7 @@ async def app_check():
     tools = [e.get('tool', '') for e in events if e.get('type') == 'tool_use']
     assert '323' in text, ('expected answer missing', text[-300:])
     assert any('prms_query' in t for t in tools), ('PRMS tool was not called', tools)
-    return {'selectable': True, 'switch': 'confirmed', 'tools': tools, 'answer': 'passed',
+    return {'selectable': True, 'researcher_models': r_ids, 'switch': 'confirmed', 'tools': tools, 'answer': 'passed',
             'cost_usd': events[-1].get('estimated_cost'), 'synthetic_session': sid}
 
 
