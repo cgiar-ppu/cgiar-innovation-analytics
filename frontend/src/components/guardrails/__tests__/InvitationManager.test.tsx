@@ -9,7 +9,7 @@ let posts: { url: string; body: Record<string, unknown> }[]
 let accounts: unknown[]
 beforeEach(() => {
   posts = []
-  accounts = [{ email: 'old@worldbank.org', name: 'Old Tester', enabled: 1, activated: 1, expires_at: null, cohort: 'WB TTLs Oct-2026' }]
+  accounts = [{ email: 'old@worldbank.example', name: 'Old Tester', enabled: 1, activated: 1, expires_at: null, cohort: 'WB TTLs Oct-2026' }]
   useAuthStore.setState({ token: 'jwt', user: { userId: 'a', email: 'a@x', name: 'A', role: 'admin' } } as never)
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     if (init?.method === 'POST') {
@@ -27,12 +27,12 @@ beforeEach(() => {
 
 describe('parseInvitees', () => {
   it('reads Name <email>, email + name in either order, and bare emails; reports lines without an email', () => {
-    const { invitees, problems } = parseInvitees('Jane Doe <jane.doe@worldbank.org>\njohn.smith@fcdo.gov.uk, John Smith\nAna Ruiz; ana@wb.org\nmary-jo.lee@wb.org\n\njust a name')
+    const { invitees, problems } = parseInvitees('Jane Doe <jane.doe@worldbank.example>\njohn.smith@fcdo.example, John Smith\nAna Ruiz; ana@wb.example\nmary-jo.lee@wb.example\n\njust a name')
     expect(invitees).toEqual([
-      { email: 'jane.doe@worldbank.org', name: 'Jane Doe' },
-      { email: 'john.smith@fcdo.gov.uk', name: 'John Smith' },
-      { email: 'ana@wb.org', name: 'Ana Ruiz' },
-      { email: 'mary-jo.lee@wb.org', name: 'Mary Jo Lee' },
+      { email: 'jane.doe@worldbank.example', name: 'Jane Doe' },
+      { email: 'john.smith@fcdo.example', name: 'John Smith' },
+      { email: 'ana@wb.example', name: 'Ana Ruiz' },
+      { email: 'mary-jo.lee@wb.example', name: 'Mary Jo Lee' },
     ])
     expect(problems).toEqual(['just a name'])
   })
@@ -43,11 +43,11 @@ describe('InvitationManager', () => {
     const user = userEvent.setup()
     render(<InvitationManager />)
     await user.type(await screen.findByLabelText('Name'), 'Ext Researcher')
-    await user.type(screen.getByLabelText('External email'), 'ext@worldbank.org')
+    await user.type(screen.getByLabelText('External email'), 'ext@worldbank.example')
     await user.type(screen.getByLabelText('Test cohort (optional)'), 'WB TTLs Oct-2026')
     await user.selectOptions(screen.getByLabelText('Link valid for'), '14')
     await user.click(screen.getByRole('button', { name: 'Create invitation link' }))
-    await waitFor(() => expect(posts[0]).toEqual({ url: '/api/auth/invitations', body: { email: 'ext@worldbank.org', name: 'Ext Researcher', cohort: 'WB TTLs Oct-2026', expires_in_days: 14 } }))
+    await waitFor(() => expect(posts[0]).toEqual({ url: '/api/auth/invitations', body: { email: 'ext@worldbank.example', name: 'Ext Researcher', cohort: 'WB TTLs Oct-2026', expires_in_days: 14 } }))
     expect(screen.getByLabelText('Invitation link')).toHaveValue('https://ia.test/#invite=single')
     expect(screen.getByText(/expires in 14 days and can be used once\. No email has been sent\./)).toBeInTheDocument()
   })
@@ -56,15 +56,15 @@ describe('InvitationManager', () => {
     const user = userEvent.setup()
     render(<InvitationManager />)
     await user.click(await screen.findByRole('tab', { name: 'Several people (test group)' }))
-    await user.type(screen.getByLabelText(/People to invite/), 'Jane Doe <jane@worldbank.org>{enter}john@fcdo.gov.uk, John{enter}Staff <staff@cgiar.org>')
+    await user.type(screen.getByLabelText(/People to invite/), 'Jane Doe <jane@worldbank.example>{enter}john@fcdo.example, John{enter}Staff <staff@cgiar.org>')
     await user.type(screen.getByLabelText('Test cohort (optional)'), 'WB TTLs Oct-2026')
     await user.click(screen.getByRole('button', { name: 'Create 3 links' }))
     await waitFor(() => expect(posts[0]!.url).toBe('/api/auth/invitations/bulk'))
     expect(posts[0]!.body).toEqual({ cohort: 'WB TTLs Oct-2026', expires_in_days: 7, invitees: [
-      { email: 'jane@worldbank.org', name: 'Jane Doe' }, { email: 'john@fcdo.gov.uk', name: 'John' }, { email: 'staff@cgiar.org', name: 'Staff' }] })
+      { email: 'jane@worldbank.example', name: 'Jane Doe' }, { email: 'john@fcdo.example', name: 'John' }, { email: 'staff@cgiar.org', name: 'Staff' }] })
     const links = await screen.findByTestId('bulk-links')
     expect(links).toHaveTextContent('2 links for "WB TTLs Oct-2026"')
-    expect(screen.getByLabelText('Invitation link for jane@worldbank.org')).toHaveValue('https://ia.test/#invite=tok0')
+    expect(screen.getByLabelText('Invitation link for jane@worldbank.example')).toHaveValue('https://ia.test/#invite=tok0')
     expect(screen.getAllByRole('button', { name: /Copy link/ })).toHaveLength(2)
     expect(screen.getByRole('alert')).toHaveTextContent('staff@cgiar.org: CGIAR staff should use CGIAR SSO')
   })

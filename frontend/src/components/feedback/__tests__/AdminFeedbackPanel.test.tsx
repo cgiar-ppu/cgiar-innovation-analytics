@@ -8,7 +8,7 @@ import { useAuthStore } from '../../../stores/auth'
 const item = (over: Record<string, unknown> = {}) => ({
   id: 1, created_at: '2026-10-02T09:15:00+00:00', updated_at: '2026-10-02T09:15:00+00:00', channel: 'chat', rating: -1,
   sentiment: 'negative', comment: 'Missed the 2025 filter', expected: 'Use 2025 only', shared_question: null, shared_answer: null,
-  user_email: 'ttl@worldbank.org', user_name: 'Test TTL', role: 'researcher', cohort: 'WB TTLs Oct-2026', session_id: 's', message_id: 'r1',
+  user_email: 'ttl@worldbank.example', user_name: 'Test TTL', role: 'researcher', cohort: 'WB TTLs Oct-2026', session_id: 's', message_id: 'r1',
   model: 'claude-sonnet-5', persona: '', scope: '', app_version: 'abc1234', environment: 'dev', ...over,
 })
 const list = { environment: 'dev', total: 2, returned: 2, counts: { positive: 1, negative: 1, neutral: 0 }, cohorts: ['WB TTLs Oct-2026'],

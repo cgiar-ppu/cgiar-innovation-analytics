@@ -128,7 +128,7 @@ export default function InvitationManager() {
           <input required type="email" value={email} onChange={e => setEmail(e.target.value)} className={inputClass} />
         </label>
       </> : <label className="w-full text-xs text-[var(--text-muted)]">People to invite (one per line: <code>Name &lt;email&gt;</code>, <code>email, Name</code> or just the email)
-        <textarea required rows={5} value={bulkText} onChange={e => setBulkText(e.target.value)} className={inputClass + ' font-mono'} placeholder={'Jane Doe <jane.doe@worldbank.org>\njohn.smith@fcdo.gov.uk, John Smith'} />
+        <textarea required rows={5} value={bulkText} onChange={e => setBulkText(e.target.value)} className={inputClass + ' font-mono'} placeholder={'Jane Doe <jane.doe@worldbank.example>\njohn.smith@fcdo.example, John Smith'} />
         <span className="mt-1 block">{parsed.invitees.length} recognised{parsed.problems.length ? ` · ${parsed.problems.length} line(s) without an email will be skipped` : ''} · up to 50 at a time</span>
       </label>}
       <label className="min-w-48 flex-1 text-xs text-[var(--text-muted)]">Test cohort (optional)
