@@ -24,6 +24,8 @@ export interface UsageDay {
   errors?: number
   by_role: Record<string, UsageBucket>
   by_model: Record<string, UsageBucket>
+  /** Invited-tester cohort label → questions/cost (Lane H; absent before). */
+  by_cohort?: Record<string, UsageBucket>
   voice: { sessions: number; minutes: number }
   /** `recorded` (per-question ledger), `estimated` (from chat history), `mixed` or `none`. */
   source: 'recorded' | 'estimated' | 'mixed' | 'none' | string

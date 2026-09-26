@@ -25,16 +25,20 @@ const usd = (n: number | null | undefined) => `$${(n ?? 0).toFixed(2)}`
 export function usageToCsv(usage: AdminUsage): string {
   const roles = new Set<string>()
   const models = new Set<string>()
+  const cohorts = new Set<string>()
   for (const d of usage.daily) {
     Object.keys(d.by_role ?? {}).forEach((r) => roles.add(r))
     Object.keys(d.by_model ?? {}).forEach((m) => models.add(m))
+    Object.keys(d.by_cohort ?? {}).forEach((c) => cohorts.add(c))
   }
   const roleList = [...roles].sort()
   const modelList = [...models].sort()
+  const cohortList = [...cohorts].sort()
   const header = [
     'environment', 'date', 'questions', 'chats', 'users', 'cost_usd', 'errors',
     ...roleList.flatMap((r) => [`questions_${r}`, `cost_usd_${r}`]),
     ...modelList.flatMap((m) => [`questions_${m}`, `cost_usd_${m}`]),
+    ...cohortList.flatMap((c) => [`questions_cohort_${c}`, `cost_usd_cohort_${c}`]),
     'voice_sessions', 'voice_minutes', 'source',
   ]
   const esc = (v: unknown) => {
@@ -45,9 +49,24 @@ export function usageToCsv(usage: AdminUsage): string {
     usage.environment, d.date, d.turns, d.sessions, d.users, (d.cost_usd ?? 0).toFixed(4), d.errors ?? 0,
     ...roleList.flatMap((r) => [d.by_role?.[r]?.turns ?? 0, (d.by_role?.[r]?.cost_usd ?? 0).toFixed(4)]),
     ...modelList.flatMap((m) => [d.by_model?.[m]?.turns ?? 0, (d.by_model?.[m]?.cost_usd ?? 0).toFixed(4)]),
+    ...cohortList.flatMap((c) => [d.by_cohort?.[c]?.turns ?? 0, (d.by_cohort?.[c]?.cost_usd ?? 0).toFixed(4)]),
     d.voice?.sessions ?? 0, (d.voice?.minutes ?? 0).toFixed(1), d.source,
   ])
   return [header, ...rows].map((row) => row.map(esc).join(',')).join('\n') + '\n'
+}
+
+/** Questions and cost per invited-tester cohort over the whole period (QA-4 D14). */
+export function cohortTotals(usage: AdminUsage): [string, { turns: number; cost_usd: number }][] {
+  const totals = new Map<string, { turns: number; cost_usd: number }>()
+  for (const d of usage.daily) {
+    for (const [c, b] of Object.entries(d.by_cohort ?? {})) {
+      const t = totals.get(c) ?? { turns: 0, cost_usd: 0 }
+      t.turns += b.turns ?? 0
+      t.cost_usd += b.cost_usd ?? 0
+      totals.set(c, t)
+    }
+  }
+  return [...totals.entries()].sort((a, b) => b[1].cost_usd - a[1].cost_usd || a[0].localeCompare(b[0]))
 }
 
 export default function UsagePanel() {
@@ -71,6 +90,7 @@ export default function UsagePanel() {
   useEffect(() => { void load(days) }, [days, load])
 
   const rows = useMemo(() => [...(usage?.daily ?? [])].reverse(), [usage])
+  const cohorts = useMemo(() => (usage ? cohortTotals(usage) : []), [usage])
 
   const downloadCsv = () => {
     if (!usage) return
@@ -139,6 +159,19 @@ export default function UsagePanel() {
             ))}
           </div>
 
+          {cohorts.length > 0 && (
+            <div className="mb-4" data-testid="usage-cohorts">
+              <p className="text-[10px] text-[var(--text-muted)] mb-1">By test cohort (this period)</p>
+              <ul className="flex flex-wrap gap-2 text-xs text-[var(--text)]">
+                {cohorts.map(([c, t]) => (
+                  <li key={c} className="bg-[var(--surface-1)] rounded-lg px-2.5 py-1">
+                    <span className="font-medium">{c}</span>: {t.turns} questions · {usd(t.cost_usd)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-[var(--text)]" data-testid="usage-table">
               <thead className="text-[var(--text-muted)] text-left">
@@ -149,6 +182,7 @@ export default function UsagePanel() {
                   <th className="py-1 pr-3 font-medium">Cost</th>
                   <th className="py-1 pr-3 font-medium">By role</th>
                   <th className="py-1 pr-3 font-medium">By model</th>
+                  <th className="py-1 pr-3 font-medium">By cohort</th>
                   <th className="py-1 pr-3 font-medium">Voice</th>
                   <th className="py-1 font-medium">Basis</th>
                 </tr>
@@ -165,6 +199,9 @@ export default function UsagePanel() {
                     </td>
                     <td className="py-1 pr-3">
                       {Object.entries(d.by_model ?? {}).map(([m, b]) => `${m} ${b.turns}`).join(' · ') || '—'}
+                    </td>
+                    <td className="py-1 pr-3">
+                      {Object.entries(d.by_cohort ?? {}).map(([c, b]) => `${c} ${b.turns} · ${usd(b.cost_usd)}`).join(' | ') || '—'}
                     </td>
                     <td className="py-1 pr-3">{d.voice?.minutes ? `${d.voice.minutes.toFixed(1)} min` : '—'}</td>
                     <td className="py-1 text-[var(--text-muted)]">{d.source}</td>

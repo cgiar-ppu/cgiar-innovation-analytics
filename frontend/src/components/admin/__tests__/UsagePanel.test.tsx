@@ -88,3 +88,39 @@ describe('usageToCsv', () => {
     expect(lines[1]!.split(',')[header.indexOf('cost_usd_admin')]).toBe('0.0000')
   })
 })
+
+describe('cohort split (QA-4 D14)', () => {
+  const WITH_COHORTS: AdminUsage = {
+    ...USAGE,
+    daily: [
+      { ...USAGE.daily[0]!, by_cohort: { 'WB TTLs Oct-2026': { turns: 1, cost_usd: 0.2, users: 1 } } },
+      { ...USAGE.daily[1]!, by_cohort: { 'WB TTLs Oct-2026': { turns: 2, cost_usd: 0.4, users: 1 },
+        'QA4 cohort Sep-2026': { turns: 1, cost_usd: 0.044, users: 1 } } },
+    ],
+  }
+
+  beforeEach(() => vi.restoreAllMocks())
+
+  it('shows per-cohort totals for the period and per day', async () => {
+    vi.spyOn(api, 'getAdminUsage').mockResolvedValue(WITH_COHORTS)
+    render(<UsagePanel />)
+    const box = await screen.findByTestId('usage-cohorts')
+    expect(box).toHaveTextContent('WB TTLs Oct-2026: 3 questions · $0.60')
+    expect(box).toHaveTextContent('QA4 cohort Sep-2026: 1 questions · $0.04')
+    const rows = within(screen.getByTestId('usage-table')).getAllByRole('row').slice(1)
+    expect(rows[0]).toHaveTextContent('QA4 cohort Sep-2026 1 · $0.04')
+  })
+
+  it('shows no cohort box when nobody from a cohort used the app', async () => {
+    vi.spyOn(api, 'getAdminUsage').mockResolvedValue(USAGE)
+    render(<UsagePanel />)
+    await screen.findByTestId('usage-totals')
+    expect(screen.queryByTestId('usage-cohorts')).toBeNull()
+  })
+
+  it('adds per-cohort CSV columns', () => {
+    const header = usageToCsv(WITH_COHORTS).split('\n')[0]!
+    expect(header).toContain('questions_cohort_QA4 cohort Sep-2026')
+    expect(header).toContain('cost_usd_cohort_WB TTLs Oct-2026')
+  })
+})
