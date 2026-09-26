@@ -14,6 +14,7 @@ Queries filter to innovation-related result types only:
 Data is cached in-memory for 5 minutes since the PRMS snapshot is static.
 """
 
+import asyncio
 import logging
 import os
 from synapsis.prms_snapshot import get_snapshot_info, resolve_db_path
@@ -103,18 +104,73 @@ def _apply_phase_scope(conn: sqlite3.Connection) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Method notes (client asks: Allison Poulos 18-Sep, Nicoleta Trifa 14-Sep)
+# ---------------------------------------------------------------------------
+# Returned with every payload under ``method`` and shown in the dashboard's info
+# popovers. No dates here: the snapshot dates come from ``get_snapshot_info()``.
+DATA_SOURCE_NOTE = (
+    "Source: CGIAR PRMS Reporting (the Performance and Results Management System). "
+    "The figures are computed from a published snapshot of the PRMS reporting "
+    "database; the extraction date and the data-as-of date are shown with the "
+    "figures. Results reported or changed in PRMS after that date are not included."
+)
+QUALITY_GATE_NOTE = (
+    "Only quality-assured results are counted: W1/W2 (pooled) results that are "
+    "'Quality Assessed' in PRMS, plus W3/bilateral results that are 'Approved'. "
+    "Each innovation is counted once by its PRMS result code, and reporting phases "
+    "that are still open are excluded."
+)
+BILATERAL_QA_NOTE = (
+    "W3/bilateral innovations follow a different QA approach: they are not QA'd in "
+    "PRMS. They are quality-assured at Center level only, and no further control or "
+    "check has been done on the bilateral reported innovations. They are shown "
+    "separately (W1/W2 + bilateral) wherever they are included."
+)
+ALL_YEARS_NOTE = (
+    "'All years' covers every closed reporting phase and counts each innovation "
+    "once, at its latest quality-assured report. Selecting 2022–2025 instead counts "
+    "every innovation that was quality-assured in any of those years, so it can be "
+    "slightly higher: an innovation later re-reported as a different result type "
+    "(for example as an innovation use) counts in the year selection but not in "
+    "'All years'. The other cards are the same in both views."
+)
+YEAR_SCOPE_NOTE = (
+    "A year selection counts innovations 'active' in that year: every innovation "
+    "with a quality-assured report in the year. Selecting several years counts "
+    "innovations active in ANY of them, once each — a union, never a sum. Per-year "
+    "counts reflect how many innovations were reported in each cycle; they are not "
+    "a growth series, because reporting coverage differs between phases."
+)
+
+
+# ---------------------------------------------------------------------------
 # SQL Queries
 # ---------------------------------------------------------------------------
 
-# All-years total results KPI.
-# FIX (wave 2, F-3): added `source='Result' AND status_id=2` so the all-years
-# card uses the same QAed definition as its per-year twin
-# (_SQL_YEAR_TOTAL_RESULTS). Previously is_active=1-only returned 2,759, which
-# counted unQAed + bilateral rows the per-year cards exclude; the aligned
-# QAed-only count is 2,274.
-_SQL_TOTAL_RESULTS = """
+# ONE QUALITY GATE FOR EVERY KPI (L2-02, 2026-09-26).
+# Every all-years KPI and chart bucket now uses the SAME default quality gate as
+# the per-year cards: W1/W2 "Quality Assessed" OR W3/bilateral "Approved".
+#   ((source='Result' AND status_id=2) OR (source='API' AND status_id=6))
+# Before this change the all-years cards mixed three definitions: Total Results,
+# Countries and Initiatives were W1/W2-only (bilateral excluded) while Uses and
+# Packages had NO status filter at all (Editing, Submitted, Discontinued and
+# bilateral *Rejected* records counted). On the 13-Sep-2026 snapshot:
+#   Total results 2,274 -> 2,553 · Innovations in use 675 -> 609
+#   Innovation packages 96 -> 74 · Countries 117 -> 118 · Initiatives 54 -> 54
+# and the pie (1,852 + 609 + 74 = 2,535) no longer exceeds the Total Results card.
+# "All years" = every CLOSED reporting phase (2022–2025 today), so these KPIs now
+# equal the "2022–2025" selection. The ONE deliberate difference is the
+# Innovations card (see _SQL_TOTAL_INNOVATIONS): 1,852 counts each innovation
+# once at its latest quality-assured report, whereas selecting 2022–2025 counts
+# every code that was a quality-assured Innovation Development in any of those
+# years (1,885; the 33 extra codes were later re-reported as another result type).
+_QUALITY_GATE = "((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))"
+_QUALITY_GATE_R = "((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))"
+
+# All-years total results KPI (types 2, 7, 10; both funding windows).
+_SQL_TOTAL_RESULTS = f"""
 SELECT COUNT(DISTINCT result_code) FROM result
-WHERE is_active = 1 AND source = 'Result' AND status_id = 2
+WHERE is_active = 1 AND {_QUALITY_GATE}
   AND result_type_id IN (2, 7, 10);
 """
 
@@ -156,51 +212,43 @@ SELECT COUNT(DISTINCT result_code) FROM result
 WHERE result_type_id = 7 AND source = 'API' AND status_id = 6 AND is_active = 1;
 """
 
-# Canonical innovation-use count: count by result_type_id (type 2) on the
-# result table. The previous results_innovations_use join undercounted
-# (488 vs 669) for the same reason as above.
-# NOTE: This no-year query uses is_active=1 only (no status_id filter), which
-# is less strict than the year-scoped _SQL_YEAR_USES (status_id=2). The
-# canonical benchmark for all-years Innovation Use has not been established, so
-# the filter mismatch is flagged but not changed here.
-_SQL_INNOVATION_USES = """
+# All-years innovation-use count: distinct type-2 codes that passed the quality
+# gate in any closed phase (L2-02: previously is_active=1 only = 675, which
+# counted Editing/Submitted/Discontinued and bilateral Rejected records).
+_SQL_INNOVATION_USES = f"""
 SELECT COUNT(DISTINCT result_code) FROM result
-WHERE is_active = 1 AND result_type_id = 2;
+WHERE is_active = 1 AND {_QUALITY_GATE} AND result_type_id = 2;
 """
 
-# All-years active initiatives KPI.
-# FIX (wave 2, F-3): added `source='Result' AND status_id=2` to match the
-# per-year _SQL_YEAR_INITIATIVES definition. (Count is unchanged at 54 in this
-# DB, but the filter is now consistent with the per-year card.)
-_SQL_ACTIVE_INITIATIVES = """
+# All-years active initiatives KPI — same quality gate as the per-year card.
+_SQL_ACTIVE_INITIATIVES = f"""
 SELECT COUNT(DISTINCT i.id)
 FROM clarisa_initiatives i
 JOIN results_by_inititiative rbi ON rbi.inititiative_id = i.id
 JOIN result r ON r.id = rbi.result_id
-WHERE r.is_active = 1 AND r.source = 'Result' AND r.status_id = 2
+WHERE r.is_active = 1 AND {_QUALITY_GATE_R}
   AND r.result_type_id IN (2, 7, 10);
 """
 
-# All-years countries-covered KPI.
-# FIX (wave 2, F-3): added `source='Result' AND status_id=2` to match the
-# per-year _SQL_YEAR_COUNTRIES definition. Previously is_active=1-only returned
-# 124; the aligned QAed-only count is 117.
+# All-years countries-covered KPI — same quality gate as the per-year card
+# (both funding windows; L2-02: was W1/W2-only = 117, now 118).
 # Geography note (Cheatsheet rule 5): this is a distinct-country count on
 # result_country and is correct as a country metric. There is no region/"Africa"
 # slicer in this endpoint, so the country-OR-region UNION rule is not in play
 # here; if such a slicer is ever added, it MUST implement that UNION.
-_SQL_COUNTRIES_COVERED = """
+_SQL_COUNTRIES_COVERED = f"""
 SELECT COUNT(DISTINCT rc.country_id)
 FROM result_country rc
 JOIN result r ON r.id = rc.result_id
 WHERE r.is_active = 1 AND rc.is_active = 1
-  AND r.source = 'Result' AND r.status_id = 2
+  AND {_QUALITY_GATE_R}
   AND r.result_type_id IN (2, 7, 10);
 """
 
-_SQL_INNOVATION_PACKAGES = """
+# All-years innovation packages — quality gate (L2-02: was is_active=1 only = 96).
+_SQL_INNOVATION_PACKAGES = f"""
 SELECT COUNT(DISTINCT result_code) FROM result
-WHERE is_active = 1 AND result_type_id = 10;
+WHERE is_active = 1 AND {_QUALITY_GATE} AND result_type_id = 10;
 """
 
 # All-years results-by-type chart.
@@ -213,14 +261,14 @@ WHERE is_active = 1 AND result_type_id = 10;
 #   = 1,630 W1/W2, PLUS bilateral W3 (source='API', status_id=6) = 222.
 #   Chart bucket = 1,852 = total_innovations KPI. Fully canonicalized. ✅
 #
-# - Innovation Use (type 2): naive is_active=1 count, matching
-#   _SQL_INNOVATION_USES. Chart bucket = 675 = innovation_uses KPI. The
-#   canonical (dedup + status_id=2) count yields 550, and the export yields
-#   ~624. These divergences are a known open item (see prms_data_guide.md
-#   § Open Items). Using naive here keeps chart and KPI in sync.
+# - Innovation Use (type 2): quality-gated distinct codes, matching
+#   _SQL_INNOVATION_USES (609 on the 13-Sep-2026 snapshot; was a naive
+#   is_active=1 count of 675 before L2-02). The phase-chain canon for type 2
+#   (550) remains an open item (prms_data_guide.md § Open Items).
 #
-# - Innovation Package (type 10): naive is_active=1 count, matching
-#   _SQL_INNOVATION_PACKAGES. Chart bucket = 96 = innovation_packages KPI.
+# - Innovation Package (type 10): quality-gated distinct codes, matching
+#   _SQL_INNOVATION_PACKAGES (74; was a naive 96 before L2-02).
+#   Historical note on why the phase-chain canon is not used for type 10:
 #   CORRECTION (wave 2, F-4): the previous comment here claimed "the canonical
 #   (dedup + status_id=2) count is 0 because no type-10 rows satisfy
 #   source='Result' AND status_id=2." That is FACTUALLY WRONG. In this DB there
@@ -237,9 +285,9 @@ WHERE is_active = 1 AND result_type_id = 10;
 #   # OPEN ITEM (OI-3 / OI-4): the correct canonical per-year/all-years type-10
 #   (and type-2) figure is genuinely undecided — either extend `ord` to cover
 #   versions {2,5,7} (which would also move the type-2 canon count) or use a
-#   non-phase dedup for these types. Do NOT invent a number; the naive
-#   is_active=1 counts are used here intentionally to keep chart == KPI.
-_SQL_RESULTS_BY_TYPE = """
+#   non-phase dedup for these types. Do NOT invent a number; the quality-gated
+#   distinct-code counts are used here so chart == KPI.
+_SQL_RESULTS_BY_TYPE = f"""
 WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
 cand AS (
     SELECT r.result_code, r.id, r.result_type_id, o.o AS phord
@@ -264,11 +312,11 @@ SELECT 'Innovation Development' AS type,
 UNION ALL
 SELECT 'Innovations in use' AS type,
     (SELECT COUNT(DISTINCT result_code) FROM result
-     WHERE is_active = 1 AND result_type_id = 2) AS count
+     WHERE is_active = 1 AND {_QUALITY_GATE} AND result_type_id = 2) AS count
 UNION ALL
 SELECT 'Innovation Package' AS type,
     (SELECT COUNT(DISTINCT result_code) FROM result
-     WHERE is_active = 1 AND result_type_id = 10) AS count
+     WHERE is_active = 1 AND {_QUALITY_GATE} AND result_type_id = 10) AS count
 ORDER BY count DESC;
 """
 
@@ -400,14 +448,23 @@ canon AS (
     SELECT result_code, id, result_type_id FROM canon_w12
     UNION ALL
     SELECT result_code, id, result_type_id FROM canon_bilateral
+),
+-- One level per code (L2-03 guard): the canon is one row per code, and the
+-- ROW_NUMBER keeps it that way even if a row ever carries two IRL records.
+ranked_irl AS (
+    SELECT cn.result_code, cirl.name AS level, cirl.id AS level_id,
+           ROW_NUMBER() OVER (PARTITION BY cn.result_code
+                              ORDER BY cn.id DESC, rid.result_innovation_dev_id DESC) AS rn
+    FROM canon cn
+    JOIN results_innovations_dev rid ON rid.results_id = cn.id AND rid.is_active = 1
+    JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
+    WHERE cn.result_type_id = 7
 )
-SELECT cirl.name AS level, COUNT(DISTINCT cn.result_code) AS count
-FROM canon cn
-JOIN results_innovations_dev rid ON rid.results_id = cn.id AND rid.is_active = 1
-JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
-WHERE cn.result_type_id = 7
-GROUP BY cirl.name, cirl.id
-ORDER BY cirl.id;
+SELECT level, COUNT(*) AS count
+FROM ranked_irl
+WHERE rn = 1
+GROUP BY level, level_id
+ORDER BY level_id;
 """
 
 # All-years top portfolio entities (Science Programs / Initiatives).
@@ -644,17 +701,36 @@ ORDER BY t.total DESC, level_id;
 # results_innovations_dev drops any code (W1/W2 or bilateral) with no IRL
 # record, so bilateral innovations that DO carry IRL (e.g. code 28583, IRL 9)
 # are counted; never pre-filter to source='Result'.
+#
+# L2-03 (2026-09-26): each innovation is counted ONCE, at its LATEST readiness
+# level within the selection (the same `ranked_irl` rule as the top-countries
+# chart). Grouping `COUNT(DISTINCT result_code)` by level used to count an
+# innovation whose level changed between the selected years once per level:
+# the 2024+2025 bars summed to 1,813 for 1,630 innovations, 2022–2025 to 2,531
+# for 1,885. Single-year views are unchanged.
 _SQL_YEAR_IRL_DISTRIBUTION = """
-SELECT cirl.name AS level, COUNT(DISTINCT r.result_code) AS count
-FROM result r
-JOIN results_innovations_dev rid ON rid.results_id = r.id AND rid.is_active = 1
-JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
-WHERE r.result_type_id = 7
-  AND r.is_active = 1
-  AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
-  AND r.reported_year_id IN (__YEARS__)
-GROUP BY cirl.name, cirl.id
-ORDER BY cirl.id;
+WITH scope AS (
+    SELECT r.id, r.result_code, r.reported_year_id
+    FROM result r
+    WHERE r.result_type_id = 7
+      AND r.is_active = 1
+      AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
+      AND r.reported_year_id IN (__YEARS__)
+),
+ranked_irl AS (
+    SELECT s.result_code, cirl.name AS level, cirl.id AS level_id,
+           ROW_NUMBER() OVER (PARTITION BY s.result_code
+                              ORDER BY s.reported_year_id DESC, s.id DESC,
+                                       rid.result_innovation_dev_id DESC) AS rn
+    FROM scope s
+    JOIN results_innovations_dev rid ON rid.results_id = s.id AND rid.is_active = 1
+    JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
+)
+SELECT level, COUNT(*) AS count
+FROM ranked_irl
+WHERE rn = 1
+GROUP BY level, level_id
+ORDER BY level_id;
 """
 
 # Year-scoped top portfolio entities (F1 + F14). Same alive-in-year type-7
@@ -909,7 +985,10 @@ def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
         cur = conn.cursor()
 
         # -- KPIs (each wrapped individually so partial results are possible) --
-        kpis: dict[str, int] = {}
+        # A KPI whose query fails is returned as null (None), never 0, so the UI
+        # can say "unavailable" instead of showing a zero that looks real (L2-12).
+        kpis: dict[str, Optional[int]] = {}
+        kpi_errors: list[str] = []
         if is_year:
             kpi_queries = {
                 "total_results": _SQL_YEAR_TOTAL_RESULTS,
@@ -933,27 +1012,34 @@ def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
                 kpis[key] = _scalar(cur, sql(kpi_sql), params)
             except sqlite3.Error as exc:
                 logger.error("KPI query '%s' failed: %s", key, exc)
-                kpis[key] = 0
+                kpis[key] = None
+                kpi_errors.append(key)
 
         # Add W3/bilateral to total_innovations so the headline reconciles with
         # per-year views in both branches:
         #   per-year:  W1/W2 alive-in-year (e.g. 963) + bilateral for that year (222) = 1,185
         #   all-years: W1/W2 latest-dedup (1,630) + bilateral all years (222) = 1,852
-        # For per-year responses, also expose the W1/W2 and bilateral components
-        # as separate callout fields so the UI can show the funding-source breakdown.
+        # Both branches also expose the W1/W2 and bilateral components as
+        # separate callout fields so the UI can show the funding-source
+        # breakdown and the bilateral QA note (all-years: 1,630 + 222 = 1,852).
         bilateral_sql = _SQL_YEAR_BILATERAL if is_year else _SQL_ALL_YEARS_BILATERAL
         bilateral_label = "year_bilateral" if is_year else "all_years_bilateral"
+        w1w2 = kpis.get("total_innovations")
         try:
             bilateral_count = _scalar(cur, sql(bilateral_sql), params)
-            if is_year:
-                kpis["total_innovations_w1w2"] = kpis.get("total_innovations", 0)
-                kpis["total_innovations_bilateral"] = bilateral_count
-            kpis["total_innovations"] += bilateral_count
         except sqlite3.Error as exc:
             logger.error("KPI query '%s' failed: %s", bilateral_label, exc)
-            if is_year:
-                kpis["total_innovations_w1w2"] = kpis.get("total_innovations", 0)
-                kpis["total_innovations_bilateral"] = 0
+            bilateral_count = None
+            kpi_errors.append("total_innovations_bilateral")
+        kpis["total_innovations_w1w2"] = w1w2
+        kpis["total_innovations_bilateral"] = bilateral_count
+        # The headline is only stated when BOTH components are known — a
+        # W1/W2-only number must never masquerade as the combined total.
+        kpis["total_innovations"] = (
+            w1w2 + bilateral_count if w1w2 is not None and bilateral_count is not None else None
+        )
+        if kpis["total_innovations"] is None and "total_innovations" not in kpi_errors:
+            kpi_errors.append("total_innovations")
 
         # -- Charts --
         charts: dict[str, Any] = {}
@@ -1063,6 +1149,16 @@ def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
             "snapshot": get_snapshot_info(_PRMS_DB_PATH).to_dict(),
             # True when open reporting phases were excluded from every figure above.
             "closed_phases_only": not _INCLUDE_OPEN_PHASES,
+            # KPI keys whose query failed (their value is null, not 0).
+            "kpi_errors": kpi_errors,
+            # Plain-language method notes the UI shows in its info popovers, so
+            # the numbers and their explanation come from the same place.
+            "method": {
+                "data_source": DATA_SOURCE_NOTE,
+                "quality_gate": QUALITY_GATE_NOTE,
+                "bilateral_qa": BILATERAL_QA_NOTE,
+                "scope": ALL_YEARS_NOTE if not is_year else YEAR_SCOPE_NOTE,
+            },
         }
     finally:
         conn.close()
@@ -1156,9 +1252,11 @@ async def prms_dashboard_stats(
     if cache_key in _cache and (now - _cache_ts.get(cache_key, 0.0)) < _CACHE_TTL:
         return _cache[cache_key]
 
-    # Fetch fresh data
+    # Fetch fresh data. The SQLite work is synchronous, so it runs in a worker
+    # thread: a slow all-years query must never freeze every chat stream and
+    # health check on the event loop (L2-12).
     try:
-        data = _fetch_prms_data(years=selected)
+        data = await asyncio.to_thread(_fetch_prms_data, selected)
     except FileNotFoundError as exc:
         logger.error("PRMS database unavailable: %s", exc)
         return JSONResponse(
