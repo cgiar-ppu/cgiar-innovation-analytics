@@ -46,6 +46,7 @@ from synapsis.config import IS_MACOS
 _STANDARD_TOOLS: list[str] = [
     "Read", "Glob", "Grep", "WebSearch", "WebFetch",
     "mcp__synapsis__create_document",
+    "mcp__synapsis__read_uploaded_file",
 ]
 
 _PRMS_TOOLS: list[str] = _STANDARD_TOOLS + ["mcp__synapsis__prms_query"]

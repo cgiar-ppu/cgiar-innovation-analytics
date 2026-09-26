@@ -95,6 +95,7 @@ IA_MCP_TOOLS: list[str] = [
     "mcp__synapsis__partner_identification",
     "mcp__synapsis__html_dashboard",
     "mcp__synapsis__create_document",
+    "mcp__synapsis__read_uploaded_file",  # owner-checked reader for this user's uploads
     "mcp__synapsis__history_search",
     "mcp__synapsis__history_retrieve",
     "mcp__synapsis__history_index",

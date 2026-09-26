@@ -24,6 +24,7 @@ from synapsis.tools.scenario_analysis import scenario_analysis
 from synapsis.tools.partner_identification import partner_identification
 from synapsis.tools.html_dashboard import html_dashboard
 from synapsis.tools.create_document import create_document
+from synapsis.tools.read_uploaded_file import read_uploaded_file  # Lane C 3b: xlsx/docx/pdf uploads
 
 #: The tools exposed to the agent. agent_options.IA_MCP_TOOLS must match
 #: (tests/test_agent_sandbox.py pins both).
@@ -39,6 +40,7 @@ IA_TOOLS = [
     partner_identification,
     html_dashboard,
     create_document,
+    read_uploaded_file,
 ]
 
 synapsis_mcp = create_sdk_mcp_server(
