@@ -107,6 +107,40 @@ describe('PersonaPicker', () => {
     expect(usePersonaStore.getState().getActivePersona()).toBeUndefined()
   })
 
+  it('groups audience personas first and says "Written for" when one is picked', async () => {
+    const AUDIENCE: PersonaOption = {
+      id: 'funder_investor',
+      name: 'Funder / investor',
+      description: 'Plain-language answers for funders and investors.',
+      type: 'Audience',
+      color: 'hsl(35, 80%, 50%)',
+      tags: ['audience'],
+    }
+    vi.spyOn(api, 'get').mockResolvedValue({ personas: [AUDIENCE, ...OPTIONS], default: null } as never)
+    render(<PersonaPicker />)
+    await waitFor(() => expect(usePersonaStore.getState().options).toHaveLength(3))
+
+    fireEvent.click(screen.getByTestId('persona-toggle'))
+    const menu = screen.getByTestId('persona-menu')
+    const text = menu.textContent ?? ''
+    expect(screen.getByTestId('persona-group-audience')).toHaveTextContent('Write the answer for')
+    expect(screen.getByTestId('persona-group-specialists')).toHaveTextContent('Or ask a specialist')
+    expect(text.indexOf('Funder / investor')).toBeLessThan(text.indexOf('PRMS Data Analyst'))
+
+    fireEvent.click(screen.getByTestId('persona-option-funder_investor'))
+    expect(usePersonaStore.getState().getActivePersona()).toBe('funder_investor')
+    expect(screen.getByTestId('persona-active-summary')).toHaveTextContent('Written for Funder / investor')
+  })
+
+  it('keeps "Answered by" for a specialist and shows no group headings without audiences', async () => {
+    render(<PersonaPicker />)
+    await waitFor(() => expect(usePersonaStore.getState().options).toHaveLength(2))
+    fireEvent.click(screen.getByTestId('persona-toggle'))
+    expect(screen.queryByTestId('persona-group-audience')).toBeNull()
+    fireEvent.click(screen.getByTestId('persona-option-prms_data_analyst'))
+    expect(screen.getByTestId('persona-active-summary')).toHaveTextContent('Answered by PRMS Data Analyst')
+  })
+
   it('survives an options-load failure without blocking the chat', async () => {
     vi.spyOn(api, 'get').mockRejectedValue(new Error('offline'))
     render(<PersonaPicker />)

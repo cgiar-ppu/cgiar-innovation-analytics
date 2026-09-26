@@ -93,6 +93,45 @@ describe('chat store', () => {
   })
 
   // -----------------------------------------------------------------------
+  // handleServerMessage — text_links (result codes linked server-side)
+  // -----------------------------------------------------------------------
+  const RAW = 'Dairy genomics R1003 is at IRL 9.'
+  const LINKED =
+    'Dairy genomics [R1003](https://reporting.cgiar.org/reports/result-details/1003?phase=6) is at IRL 9.'
+
+  it('test_text_links_swaps_the_live_streaming_buffer_including_pending_deltas', () => {
+    const { handleServerMessage } = useChatStore.getState()
+    handleServerMessage({ type: 'text', content: 'Dairy genomics R10' })
+    handleServerMessage({ type: 'text', content: '03 is at IRL 9.' }) // still RAF-pending
+    handleServerMessage({ type: 'text_links', original: RAW, content: LINKED })
+    expect(useChatStore.getState().streamingText).toBe(LINKED)
+  })
+
+  it('test_text_links_swaps_a_finalized_assistant_message', () => {
+    useChatStore.setState({
+      messages: [
+        { id: 'a1', role: 'assistant', content: RAW, timestamp: 1 },
+        { id: 't1', role: 'tool_use', content: '', timestamp: 2, tool: 'x', toolUseId: 'tu' },
+      ],
+    })
+    useChatStore.getState().handleServerMessage({ type: 'text_links', original: RAW, content: LINKED })
+    const { messages } = useChatStore.getState()
+    expect(messages[0]?.content).toBe(LINKED)
+    expect(messages[1]?.role).toBe('tool_use')
+  })
+
+  it('test_text_links_without_a_match_is_a_no_op', () => {
+    useChatStore.setState({
+      messages: [{ id: 'a1', role: 'assistant', content: 'something else', timestamp: 1 }],
+      streamingText: 'other text',
+    })
+    useChatStore.getState().handleServerMessage({ type: 'text_links', original: RAW, content: LINKED })
+    const s = useChatStore.getState()
+    expect(s.messages[0]?.content).toBe('something else')
+    expect(s.streamingText).toBe('other text')
+  })
+
+  // -----------------------------------------------------------------------
   // handleServerMessage — tool_use
   // -----------------------------------------------------------------------
   it('test_handleServerMessage_tool_use', () => {

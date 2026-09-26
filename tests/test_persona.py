@@ -23,7 +23,11 @@ import pytest
 
 from synapsis.agents import SUBAGENTS
 from synapsis.persona import (
+    AUDIENCE_TYPE,
     PersonaValidationError,
+    audience_persona_ids,
+    is_audience_persona,
+    specialist_persona_ids,
     apply_persona_to_message,
     describe_persona,
     normalize_persona,
@@ -39,10 +43,12 @@ from synapsis.persona import (
 # The selectable list
 # ---------------------------------------------------------------------------
 
-def test_selectable_ids_are_base_builtins_only():
+def test_selectable_ids_are_audience_personas_plus_base_builtins():
     ids = selectable_persona_ids()
     assert ids, "the picker must offer at least one specialist"
-    assert all(i in SUBAGENTS for i in ids)
+    assert ids == audience_persona_ids() + specialist_persona_ids()
+    assert all(i in SUBAGENTS for i in specialist_persona_ids())
+    assert not any(i in SUBAGENTS for i in audience_persona_ids())
     assert not any(
         i.endswith(("_opus_powerful", "_sonnet_efficient")) for i in ids
     ), "model variants are a legacy routing detail, not a user-facing choice"
@@ -151,10 +157,117 @@ def test_display_name_and_description():
 
 
 def test_every_selectable_persona_renders_a_wellformed_block():
-    for agent_id in selectable_persona_ids():
+    for agent_id in specialist_persona_ids():
         block = render_persona_preamble(agent_id)
         assert f'subagent_type="{agent_id}"' in block
         assert block.rstrip().endswith("[END SELECTED SPECIALIST]")
+    for persona_id in audience_persona_ids():
+        block = render_persona_preamble(persona_id)
+        assert block.startswith("[AUDIENCE PERSONA")
+        assert block.rstrip().endswith("[END AUDIENCE PERSONA]")
+        assert "subagent_type" not in block  # audience personas never route
+
+
+# ---------------------------------------------------------------------------
+# Audience personas — Marc's funder/investor and scientist skills (R-05/R-30),
+# WB W2 "language … not relevant to non-CGIAR users" (R-26), Nikki "Trust" (R-28)
+# ---------------------------------------------------------------------------
+
+def test_the_two_audience_personas_are_offered_first():
+    assert audience_persona_ids() == ["funder_investor", "scientist_researcher"]
+    payload = selectable_personas()
+    assert [p["id"] for p in payload[:2]] == ["funder_investor", "scientist_researcher"]
+    names = {p["id"]: p["name"] for p in payload}
+    assert names["funder_investor"] == "Funder / investor"
+    assert names["scientist_researcher"] == "Scientist / researcher"
+    for p in payload[:2]:
+        assert p["type"] == AUDIENCE_TYPE
+        assert "audience" in p["tags"]
+        assert p["description"] and p["color"]
+
+
+def test_audience_ids_are_accepted_and_named():
+    for pid in ("funder_investor", "scientist_researcher"):
+        assert normalize_persona(pid) == pid
+        assert is_audience_persona(pid)
+    assert not is_audience_persona("prms_data_analyst")
+    assert persona_display_name("funder_investor") == "Funder / investor"
+    assert describe_persona("scientist_researcher") == "Scientist / researcher (scientist_researcher)"
+
+
+def _words(block: str) -> int:
+    body = block.split("\n", 1)[1].rsplit("[END AUDIENCE PERSONA]", 1)[0]
+    return len(body.split())
+
+
+def test_funder_block_carries_marcs_concrete_behaviours():
+    block = render_persona_preamble("funder_investor")
+    low = block.lower()
+    # entry branch: public funder vs private investor, asked once
+    assert "public/institutional funder or a private investor" in block
+    # vocabulary + figures + visuals change together
+    for needle in ("vocabulary", "figures", "visual"):
+        assert needle in low
+    # silent translation of CGIAR jargon
+    assert "translate silently" in low
+    for jargon in ("IRL", "Scaling Readiness", "W1/W2"):
+        assert jargon in block
+    # readiness is not use
+    assert "readiness is not deployment" in low
+    # gaps shown, not dropped
+    assert '"not yet reported"' in block and "never drop rows" in low
+    # codes out of prose, links always kept via the Sources list
+    assert "Sources" in block and "(R<code>)" in block and "public link" in block
+    # USAID is not a current funder
+    assert "USAID" in block and "not present USAID as a current" in block
+    assert _words(block) <= 700
+
+
+def test_scientist_block_carries_marcs_concrete_behaviours():
+    block = render_persona_preamble("scientist_researcher")
+    low = block.lower()
+    assert "reviewing your own innovation" in low and "portfolio/bundle" in low
+    assert "identical across all personas" in low
+    assert "evidence tier" in low
+    assert "field-definitions" in low and "structured export" in low
+    for nudge in ("Bundling", "Enablers", "Demand", "Exit strategy"):
+        assert f"**{nudge}**" in block
+    assert "substitute, relocate, reorient, stop" in low
+    assert "no hallucination" in low and "never construct a citation" in low
+    assert _words(block) <= 700
+
+
+def test_audience_block_keeps_standing_rules():
+    for pid in audience_persona_ids():
+        block = render_persona_preamble(pid)
+        assert "counting method" in block
+        assert "result-code citations" in block and "public links" in block
+        assert "Sources list" in block
+
+
+def test_audience_persona_reaches_the_sdk_message_but_not_the_history():
+    msg = apply_persona_to_message("what is ready to scale in Kenya?", "funder_investor")
+    assert msg.startswith("[AUDIENCE PERSONA — Funder / investor")
+    assert msg.endswith("what is ready to scale in Kenya?")
+
+
+def test_system_prompt_has_trust_citation_and_persona_rules():
+    from synapsis.system_prompt import build_system_prompt
+
+    prompt = build_system_prompt()
+    # R-04: every result carries its public URL + a Sources list
+    assert "reports/result-details/<code>?phase=<phase>" in prompt
+    assert "**Sources**" in prompt
+    assert "Only cite codes you actually retrieved" in prompt
+    # R-28: data vs interpretation, light
+    assert "From the PRMS data (snapshot" in prompt
+    assert "**Interpretation:**" in prompt
+    assert "From the web" in prompt
+    # personas are opt-in; default voice unchanged
+    assert "[AUDIENCE PERSONA" in prompt
+    assert "Without such a block, keep the default voice" in prompt
+    # the old "never link reporting.cgiar.org / dashboard only" rule is gone
+    assert "Citations resolve ONLY to the public CGIAR Results Dashboard" not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +389,7 @@ async def test_personas_endpoint_shape(test_client):
     assert body["default"] is None, "no selection is the default"
     ids = [p["id"] for p in body["personas"]]
     assert ids == selectable_persona_ids()
+    assert ids[:2] == ["funder_investor", "scientist_researcher"]
     for p in body["personas"]:
         assert {"id", "name", "description", "type", "color", "tags"} <= set(p)
 
@@ -287,3 +401,15 @@ async def test_api_query_rejects_an_unknown_agent(test_client):
     )
     assert resp.status_code == 422
     assert "Invalid agent selection" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_audience_persona_wiring_keeps_the_persisted_message_clean():
+    sdk_message, persisted, _ = await _run_handle_user_message(
+        {"message": "which innovations are ready to scale?", "agent": "funder_investor"}
+    )
+    assert sdk_message.startswith("[AUDIENCE PERSONA — Funder / investor")
+    assert "subagent_type" not in sdk_message
+    assert sdk_message.endswith("which innovations are ready to scale?")
+    user_rows = [d for (_, t, d) in persisted if t == "user"]
+    assert user_rows == [{"content": "which innovations are ready to scale?"}]

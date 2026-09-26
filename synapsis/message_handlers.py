@@ -86,16 +86,23 @@ async def handle_assistant_block(
         send_json:        Coroutine for sending a JSON payload to the WebSocket.
     """
     if isinstance(block, TextBlock):
-        # Only send full text if it wasn't already delivered as streaming deltas
-        if not streamed_text:
-            await send_json({"type": "text", "content": block.text}, sid=session_id)
-        # Post-process PRMS result-code citations: rewrite bare/bracketed
-        # [R<code>] tokens into public-URL markdown links before persisting, so
-        # exports and reloaded history carry clickable, public-only citations
-        # (July-7 Step 2). Streamed deltas are left untouched; this only affects
-        # the persisted copy. Never emits a session-gated PRMS URL.
+        # Every PRMS result code in the answer becomes a link to its PUBLIC
+        # result report (Marc, 25 Sep: "ALWAYS include the URLs"). The linked
+        # text is what is persisted (history, exports) and what the live chat
+        # shows: unstreamed text is sent linked; streamed text is followed by a
+        # `text_links` frame so the client swaps in the linked version.
+        # Never emits a session-gated PRMS URL (synapsis/tools/result_code_citation.py).
+        import asyncio
         from synapsis.tools.result_code_citation import linkify_result_codes
-        await save_message(session_id, "text", {"content": linkify_result_codes(block.text)})
+        linked = await asyncio.to_thread(linkify_result_codes, block.text)
+        if not streamed_text:
+            await send_json({"type": "text", "content": linked}, sid=session_id)
+        elif linked != block.text:
+            await send_json(
+                {"type": "text_links", "original": block.text, "content": linked},
+                sid=session_id,
+            )
+        await save_message(session_id, "text", {"content": linked})
 
     elif isinstance(block, ThinkingBlock):
         # Same streaming-guard logic as text

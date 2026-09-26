@@ -104,8 +104,11 @@ async def api_query(payload: QueryRequest, user=Depends(get_current_user)):
             num_turns=result_info.get("turns"), duration_ms=result_info.get("duration_ms"), source="query",
         )
 
+    # Same guarantee as the chat path: every result code carries its public link.
+    from synapsis.tools.result_code_citation import linkify_result_codes
+
     return {
-        "response": "\n".join(texts),
+        "response": linkify_result_codes("\n".join(texts)),
         "tool_uses": tool_uses,
         "result": result_info,
         "scope": scope,
