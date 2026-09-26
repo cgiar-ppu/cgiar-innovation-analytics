@@ -40,7 +40,9 @@ WHAT IT CHECKS (one JSON line on stdout; exit 1 if any check FAILS)
   ui_config         [Lane E] anonymous /api/health hides the model list, /api/config
                     serves contacts and drops leftovers, /api/activity needs a login
   feedback          [Lane H] owner-only answer feedback, admin list + CSV, 404 for others
-  cohort_invites    [Lane H] bulk cohort invitation + cohort revoke (links never printed)
+  cohort_invites    [Lane H] bulk cohort invitation + cohort revoke (links never printed).
+                    Opt-in (IA_QA_INVITES=1): a revoked invitation cannot be deleted, so
+                    each run would leave one revoked row in the admin Invitation Manager.
   real_turn         the Opus 5.5 check's own answer exports, and the usage ledger has it
 
   [Lane X] checks detect whether that lane's feature is deployed and are SKIPPED
@@ -50,7 +52,7 @@ WHAT IT CHECKS (one JSON line on stdout; exit 1 if any check FAILS)
 CLEAN-UP
   Every chat it creates is titled "[QA] ..." and deleted at the end (also the Opus
   check's synthetic chat, unless IA_QA_KEEP_OPUS_SESSION=1); feedback is withdrawn;
-  QA invitations are revoked.
+  QA invitations (opt-in) are revoked -- the app has no delete for them.
 """
 import asyncio
 import datetime as _dt
@@ -509,6 +511,8 @@ class QA:
 
     async def c_cohort_invites(self):
         from synapsis import config
+        if os.environ.get('IA_QA_INVITES') != '1':
+            raise Skip('opt-in (IA_QA_INVITES=1): each run leaves one revoked invitation row')
         if not config.INVITED_LOGIN_ENABLED:
             raise Skip('invited login disabled in this environment')
         origin = {'Origin': config.SSO_ORIGIN} if config.SSO_ORIGIN else {}
