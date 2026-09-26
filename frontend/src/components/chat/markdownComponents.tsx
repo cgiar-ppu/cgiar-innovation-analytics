@@ -7,12 +7,12 @@
  * constants we guarantee stable references.
  */
 
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import remarkGfm from 'remark-gfm'
 import { CodeBlock } from './CodeBlock'
 import { processChildrenForFilePaths } from './FileDownloadLink'
 import { extractRelativePath, buildDownloadUrl, resolveWorkspaceHref, isWorkspaceHref } from '../../lib/filePathUtils'
-import { getAuthToken } from '../../stores/auth'
+import { fetchAuthenticatedImageUrl, withFreshToken } from '../../lib/downloads'
 import type { Components } from 'react-markdown'
 
 /* ---- Shared across both assistant & streaming messages ---- */
@@ -29,18 +29,34 @@ export const REMARK_PLUGINS = [remarkGfm]
  * data URIs) are passed through unchanged.
  */
 function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
-  let resolvedSrc = src ?? ''
-  if (resolvedSrc) {
-    // Strip a leading file:// scheme if present.
-    const cleaned = resolvedSrc.replace(/^file:\/\//, '')
-    const rel = extractRelativePath(cleaned)
-    if (rel) {
-      resolvedSrc = buildDownloadUrl(rel, getAuthToken())
+  const raw = src ?? ''
+  const rel = raw ? extractRelativePath(raw.replace(/^file:\/\//, '')) : null
+  const [blobUrl, setBlobUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+
+  // Workspace images are fetched with the CURRENT token (Authorization
+  // header) instead of a token baked into src at render time (L4-06).
+  useEffect(() => {
+    if (!rel) return
+    const controller = new AbortController()
+    let url: string | null = null
+    fetchAuthenticatedImageUrl(buildDownloadUrl(rel), controller.signal)
+      .then((u) => { url = u; setBlobUrl(u) })
+      .catch(() => { if (!controller.signal.aborted) setFailed(true) })
+    return () => {
+      controller.abort()
+      if (url) URL.revokeObjectURL(url)
     }
+  }, [rel])
+
+  if (rel && !blobUrl) {
+    return failed
+      ? <span className="text-xs text-[var(--text-muted)]">[image unavailable{alt ? `: ${alt}` : ''}]</span>
+      : null
   }
   return (
     <img
-      src={resolvedSrc}
+      src={rel ? blobUrl ?? '' : raw}
       alt={alt ?? ''}
       loading="lazy"
       className="max-w-full h-auto rounded-xl border border-[var(--border)] my-2"
@@ -62,17 +78,24 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
  */
 const MarkdownAnchor: Components['a'] = ({ href, children, node: _node, ...rest }) => {
   const workspaceLink = Boolean(href && isWorkspaceHref(href))
-  const resolvedHref = href ? resolveWorkspaceHref(href, getAuthToken()) : href
+  // Token-free href; the current token is added at click time (L4-06).
+  const resolvedHref = href ? resolveWorkspaceHref(href) : href
 
-  // Only workspace-file links get download/new-tab treatment (matching
-  // FileDownloadLink's behavior). External / citation links are left exactly
-  // as ReactMarkdown would have rendered them before this override existed.
-  const extraProps = workspaceLink
-    ? { download: true, target: '_blank', rel: 'noopener noreferrer' }
-    : {}
+  if (workspaceLink) {
+    return (
+      <a href={resolvedHref} download target="_blank" rel="noopener noreferrer" {...rest}
+        onClick={withFreshToken} onAuxClick={withFreshToken}>
+        {children}
+      </a>
+    )
+  }
 
+  // External and PRMS citation links open in a new tab so a click never
+  // leaves the app or drops a streaming answer (L4-14).
+  const external = Boolean(href && /^https?:\/\//i.test(href))
   return (
-    <a href={resolvedHref} {...extraProps} {...rest} onClick={(e) => e.stopPropagation()}>
+    <a href={resolvedHref} {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})} {...rest}
+      onClick={(e) => e.stopPropagation()}>
       {children}
     </a>
   )

@@ -4,14 +4,13 @@ import { SendButton } from './SendButton'
 import { StopButton } from './StopButton'
 import { VoiceButton } from './VoiceButton'
 import { AttachmentChips } from './AttachmentChips'
-import { SlashCommandMenu } from './SlashCommandMenu'
 import { useTextareaAutoGrow } from '../../hooks/useTextareaAutoGrow'
-import { useSkillsAutocomplete } from '../../hooks/useSkillsAutocomplete'
 import { useChatStore } from '../../stores/chat'
 import { useChatDraft } from '../../lib/chatCommands'
 
 interface Props {
-  onSend: (text: string) => void
+  /** Returns false when the message could not be sent (the draft is kept). */
+  onSend: (text: string) => boolean | void
   onCancel: () => void
   onFileUpload: (file: File) => void
   isBusy: boolean
@@ -26,44 +25,19 @@ export const ChatInput = memo(function ChatInput({ onSend, onCancel, onFileUploa
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dragCounter = useRef(0)
 
-  const {
-    suggestions,
-    selectedIndex,
-    isVisible: isAutocompleteVisible,
-    selectSuggestion,
-    handleKeyDown: handleAutocompleteKeyDown,
-    updateText,
-  } = useSkillsAutocomplete()
-
   useEffect(() => {
     adjustHeight()
   }, [text, adjustHeight])
 
-  // Keep autocomplete in sync with text changes
-  useEffect(() => {
-    updateText(text)
-  }, [text, updateText])
-
   const handleSend = () => {
     const trimmed = text.trim()
     if (!trimmed || isBusy) return
-    onSend(trimmed)
+    if (onSend(trimmed) === false) return
     setText('')
     textareaRef.current?.focus()
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Let autocomplete handle keys first when visible
-    const result = handleAutocompleteKeyDown(e)
-    if (result.consumed) {
-      e.preventDefault()
-      if (result.newText !== undefined) {
-        setText(result.newText)
-        textareaRef.current?.focus()
-      }
-      return
-    }
-
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
@@ -134,12 +108,6 @@ export const ChatInput = memo(function ChatInput({ onSend, onCancel, onFileUploa
     return () => { delete (window as unknown as Record<string, unknown>).__chatInputSetText }
   }, [setAndFocus])
 
-  const handleAutocompleteSelect = useCallback((suggestion: { name: string; description: string; category: 'skill' | 'command' }) => {
-    const newText = selectSuggestion(suggestion)
-    setText(newText)
-    textareaRef.current?.focus()
-  }, [selectSuggestion, textareaRef])
-
   return (
     <div
       onDragEnter={handleDragEnter}
@@ -149,12 +117,6 @@ export const ChatInput = memo(function ChatInput({ onSend, onCancel, onFileUploa
       className={`relative glass-strong rounded-2xl px-4 py-3
       focus-within:border-accent focus-within:shadow-[0_0_0_1px_var(--accent),0_0_20px_var(--accent-glow)]
       transition-all ${isDragging ? 'border-accent shadow-[0_0_0_2px_var(--accent),0_0_24px_var(--accent-glow)]' : ''}`}>
-      <SlashCommandMenu
-        suggestions={suggestions}
-        selectedIndex={selectedIndex}
-        isVisible={isAutocompleteVisible}
-        onSelect={handleAutocompleteSelect}
-      />
       <AttachmentChips attachments={pendingAttachments} onRemove={removeAttachment} />
       <div className="flex items-end gap-2">
         <button

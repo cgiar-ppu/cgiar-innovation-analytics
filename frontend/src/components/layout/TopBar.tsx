@@ -1,6 +1,6 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { LayoutDashboard, MessageSquare, Bot, Settings, Sparkles, Monitor, Search, Menu, Code2, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Bot, Settings, Sparkles, Search, Menu, ChevronRight } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useWebSocketContext } from '../../contexts/WebSocketContext';
 import { useUIStore } from '../../stores/ui';
@@ -8,13 +8,15 @@ import { ThemeToggle } from './ThemeToggle';
 import { TTSToggle } from '../chat/TTSToggle';
 import { ModelSelector } from './ModelSelector';
 import { UserMenu } from './UserMenu';
+import { useIsAdmin } from '../../stores/appConfig';
 import type { AppConfig } from '../../lib/types';
 
-const NAV_ITEMS = [
-  { to: '/chat', label: 'Chat', icon: MessageSquare },
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/agents', label: 'Agents', icon: Bot },
-  { to: '/settings', label: 'Settings', icon: Settings },
+/** `adminOnly` items are hidden for researchers / invited users (L4-03). */
+export const NAV_ITEMS = [
+  { to: '/chat', label: 'Chat', icon: MessageSquare, adminOnly: false },
+  { to: '/', label: 'Dashboard', icon: LayoutDashboard, adminOnly: false },
+  { to: '/agents', label: 'Agents', icon: Bot, adminOnly: true },
+  { to: '/settings', label: 'Settings', icon: Settings, adminOnly: false },
 ];
 
 interface TopBarProps {
@@ -24,7 +26,9 @@ interface TopBarProps {
 export default function TopBar({ config }: TopBarProps) {
   const location = useLocation();
   const { connectionStatus } = useWebSocketContext();
-  const { desktopPanelOpen, toggleDesktopPanel, gitPanelOpen, toggleGitPanel, toggleSidebar } = useUIStore();
+  const { toggleSidebar } = useUIStore();
+  const isAdmin = useIsAdmin();
+  const navItems = NAV_ITEMS.filter((item) => isAdmin || !item.adminOnly);
   const navRef = useRef<HTMLElement>(null);
   const [canScrollRight, setCanScrollRight] = useState(false);
 
@@ -83,7 +87,7 @@ export default function TopBar({ config }: TopBarProps) {
         {/* Navigation Pills with scroll indicator */}
         <div className="relative flex-1 min-w-0">
           <nav ref={navRef} className="flex items-center gap-1 overflow-x-auto scrollbar-thin">
-            {NAV_ITEMS.map(({ to, label, icon: Icon }) => {
+            {navItems.map(({ to, label, icon: Icon }) => {
               const isActive = to === '/' ? location.pathname === '/' : location.pathname.startsWith(to);
               return (
                 <NavLink
@@ -123,7 +127,7 @@ export default function TopBar({ config }: TopBarProps) {
 
         {/* Right side: status, controls */}
         <div className="flex items-center gap-2 ml-4">
-          {/* Model selector pill — switch between Sonnet 4.6 / Opus 4.8 */}
+          {/* Model selector pill — only when the caller may choose between models */}
           <ModelSelector config={config} />
 
           {/* Connection status — minimal dot indicator */}
@@ -137,6 +141,7 @@ export default function TopBar({ config }: TopBarProps) {
             onClick={() => useUIStore.getState().toggleSearch()}
             className="p-2 rounded-xl hover:bg-[var(--surface-2)] transition-all text-[var(--text-muted)] hover:text-[var(--text)]"
             title="Search (Cmd+K)"
+            aria-label="Search chats"
           >
             <Search className="w-4 h-4" />
           </button>
@@ -146,34 +151,6 @@ export default function TopBar({ config }: TopBarProps) {
 
           {/* Theme toggle */}
           <ThemeToggle />
-
-          {/* Git panel toggle — only prominently shown when open */}
-          <button
-            onClick={toggleGitPanel}
-            className={`p-2 rounded-xl transition-all ${
-              gitPanelOpen
-                ? 'bg-[var(--accent)] text-white shadow-sm'
-                : 'hover:bg-[var(--surface-2)] text-[var(--text-muted)]/50 hover:text-[var(--text-muted)]'
-            }`}
-            title={gitPanelOpen ? 'Hide git panel' : 'Show git panel'}
-          >
-            <Code2 className="w-4 h-4" />
-          </button>
-
-          {/* Desktop panel toggle */}
-          {config?.vnc_available && (
-            <button
-              onClick={toggleDesktopPanel}
-              className={`p-2 rounded-xl transition-all ${
-                desktopPanelOpen
-                  ? 'bg-[var(--accent)] text-white shadow-sm'
-                  : 'hover:bg-[var(--surface-2)] text-[var(--text-muted)]'
-              }`}
-              title={desktopPanelOpen ? 'Hide desktop' : 'Show desktop'}
-            >
-              <Monitor className="w-4 h-4" />
-            </button>
-          )}
 
           {/* Account menu — user email + sign out (only when a real session exists) */}
           <UserMenu />

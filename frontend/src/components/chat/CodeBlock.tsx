@@ -1,8 +1,31 @@
 import { memo } from 'react'
 import { Copy, Check } from 'lucide-react'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash'
+import css from 'react-syntax-highlighter/dist/esm/languages/prism/css'
+import json from 'react-syntax-highlighter/dist/esm/languages/prism/json'
+import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript'
+import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
+import markdown from 'react-syntax-highlighter/dist/esm/languages/prism/markdown'
+import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup'
+import python from 'react-syntax-highlighter/dist/esm/languages/prism/python'
+import r from 'react-syntax-highlighter/dist/esm/languages/prism/r'
+import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql'
+import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard'
+
+// L4-12: register only the languages IA answers use (PRMS SQL, Python/R
+// snippets, JSON/YAML, shell, web, Markdown) instead of bundling all ~300
+// Prism grammars. Unknown languages render as plain monospaced text.
+const LANGUAGES: Record<string, unknown> = {
+  bash, sh: bash, shell: bash, zsh: bash, css, json, javascript, js: javascript,
+  typescript, ts: typescript, markdown, md: markdown, markup, html: markup, xml: markup,
+  python, py: python, r, sql, yaml, yml: yaml,
+}
+for (const [name, grammar] of Object.entries(LANGUAGES)) {
+  SyntaxHighlighter.registerLanguage(name, grammar)
+}
 
 interface CodeBlockProps {
   code: string

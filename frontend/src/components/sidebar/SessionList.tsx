@@ -1,6 +1,7 @@
 import { Plus } from 'lucide-react'
 import { useSessionsStore } from '../../stores/sessions'
 import { newChat, openChat } from '../../lib/chatCommands'
+import { runWhileConnected } from '../../lib/connectionNotice'
 import { SessionItem } from './SessionItem'
 import type { ClientMessage } from '../../lib/types'
 
@@ -9,11 +10,18 @@ interface Props {
   send: (msg: ClientMessage) => void
 }
 
+/** Run the chat switch; while disconnected show a notice instead of throwing (L4-10). */
+function guardedDispatch<T>(fn: () => T): T {
+  let result!: T
+  runWhileConnected(() => { result = fn() })
+  return result
+}
+
 export function SessionList({ send }: Props) {
   const { sessions, activeSessionId } = useSessionsStore()
   const { renameSession, deleteSession, loadSessions } = useSessionsStore()
-  const handleNewChat = () => newChat(send)
-  const handleSelect = (id: string) => { void openChat(id, send).catch(() => {}) }
+  const handleNewChat = () => { runWhileConnected(() => newChat(send)) }
+  const handleSelect = (id: string) => { void openChat(id, send, undefined, guardedDispatch).catch(() => {}) }
 
   const handleDelete = async (sessionId: string) => {
     await deleteSession(sessionId)

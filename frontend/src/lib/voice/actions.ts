@@ -5,6 +5,8 @@ import { useScopeStore } from '../../stores/scope'
 import { usePersonaStore } from '../../stores/persona'
 import { useUIStore } from '../../stores/ui'
 import { chatReceipt, newChat, openChat, sendChatQuery, useChatDraft, voiceDispatch, type SendChat } from '../chatCommands'
+import { useAuthStore } from '../../stores/auth'
+import { isAdmin, useAppConfigStore } from '../../stores/appConfig'
 
 export type ToolResult = { ok: boolean; error?: string; [key: string]: unknown }
 export const EFFECTS: Record<string, 'read' | 'ui' | 'write'> = {
@@ -67,6 +69,10 @@ export function makeAdapter(send: SendChat, navigate: (path: string) => void, ge
           const paths: Record<string, string> = { dashboard: '/', chat: '/chat', agents: '/agents', settings: '/settings' }
           const page = requireString(args.page)
           if (!(page in paths)) throw new Error('Unknown page.')
+          // The Agents page is administrator-only (L4-03).
+          if (page === 'agents' && !isAdmin(useAppConfigStore.getState().config, useAuthStore.getState().user?.role)) {
+            throw new Error('That page is not available for this account.')
+          }
           voiceDispatch(() => navigate(paths[page]!))
           return { ok: true, page, effect: 'Page navigation requested.' }
         }

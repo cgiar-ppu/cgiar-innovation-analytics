@@ -1,11 +1,16 @@
 """
 Health, activity, and configuration endpoints.
 
-- GET /api/health   — Basic health check
-- GET /api/activity — Activity metrics for cleanup Lambda
+- GET /api/health   — Basic health check. Anonymous callers (load balancer,
+                       deploy scripts) get status, git_sha, version and the
+                       default model only; the model list, workspace path and
+                       auth method are returned to administrators only.
+- GET /api/activity — Connection/session activity counters (signed-in users
+                       only; nothing public reads it in this deployment).
 - GET /api/config   — Full app configuration (model list is role-aware:
                        admins get the stage list, everyone else the
                        researcher list, anonymous callers only the default)
+                       plus the in-app "reach out if in doubt" contacts.
 """
 
 import os
@@ -17,10 +22,8 @@ from synapsis.config import (
     MAX_TURNS,
     WORKSPACE,
     AUTH_METHOD,
-    IS_MACOS,
     SYNAPSIS_PLATFORM,
     APP_VERSION,
-    AVAILABLE_MODELS,
     SELF_SIGNUP_ENABLED,
     SIGNUP_ALLOWED_DOMAINS,
     SSO_ENABLED,
@@ -28,8 +31,7 @@ from synapsis.config import (
     INVITED_LOGIN_ENABLED,
 )
 from synapsis.agents import SUBAGENTS
-from synapsis.auth.middleware import get_optional_user, resolve_role
-from synapsis.constants import MEMORY_CATEGORIES
+from synapsis.auth.middleware import get_current_user, get_optional_user, resolve_role
 from synapsis.runtime_policy import (
     allowed_models_for_role,
     fallback_model_for_role,
@@ -39,26 +41,63 @@ from synapsis.runtime_policy import (
 
 router = APIRouter(prefix="/api", tags=["health"])
 
+# In-app "reach out if in doubt" contacts (guardrails, Jules call 2026-07-07).
+# Served by /api/config so the address can change per environment without a
+# frontend rebuild. The technical default is the CGIAR mailbox because the
+# previous synapsis-analytics.com address bounced for an external user
+# (18 Sep 2026). PENDING CONFIRMATION by Jose Luis Berenguer.
+_DEFAULT_CONTACTS = (
+    ("IA_CONTACT_SCOPE_NAME", "Marc Schut", "IA_CONTACT_SCOPE_EMAIL", "marc.schut@cgiar.org", "scope & use"),
+    ("IA_CONTACT_TECHNICAL_NAME", "Jose Luis Berenguer", "IA_CONTACT_TECHNICAL_EMAIL", "J.Berenguer@cgiar.org", "technical"),
+)
+
+
+def guardrail_contacts() -> list[dict]:
+    """Contacts shown in the disclaimer modal and footer.
+
+    Each entry is configurable through its ``IA_CONTACT_*`` variables; an
+    empty email variable removes that contact.
+    """
+    contacts = []
+    for name_var, name_default, email_var, email_default, remit in _DEFAULT_CONTACTS:
+        email = os.getenv(email_var, email_default).strip()
+        if not email:
+            continue
+        name = os.getenv(name_var, name_default).strip() or email
+        contacts.append({"name": name, "email": email, "remit": remit})
+    return contacts
+
 
 @router.get("/health")
-async def health():
-    """Basic health check returning model, workspace, and auth info."""
-    return {
+async def health(user=Depends(get_optional_user)):
+    """Basic health check.
+
+    ``status`` and ``git_sha`` are what the deploy/release scripts read.
+    Anonymous callers do not get the model list, workspace path or auth
+    method (they revealed which premium models a deployment offers); only
+    administrators do.
+    """
+    body = {
         "status": "ok",
         "git_sha": os.getenv("GIT_SHA", "unknown"),
         "model": MODEL,
-        "workspace": str(WORKSPACE),
-        "auth_method": AUTH_METHOD,
         "version": APP_VERSION,
-        "available_models": AVAILABLE_MODELS,
     }
+    if user and resolve_role(user) == "admin":
+        body.update({
+            "workspace": str(WORKSPACE),
+            "auth_method": AUTH_METHOD,
+            "available_models": allowed_models_for_role("admin"),
+        })
+    return body
 
 
 @router.get("/activity")
-async def activity():
-    """Report container activity for cleanup Lambda.
+async def activity(_user=Depends(get_current_user)):
+    """Report connection/session activity counters (signed-in users only).
 
-    The cleanup Lambda checks this endpoint before terminating idle containers.
+    Formerly anonymous for the Synapsis multi-tenant cleanup Lambda
+    (``infra/template.yaml``), which this deployment does not run.
     """
     # Import at call time to avoid circular imports with server module
     from synapsis.server import get_activity_stats
@@ -90,10 +129,9 @@ async def get_config(user=Depends(get_optional_user)):
         "version": APP_VERSION,
         "agent_type": "synapsis_analytics",
         "personas": list(SUBAGENTS.keys()),
-        "memory_categories": MEMORY_CATEGORIES,
-        "vnc_available": not IS_MACOS and os.environ.get("DISPLAY") is not None,
-        "vnc_port": 6080,
         "platform": SYNAPSIS_PLATFORM,
+        # "Reach out if in doubt" contacts for the disclaimer modal/footer.
+        "contacts": guardrail_contacts(),
         # Interim self-signup (no email confirmation) — the frontend only
         # shows the "Create account" option when this is true. Flag-gated
         # server-side (IA_SELF_SIGNUP); defaults false so prod-lineage
