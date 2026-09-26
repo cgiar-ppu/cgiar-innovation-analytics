@@ -52,3 +52,18 @@ def test_specialists_also_quote_titles_verbatim():
     from synapsis.agents.definitions import PRMS_COUNTING_RULES
 
     assert "Quote PRMS titles verbatim" in PRMS_COUNTING_RULES
+
+
+def test_prompt_never_prints_the_snapshot_file(prompt):
+    """D16: the agent named 'prdb_20260913_indexed.sqlite' because the prompt printed the path."""
+    from synapsis.prms_snapshot import get_snapshot_info
+
+    info = get_snapshot_info()
+    if info.path:
+        import os
+        assert info.path not in prompt
+        assert os.path.basename(info.path) not in prompt
+    # (A reference document mentions the June-2026 dump by name as history;
+    # only the live snapshot's own file must not appear.)
+    assert "SQLite database at" not in prompt and "- Path: `" not in prompt
+    assert "never name the database file" in prompt

@@ -156,7 +156,9 @@ def build_system_prompt(agents_dict: dict = None) -> str:
     # snapshot it is actually querying. The snapshot refreshes daily (HQ loop
     # prms-prdb-daily-delta-refresh) — never hard-code a date or a path here.
     _snap = get_snapshot_info()
-    _prms_db_path = _snap.path
+    # QA-4 D16: never print the snapshot FILE (path/name) — the agent quoted it
+    # to users ("prdb_20260913_indexed.sqlite"). Dates and sizes only; the tool
+    # knows where the file is.
     _snap_label = _snap.label
     _snap_extracted = _snap.extracted_on or "unknown"
     _snap_data_as_of = _snap.data_as_of or "unknown"
@@ -169,7 +171,7 @@ def build_system_prompt(agents_dict: dict = None) -> str:
     )
 
     return f"""You are a CGIAR innovations expert and data analyst with direct access to the PRMS
-SQLite database at {_prms_db_path} — {_snap_label}.
+database (a published PRMS Reporting snapshot) — {_snap_label}.
 You answer questions by writing and executing SQL queries via the mcp__synapsis__prms_query
 tool. You do NOT speculate about data — you query the database and return verified numbers.
 You have comprehensive PRMS domain knowledge injected below. Before answering any data/count/
@@ -311,7 +313,7 @@ Every number in this app comes from **CGIAR PRMS Reporting** (the Performance an
 ### Data Source Locations
 
 **PRMS Database (canonical — the auto-refreshed snapshot):**
-- Path: `{_prms_db_path}` → {_snap_label}; {_snap_rows} rows in `result`, {_snap_tables} tables
+- {_snap_label}; {_snap_rows} rows in `result`, {_snap_tables} tables. Reach it only through `mcp__synapsis__prms_query` / `prms_search`; never name the database file or its location to the user — describe the source as "CGIAR PRMS Reporting, published snapshot" with its dates.
 - The snapshot refreshes daily. The `prms_query` footer prints the snapshot it ran against — **quote that snapshot date next to every number** (never "June 2026" or any remembered date). Data state = {_snap_data_as_of}; extraction = {_snap_extracted}.
 - **Open (in-progress) reporting phases in this snapshot: {_open_phases}.** Rows in an open phase are provisional. Default behaviour: keep them OUT of per-year defaults and portfolio totals (add {_open_phase_filter}). A phase is *open* when `version.status = 1` AND its `end_date` is after the snapshot data date ({_snap_data_as_of}) — `status` alone is not enough (the June-2026 snapshot still flagged the finished 2025 phases). If the user explicitly asks about 2026, answer, but label every figure "provisional — open reporting phase, data as of {_snap_data_as_of}". The latest-phase dedup chains (1,3,4,6 and 2,5,7) already exclude open phases; naive unfiltered counts do NOT — say which you used.
 - This is the exact database the `mcp__synapsis__prms_query` tool runs against. Use this path directly — do NOT use Glob/Bash/filesystem searches to locate the DB. You already know where it lives.
