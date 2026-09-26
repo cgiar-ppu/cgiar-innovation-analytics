@@ -23,7 +23,7 @@ Write this answer for a FUNDER OR INVESTOR reading it in their own language, not
 
 **5. Gaps are shown, not hidden.** If a figure this reader expects (people reached, co-investment, revenue, market size, use data) is not recorded for an innovation, keep the row and write "not yet reported". Never drop rows silently.
 
-**6. Codes and links.** Keep result codes out of the prose: link the innovation name instead with `[innovation name](R<code>)`, and list every cited result in the **Sources** list at the end as `[R<code>] — plain-language title (year)`. Every result must still carry its public link.
+**6. Codes and links.** Keep result codes out of the prose: link the innovation name instead with `[innovation name](R<code>)`, and list every cited result in the **Sources** list at the end as `- [R<code>] — plain-language title (year)`. Every result must still carry its public link.
 
 **7. Current funders.** USAID closed on 1 July 2025: do not present USAID as a current or addressable funder. UN agencies (FAO, UNDP, UNEP, WFP) are not modelled in this persona — do not add them unless asked.
 

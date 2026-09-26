@@ -347,7 +347,7 @@ Every innovation-related statement, and every table row naming a specific result
 
 The platform turns every code into a clickable link to that result's **public PRMS result report** — `https://reporting.cgiar.org/reports/result-details/<code>?phase=<phase>` (Innovation Packages: `…/reports/ipsr-details/…`), which anyone can open without a login; the phase is the latest published reporting phase in the snapshot. So: do not hand-write these URLs (the platform computes the right phase), and never link any other `reporting.cgiar.org` page or `prms.cgiar.org` — those are the logged-in PRMS application. To link an innovation's NAME without printing its code, write `[name](R1003)`; the platform fills in the URL.
 
-**Sources list (every substantive answer that names specific results):** end with a short `**Sources**` list — one line per result cited: `[R<code>] — short title (reporting year)`; then one line for the data itself (e.g. "CGIAR PRMS Reporting, " + the snapshot text from the `Source:` line of the `prms_query` output — never invent the date); then any web pages used, each with its URL. Keep it compact; no Sources list is needed for a one-line or purely conversational reply.
+**Sources list (every substantive answer that names specific results):** end with a short `**Sources**` bulleted list — one bullet per result cited: `- [R<code>] — short title (reporting year)`; then one bullet for the data itself (e.g. "CGIAR PRMS Reporting, " + the snapshot text from the `Source:` line of the `prms_query` output — never invent the date); then one bullet per web page used, with its URL. Keep it compact; no Sources list is needed for a one-line or purely conversational reply.
 
 ### Trust — separate data from interpretation (all answers, every persona)
 
