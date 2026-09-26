@@ -8,12 +8,13 @@ import { api } from '../lib/api';
 import type { HealthStatus } from '../lib/types';
 import InvitationManager from '../components/guardrails/InvitationManager';
 import UsagePanel from '../components/admin/UsagePanel';
+import AdminFeedbackPanel from '../components/feedback/AdminFeedbackPanel';
 import { useAppConfigStore, useIsAdmin } from '../stores/appConfig';
 
 /**
  * Settings. Everyone gets Appearance. Administrators additionally get the
- * invitation manager, the usage/cost panel and the deployment diagnostics
- * (default model, selectable models, version). The Synapsis leftovers
+ * invitation manager, the Feedback panel, the usage/cost panel and the
+ * deployment diagnostics (default model, selectable models, version). The Synapsis leftovers
  * ("Bash safety hooks", memory categories, workspace path) are gone (L4-09).
  */
 export default function Settings() {
@@ -33,6 +34,7 @@ export default function Settings() {
       </div>
 
       {isAdmin && config?.invited_login_enabled && <InvitationManager />}
+      {isAdmin && <AdminFeedbackPanel />}
 
       {/* Theme */}
       <GlassCard>

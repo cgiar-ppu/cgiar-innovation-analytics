@@ -4,13 +4,14 @@ import { AudioLines, Mic, MicOff, Pause, Play, Square, X, ChevronDown, BookOpen 
 import { useWebSocketContext } from '../../contexts/WebSocketContext'
 import { api } from '../../lib/api'
 import { makeAdapter } from '../../lib/voice/actions'
-import { LiveClient, type Caption, type VoiceStatus } from '../../lib/voice/liveClient'
+import { LiveClient, type Caption, type FeedbackPhase, type VoiceStatus } from '../../lib/voice/liveClient'
+import VoiceFeedbackPrompt from '../feedback/VoiceFeedbackPrompt'
 import { useTTSStore } from '../../stores/tts'
 import { useSessionsStore } from '../../stores/sessions'
 
 type Source = { file: string; start_line: number; end_line: number; text: string }
 /** Server truth about the voice service. provider_ok is a cached real provider probe; null = no key configured. */
-export type ServiceStatus = { enabled: boolean; configured: boolean; provider_ok: boolean | null; max_seconds: number }
+export type ServiceStatus = { enabled: boolean; configured: boolean; provider_ok: boolean | null; max_seconds: number; feedback_prompt?: boolean }
 export const UNAVAILABLE_MESSAGE = 'Voice is temporarily unavailable'
 export const isUnavailable = (service: ServiceStatus | null) => !!service && (!service.configured || service.provider_ok === false)
 const RECHECK_MS = 60000
@@ -37,6 +38,7 @@ export default function VoiceGuide() {
   const [typed, setTyped] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [startedAt, setStartedAt] = useState<number | null>(null)
+  const [feedbackPhase, setFeedbackPhase] = useState<FeedbackPhase>('idle')
   const activeId = useSessionsStore(s => s.activeSessionId)
   const title = useSessionsStore(s => s.sessions.find(chat => chat.session_id === activeId)?.title)
   const running = status === 'connected' || status === 'connecting' || status === 'closing'
@@ -49,7 +51,7 @@ export default function VoiceGuide() {
 
   useEffect(() => {
     let mounted = true
-    const refresh = () => api.get<ServiceStatus>('/api/voice/status').then(s => { if (mounted) setService(s) }).catch(() => {})
+    const refresh = () => api.get<ServiceStatus>('/api/voice/status').then(s => { if (mounted) { setService(s); client.current?.setFeedbackPrompt?.(s.feedback_prompt !== false) } }).catch(() => {})
     void refresh()
     // While the provider is unavailable, re-check so recovery shows without a reload (the server caches its probe).
     const timer = setInterval(() => { if (isUnavailable(serviceRef.current)) void refresh() }, RECHECK_MS)
@@ -61,6 +63,7 @@ export default function VoiceGuide() {
       playbackBlocked: value => { if (mounted) setBlocked(value) },
       usage: () => {},
       evidence: result => { if (mounted && Array.isArray(result.excerpts)) setSources(result.excerpts as Source[]) },
+      feedback: phase => { if (mounted) setFeedbackPhase(phase) },
     }, adapter)
     client.current = instance
     const unload = () => instance.dispose()
@@ -116,8 +119,9 @@ export default function VoiceGuide() {
           <div className="flex flex-wrap gap-2">
             <button disabled={!isLive} onClick={() => { client.current?.mute(!muted); setMuted(!muted) }} className="rounded-lg border border-border px-3 py-2 text-xs flex items-center gap-1.5 disabled:opacity-50">{muted ? <Mic size={15} /> : <MicOff size={15} />}{muted ? 'Unmute' : 'Mute'}</button>
             <button disabled={!isLive} onClick={() => { client.current?.pauseActions(!paused); setPaused(!paused) }} className="rounded-lg border border-border px-3 py-2 text-xs flex items-center gap-1.5 disabled:opacity-50">{paused ? <Play size={15} /> : <Pause size={15} />}{paused ? 'Resume actions' : 'Pause actions'}</button>
-            <button onClick={() => client.current?.end()} disabled={status === 'closing'} className="rounded-lg bg-red-500/10 text-red-600 px-3 py-2 text-xs flex items-center gap-1.5"><Square size={14} />End voice</button>
+            <button onClick={() => client.current?.end()} disabled={status === 'closing'} className="rounded-lg bg-red-500/10 text-red-600 px-3 py-2 text-xs flex items-center gap-1.5"><Square size={14} />{feedbackPhase === 'asking' ? 'End now' : 'End voice'}</button>
           </div>
+          <VoiceFeedbackPrompt phase={feedbackPhase} onSubmit={(rating, text) => client.current ? client.current.rateSession(rating, text, true) : Promise.resolve({ ok: false })} onSkip={() => client.current?.end({ skipFeedback: true })} />
           {muted && <p className="text-xs text-text-muted">Mute keeps the paid connection open. End voice to disconnect.</p>}
           {blocked && <button onClick={() => void client.current?.resumePlayback()} className="rounded-lg bg-accent px-3 py-2 text-white text-xs">Enable audio playback</button>}
           <div className="rounded-xl border border-border p-3 max-h-52 overflow-y-auto" aria-label="Voice captions" tabIndex={0}>

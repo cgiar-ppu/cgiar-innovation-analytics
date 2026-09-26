@@ -180,6 +180,7 @@ def _empty_day(day: str) -> dict[str, Any]:
         "errors": 0,
         "by_role": {},
         "by_model": {},
+        "by_cohort": {},
         "voice": {"sessions": 0, "minutes": 0.0},
         "source": "none",
     }
@@ -229,6 +230,9 @@ async def usage_summary(days: int, now: Optional[float] = None) -> dict[str, Any
     users_by_day: dict[str, set] = {}
     role_users: dict[tuple[str, str], set] = {}
     sources: dict[str, set] = {}
+    # Test-round cohort of invited users (Lane H); labels only, no identities.
+    cohort_of: dict[str, str] = {}
+    cohort_users: dict[tuple[str, str], set] = {}
 
     def add(day, user_id, role, session_id, model, cost, is_error, source):
         d = by_day.setdefault(day, _empty_day(day))
@@ -244,9 +248,20 @@ async def usage_summary(days: int, now: Optional[float] = None) -> dict[str, Any
         m = d["by_model"].setdefault(model or "default", {"turns": 0, "cost_usd": 0.0})
         m["turns"] += 1
         m["cost_usd"] += cost
+        cohort = cohort_of.get(user_id)
+        if cohort:
+            c = d["by_cohort"].setdefault(cohort, {"turns": 0, "cost_usd": 0.0, "users": 0})
+            c["turns"] += 1
+            c["cost_usd"] += cost
+            cohort_users.setdefault((day, cohort), set()).add(user_id)
         sources.setdefault(day, set()).add(source)
 
     async with get_db() as db:
+        try:
+            cursor = await db.execute("SELECT user_id, cohort FROM invited_accounts WHERE cohort != ''")
+            cohort_of.update({str(u): str(c) for u, c in await cursor.fetchall()})
+        except Exception:
+            pass  # no invited accounts table / pre-cohort schema
         cursor = await db.execute("SELECT MIN(ts) FROM usage_events")
         row = await cursor.fetchone()
         cutover = float(row[0]) if row and row[0] is not None else float("inf")
@@ -313,6 +328,9 @@ async def usage_summary(days: int, now: Optional[float] = None) -> dict[str, Any
             r["cost_usd"] = round(r["cost_usd"], 4)
         for m in d["by_model"].values():
             m["cost_usd"] = round(m["cost_usd"], 4)
+        for cohort, c in d["by_cohort"].items():
+            c["users"] = len(cohort_users.get((day, cohort), ()))
+            c["cost_usd"] = round(c["cost_usd"], 4)
         d["cost_usd"] = round(d["cost_usd"], 4)
         src = sources.get(day, set())
         d["source"] = "mixed" if len(src) > 1 else (next(iter(src)) if src else "none")

@@ -6,6 +6,7 @@ import type { ChatMessage } from '../../lib/types'
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard'
 import { InteractiveContent } from './InteractiveContent'
 import { REMARK_PLUGINS, ASSISTANT_MD_COMPONENTS } from './markdownComponents'
+import AnswerFeedback from '../feedback/AnswerFeedback'
 
 interface Props {
   message: ChatMessage
@@ -35,6 +36,7 @@ export const AssistantMessage = memo(function AssistantMessage({ message }: Prop
             {message.content}
           </ReactMarkdown>
         </div>
+        <AnswerFeedback messageId={message.id} />
         <div className="absolute top-0 right-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
           <TTSSpeakButton messageId={message.id} text={message.content} />
           <button
