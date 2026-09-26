@@ -17,6 +17,7 @@ Flow:
 """
 
 import json
+import re
 from typing import Any
 
 from claude_agent_sdk import tool
@@ -84,35 +85,85 @@ def _validate_series(series: Any) -> str | None:
     return None
 
 
-def _looks_numeric(value: Any) -> bool:
-    """Check if a value is numeric or a string that can be parsed as a number."""
+#: Written-out "no value" markers. They become ``None`` (a gap in the chart),
+#: never 0 — review L6-04: "n/a" used to be plotted as a real zero.
+_MISSING_MARKERS = frozenset({
+    "", "n/a", "na", "n.a.", "none", "null", "nan", "-", "--", "—", "–",
+    "not available", "not reported", "not yet reported", "unknown", "?",
+})
+
+#: Currency symbols / codes and other decorations stripped before parsing.
+_NUMBER_NOISE = re.compile(r"(?i)(us\$|usd|eur|gbp|kes|inr|[$€£¥₹%\s\u00a0\u202f,'_])")
+
+
+def parse_number(value: Any) -> tuple[float | int | None, bool]:
+    """The ONE numeric parser for chart values. Returns ``(number, ok)``.
+
+    * ints/floats pass through (``bool`` is not a number);
+    * strings: ``%``, thousands separators (``,`` and spaces), currency
+      symbols/codes and a trailing ``%`` are stripped — ``"56%"`` → 56,
+      ``"1,234"`` → 1234, ``"$ 2.5"`` → 2.5, ``"(12)"`` → -12;
+    * missing markers (``""``, ``"n/a"``, ``"—"``, ``None`` …) → ``(None, True)``:
+      a deliberate gap;
+    * anything else unparseable (``"1.2k"``, ``"about 40"``) → ``(None, False)``:
+      also a gap, and the caller warns the agent.
+    """
+    if value is None:
+        return None, True
+    if isinstance(value, bool):
+        return None, False
     if isinstance(value, (int, float)):
-        return True
-    if isinstance(value, str):
-        cleaned = value.strip().replace(",", "").replace("%", "")
-        try:
-            float(cleaned)
-            return True
-        except (ValueError, TypeError):
-            return False
-    return False
+        if isinstance(value, float) and value != value:  # NaN
+            return None, True
+        return value, True
+    if not isinstance(value, str):
+        return None, False
+    raw = value.strip()
+    if raw.lower() in _MISSING_MARKERS:
+        return None, True
+    negative = raw.startswith("(") and raw.endswith(")")
+    if negative:
+        raw = raw[1:-1]
+    cleaned = _NUMBER_NOISE.sub("", raw).replace("\u2212", "-")
+    if not cleaned:
+        return None, False
+    try:
+        number = float(cleaned)
+    except ValueError:
+        return None, False
+    if number != number or number in (float("inf"), float("-inf")):
+        return None, False
+    if negative:
+        number = -number
+    return (int(number) if number.is_integer() and "." not in cleaned and "e" not in cleaned.lower() else number), True
+
+
+def _looks_numeric(value: Any) -> bool:
+    """Whether a value is a number (or a string :func:`parse_number` can read)."""
+    number, ok = parse_number(value)
+    return ok and number is not None
 
 
 def _infer_series(data: list[dict], x_axis_key: str | None) -> list[dict]:
     """Auto-infer series configuration from data keys.
 
-    Finds all numeric-valued keys in the first data item (excluding x_axis_key)
-    and creates a series entry for each. Also detects string values that look
-    numeric (e.g., "1,234" or "56%").
+    A key becomes a series when at least one row carries a number for it
+    (numbers, or strings :func:`parse_number` can read such as "1,234" or
+    "56%"); looking at every row means a first row with "n/a" does not hide
+    the series.
     """
     if not data:
         return []
-    sample = data[0]
+    keys: list[str] = []
+    for item in data:
+        for key in item:
+            if key not in keys:
+                keys.append(key)
     series = []
-    for key, value in sample.items():
+    for key in keys:
         if key == x_axis_key:
             continue
-        if _looks_numeric(value):
+        if any(_looks_numeric(item.get(key)) for item in data):
             # Convert key to title case for the label
             label = key.replace("_", " ").title()
             series.append({"key": key, "label": label})
@@ -212,10 +263,11 @@ async def create_chart(args: dict[str, Any]) -> dict[str, Any]:
 
     if not x_axis_key and data:
         sample = data[0]
-        for key, value in sample.items():
-            if isinstance(value, str):
-                x_axis_key = key
-                break
+        # Prefer a text column that is not a number in disguise ("56%").
+        text_keys = [k for k, v in sample.items() if isinstance(v, str)]
+        x_axis_key = next((k for k in text_keys if not _looks_numeric(sample[k])), None)
+        if x_axis_key is None and text_keys:
+            x_axis_key = text_keys[0]
 
     # --- Infer series if not provided ---
 
@@ -233,20 +285,34 @@ async def create_chart(args: dict[str, Any]) -> dict[str, Any]:
     series = _apply_colors(series)
 
     # --- Ensure data values are numbers for numeric series ---
+    # One parser for every value (review L6-04): "56%" → 56, "1,234" → 1234,
+    # "n/a" / blank → None (a gap in the chart, never a fake 0). Values that
+    # could not be read are reported back to the agent.
 
-    series_keys = {s["key"] for s in series}
+    series_keys = [s["key"] for s in series]
     cleaned_data = []
+    unreadable: list[str] = []
+    gaps = 0
     for item in data:
         row = dict(item)
         for key in series_keys:
-            if key in row:
-                val = row[key]
-                if isinstance(val, str):
-                    try:
-                        row[key] = float(val.replace(",", ""))
-                    except (ValueError, TypeError):
-                        row[key] = 0
+            if key not in row:
+                continue
+            number, ok = parse_number(row[key])
+            if number is None:
+                gaps += 1
+                if not ok:
+                    unreadable.append(f"{key}={row[key]!r}")
+            row[key] = number
         cleaned_data.append(row)
+
+    plotted = sum(1 for r in cleaned_data for k in series_keys if isinstance(r.get(k), (int, float)))
+    if plotted == 0:
+        return error_response(
+            "None of the series values could be read as numbers "
+            f"(e.g. {', '.join(unreadable[:3]) or 'all values are missing'}). "
+            "Pass plain numbers such as 1185 or 56.2 (percentages without the % sign are fine)."
+        )
 
     # --- Build the chart specification ---
 
@@ -267,9 +333,18 @@ async def create_chart(args: dict[str, Any]) -> dict[str, Any]:
 
     chart_json = json.dumps(chart_spec, indent=2, ensure_ascii=False)
 
+    warning = ""
+    if gaps:
+        warning = (
+            f"\n\nNote: {gaps} value(s) are missing and are shown as gaps, not zeros"
+            + (f"; these could not be read as numbers: {', '.join(unreadable[:10])}"
+               + (" …" if len(unreadable) > 10 else "") if unreadable else "")
+            + ". Say so in your answer, or pass plain numbers and call create_chart again."
+        )
+
     response_text = (
         f"Chart generated successfully: **{title}** ({chart_type} chart, "
-        f"{len(cleaned_data)} data points, {len(series)} series).\n\n"
+        f"{len(cleaned_data)} data points, {len(series)} series).{warning}\n\n"
         f"Include the following block in your response to render the chart:\n\n"
         f"<chart>\n{chart_json}\n</chart>"
     )
