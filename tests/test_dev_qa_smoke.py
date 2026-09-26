@@ -35,7 +35,9 @@ def workflow(name: str) -> dict:
 
 def test_qa_smoke_never_lets_a_token_or_invite_link_through():
     qa = load("dev-qa-smoke.py")
-    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl"
+    import base64
+    b64 = lambda raw: base64.urlsafe_b64encode(raw).decode().rstrip("=")  # noqa: E731
+    jwt = ".".join((b64(b'{"alg":"HS256"}'), b64(b'{"sub":"x"}'), b64(b"not-a-signature")))  # synthetic
     text = (f"GET http://x/api/export/s?format=md&token={jwt} Authorization: Bearer {jwt} "
             f"https://ia.example/#invite=abcdefabcdef ws://x/ws/chat?token={jwt}")
     out = qa.scrub(text)
