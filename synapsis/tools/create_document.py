@@ -132,6 +132,93 @@ def normalize_tables(raw: Any) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# PRMS report links for result-code columns (QA-4 D8)
+# ---------------------------------------------------------------------------
+
+#: Name of the URL column added next to a result-code column in xlsx/csv.
+REPORT_URL_COLUMN = "PRMS report"
+
+_CODE_HEADER_RE = re.compile(
+    r"^\s*(?:prms\s+)?(?:result[ _\-]?code|result\s*#|code|r[ _\-]?code)s?\s*$", re.IGNORECASE
+)
+_URL_HEADER_RE = re.compile(r"\b(url|urls|link|links|prms report)\b", re.IGNORECASE)
+# "R1003", "[R1003]", "R-1003", "[R1003](https://…)" — with the R prefix.
+_R_CODE_CELL_RE = re.compile(r"^\s*\[?R-?(\d{1,7})\]?(?:\([^)\s]*\))?\s*$", re.IGNORECASE)
+# Plain numbers, only trusted under a result-code header.
+_NUM_CODE_CELL_RE = re.compile(r"^\s*#?(\d{1,7})\s*$")
+
+
+def _cell_code(value: Any, header_is_code: bool) -> str | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value) if header_is_code and value > 0 else None
+    if isinstance(value, float):
+        return str(int(value)) if header_is_code and value.is_integer() and value > 0 else None
+    text = str(value)
+    m = _R_CODE_CELL_RE.match(text)
+    if m:
+        return str(int(m.group(1)))
+    m = _NUM_CODE_CELL_RE.match(text) if header_is_code else None
+    return str(int(m.group(1))) if m else None
+
+
+def result_code_column(table: dict) -> int | None:
+    """Index of the table's result-code column, or None.
+
+    A column counts when its header names a result code ("Result code",
+    "Code", "R code") and its values are codes, or when every non-empty value
+    is an R-prefixed code ("R1003", "[R1003]").
+    """
+    rows = table["rows"]
+    if not rows:
+        return None
+    for i, col in enumerate(table["columns"]):
+        values = [r[i] for r in rows if i < len(r) and str(r[i]).strip() != ""]
+        if not values:
+            continue
+        header_is_code = bool(_CODE_HEADER_RE.match(str(col)))
+        if all(_cell_code(v, header_is_code) for v in values):
+            return i
+    return None
+
+
+def add_report_link_columns(tables: list[dict]) -> list[dict]:
+    """Add a "PRMS report" URL column after each table's result-code column.
+
+    Marc (25 Sep): a forwarded list must always carry its source URLs. The URL
+    is the public per-result report from ``resolve_result_code_url`` (never a
+    session-gated PRMS page); a code that is not in the snapshot gets an empty
+    cell. Tables that already carry a URL/link column are left as they are.
+    Returns new table dicts; each gets ``_links`` = {(row, col): url} for the
+    xlsx writer (the code cell and the URL cell are both hyperlinks).
+    """
+    from synapsis.tools.result_code_citation import resolve_result_code_url
+
+    out: list[dict] = []
+    for t in tables:
+        idx = result_code_column(t)
+        if idx is None or any(_URL_HEADER_RE.search(str(c)) for c in t["columns"]):
+            out.append(t)
+            continue
+        columns = t["columns"][: idx + 1] + [REPORT_URL_COLUMN] + t["columns"][idx + 1:]
+        rows: list[list] = []
+        links: dict[tuple[int, int], str] = {}
+        for r_i, r in enumerate(t["rows"]):
+            code = _cell_code(r[idx], True) if idx < len(r) else None
+            url = (resolve_result_code_url(code) or "") if code else ""
+            cell = r[idx]
+            if isinstance(cell, str) and "](" in cell:  # "[R1003](url)" → "R1003"
+                cell = f"R{code}" if code else cell
+            rows.append(list(r[:idx]) + [cell, url] + list(r[idx + 1:]))
+            if url:
+                links[(r_i, idx)] = url
+                links[(r_i, idx + 1)] = url
+        out.append({**t, "columns": columns, "rows": rows, "_links": links})
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Markdown helpers
 # ---------------------------------------------------------------------------
 
@@ -235,20 +322,51 @@ def _xlsx_cell(ref: str, value: Any, style: int = 0) -> str:
     return f'<c r="{ref}" t="inlineStr"{st}><is><t xml:space="preserve">{text}</t></is></c>'
 
 
-def _xlsx_sheet(rows: list[list], header_row: int | None, notice: str) -> str:
+def _xlsx_sheet(rows: list[list], header_row: int | None, notice: str,
+                links: dict[str, str] | None = None) -> str:
+    """One worksheet. *links* maps a cell ref ("B5") to an external URL; the
+    caller writes the matching relationships (rId1…) in the same order."""
+    links = links or {}
     out = []
     for r_i, row in enumerate(rows, 1):
-        style = 1 if r_i == header_row else 0
-        cells = "".join(_xlsx_cell(f"{_col_letter(c_i)}{r_i}", v, style) for c_i, v in enumerate(row, 1))
+        cells = ""
+        for c_i, v in enumerate(row, 1):
+            ref = f"{_col_letter(c_i)}{r_i}"
+            style = 1 if r_i == header_row else (2 if ref in links else 0)
+            cells += _xlsx_cell(ref, v, style)
         out.append(f'<row r="{r_i}">{cells}</row>')
     hf = _xml_escape(f"&C&\"-,Bold\"{WATERMARK_BANNER}")
     ff = _xml_escape(f"&L{notice}&R&P / &N")
+    hyperlinks = ""
+    if links:
+        hyperlinks = "<hyperlinks>" + "".join(
+            f'<hyperlink ref="{ref}" r:id="rId{n}"/>' for n, ref in enumerate(links, 1)
+        ) + "</hyperlinks>"
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
         f'<sheetData>{"".join(out)}</sheetData>'
+        f'{hyperlinks}'
         f'<headerFooter><oddHeader>{hf}</oddHeader><oddFooter>{ff}</oddFooter></headerFooter>'
         '</worksheet>'
+    )
+
+
+def _xml_attr(value: str) -> str:
+    return _xml_escape(value, {'"': "&quot;"})
+
+
+def _xlsx_sheet_rels(links: dict[str, str]) -> str:
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + "".join(
+            f'<Relationship Id="rId{n}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" '
+            f'Target="{_xml_attr(url)}" TargetMode="External"/>'
+            for n, url in enumerate(links.values(), 1)
+        )
+        + "</Relationships>"
     )
 
 
@@ -279,10 +397,14 @@ def render_xlsx(title: str, content: str, tables: list[dict], now: datetime) -> 
     if content:
         notice_rows += [[""]] + [[_clean(line)] for line in content.strip().splitlines()[:500]]
     sheets = [("AI draft notice", _xlsx_sheet(notice_rows, None, footer_notice))]
+    sheet_links: list[dict[str, str]] = [{}]
     used = {"ai draft notice"}
     for t in tables:
         rows = [[t["title"]], [WATERMARK_BANNER], [], t["columns"]] + t["rows"]
-        sheets.append((_sheet_name(t["title"], used), _xlsx_sheet(rows, 4, footer_notice)))
+        # Data rows start on sheet row 5 (title, notice, blank, header).
+        links = {f"{_col_letter(c + 1)}{r + 5}": url for (r, c), url in (t.get("_links") or {}).items()}
+        sheets.append((_sheet_name(t["title"], used), _xlsx_sheet(rows, 4, footer_notice, links)))
+        sheet_links.append(links)
 
     ct_sheets = "".join(
         f'<Override PartName="/xl/worksheets/sheet{i}.xml" '
@@ -329,13 +451,15 @@ def render_xlsx(title: str, content: str, tables: list[dict], now: datetime) -> 
     styles = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-        '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>'
-        '<font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
+        '<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font>'
+        '<font><b/><sz val="11"/><name val="Calibri"/></font>'
+        '<font><u/><sz val="11"/><color rgb="FF0563C1"/><name val="Calibri"/></font></fonts>'
         '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
         '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
         '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-        '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
-        '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>'
+        '<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+        '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
+        '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>'
         '</styleSheet>'
     )
     core = (
@@ -359,6 +483,8 @@ def render_xlsx(title: str, content: str, tables: list[dict], now: datetime) -> 
         z.writestr("xl/styles.xml", styles)
         for i, (_, xml) in enumerate(sheets, 1):
             z.writestr(f"xl/worksheets/sheet{i}.xml", xml)
+            if sheet_links[i - 1]:
+                z.writestr(f"xl/worksheets/_rels/sheet{i}.xml.rels", _xlsx_sheet_rels(sheet_links[i - 1]))
     return buf.getvalue()
 
 
@@ -389,6 +515,9 @@ def create_document_file(
     if len(content) > MAX_CONTENT_CHARS:
         raise DocumentInputError(f"'content' is too long ({len(content)} > {MAX_CONTENT_CHARS} chars)")
     norm = normalize_tables(tables)
+    if fmt in ("xlsx", "csv"):
+        # A forwarded spreadsheet keeps its sources (QA-4 D8).
+        norm = add_report_link_columns(norm)
     if fmt == "docx" and not (content or norm):
         raise DocumentInputError("docx needs 'content' and/or 'tables'")
     if fmt == "md" and not (content or norm):
@@ -420,7 +549,10 @@ def create_document_file(
     "as a JSON array of {\"title\": str, \"columns\": [str], \"rows\": [[...]]}. "
     "xlsx needs at least one table (one sheet per table); csv needs exactly one "
     "table. Give each table ONCE: either as a pipe table inside 'content' or in "
-    "'tables', never both. Every number in the file MUST come from query results you actually "
+    "'tables', never both. In xlsx/csv, a table with a result-code column "
+    "automatically gets a 'PRMS report' column with each result's public report "
+    "URL (hyperlinked in xlsx) — do not add URLs yourself. "
+    "Every number in the file MUST come from query results you actually "
     "obtained in this conversation. The file automatically carries the "
     "mandatory 'AI V0 DRAFT — REQUIRES HUMAN VALIDATION' notice and the PRMS "
     "snapshot line — do not add your own disclaimer. The tool returns the file "
