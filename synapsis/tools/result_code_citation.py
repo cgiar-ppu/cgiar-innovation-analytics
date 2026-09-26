@@ -39,6 +39,8 @@ the best row by (active, quality-assured [W1/W2 status 2 or W3/bilateral
 status 6], phase closed, phase year, version id, row id). A code that is not in
 the snapshot is never guessed at; when the snapshot itself is unavailable the
 resolver falls back to the public Results Dashboard link (never a gated one).
+Known PRMS-side exception: the IPSR 2023/2024 report is broken, so those phases
+are never linked (see ``PRMS_BROKEN_IPSR_REPORT_PHASES``).
 """
 
 from __future__ import annotations
@@ -83,6 +85,18 @@ PUBLIC_IPSR_REPORT_TEMPLATE: str = (
 
 #: Version ``app_module_id`` of the IPSR module (versions 2/5/7/9).
 _IPSR_APP_MODULE_ID = 2
+
+#: KNOWN PRMS-SIDE BUG (verified 2026-09-26, anonymous API + headless browser):
+#: the public IPSR report for the IPSR 2023 (version 2) and IPSR 2024
+#: (version 5) phases fails for every code tried with
+#: ``QueryFailedError: FUNCTION prdb.reportIPSRPat… does not exist`` and the
+#: page shows "Something went wrong". We never link those phases: a code that
+#: also exists in a later IPSR phase (7 = IPSR 2025, 9 = IPSR 2026, even as a
+#: row still being edited) is linked there — that report renders the same
+#: result code publicly; a code that exists ONLY in 2/5 gets the public
+#: Results Dashboard link instead (clickable, never an error page). Remove a
+#: phase from this set once PRMS fixes the report function.
+PRMS_BROKEN_IPSR_REPORT_PHASES: frozenset[int] = frozenset({2, 5})
 #: Result types that only exist in IPSR phases (fallback if the version table
 #: lacks ``app_module_id``): 10 Innovation Package, 11 Complementary innovation.
 _IPSR_RESULT_TYPES = (10, 11)
@@ -176,9 +190,14 @@ class ResultLink:
     module: str             # "result" | "ipsr"
     phase_name: str = ""
     quality_assured: bool = True
+    #: True when PRMS has no working public report for this code (only broken
+    #: IPSR phases): the link is the public Results Dashboard instead.
+    dashboard_fallback: bool = False
 
     @property
     def url(self) -> str:
+        if self.dashboard_fallback:
+            return _LEGACY_DASHBOARD_TEMPLATE.format(code=self.code)
         template = PUBLIC_IPSR_REPORT_TEMPLATE if self.module == "ipsr" else PUBLIC_RESULT_REPORT_TEMPLATE
         return template.format(code=self.code, phase=self.phase)
 
@@ -253,7 +272,13 @@ def _load_index(file_key: tuple) -> dict[str, ResultLink]:
             continue
         qa = _is_qa(source, status_id)
         closed = v_status in (0, "0", None)
+        if app_module_id is not None:
+            module = "ipsr" if int(app_module_id) == _IPSR_APP_MODULE_ID else "result"
+        else:
+            module = "ipsr" if type_id in _IPSR_RESULT_TYPES else "result"
+        report_works = not (module == "ipsr" and version in PRMS_BROKEN_IPSR_REPORT_PHASES)
         rank = (
+            1 if report_works else 0,  # a working public page beats everything else
             1 if is_active in (1, "1", True) else 0,
             1 if qa else 0,
             1 if closed else 0,
@@ -261,16 +286,15 @@ def _load_index(file_key: tuple) -> dict[str, ResultLink]:
             version,
             int(row_id or 0),
         )
-        if app_module_id is not None:
-            module = "ipsr" if int(app_module_id) == _IPSR_APP_MODULE_ID else "result"
-        else:
-            module = "ipsr" if type_id in _IPSR_RESULT_TYPES else "result"
-        payload = (rank, version, module, phase_name or "", qa)
+        payload = (rank, version, module, phase_name or "", qa, not report_works)
         cur = best.get(code_s)
         if cur is None or rank > cur[0]:
             best[code_s] = payload
     return {
-        code: ResultLink(code=code, phase=p[1], module=p[2], phase_name=p[3], quality_assured=p[4])
+        code: ResultLink(
+            code=code, phase=p[1], module=p[2], phase_name=p[3],
+            quality_assured=p[4], dashboard_fallback=p[5],
+        )
         for code, p in best.items()
     }
 
@@ -304,6 +328,8 @@ def resolve_result_code_url(result_code: str | int | None) -> Optional[str]:
     * Known code → the public PRMS result report for its latest published phase
       (``reporting.cgiar.org/reports/result-details/<code>?phase=<version_id>``,
       or ``ipsr-details`` for IPSR-module results).
+    * Code whose only phases have a broken PRMS report (IPSR 2023/2024, see
+      ``PRMS_BROKEN_IPSR_REPORT_PHASES``) → the public Results Dashboard link.
     * Snapshot unavailable → the public Results Dashboard (graceful fallback).
     * Malformed code, or a code that is NOT in the snapshot → ``None`` (never
       guess a link for a code that does not exist).

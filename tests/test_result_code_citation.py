@@ -76,6 +76,13 @@ _RESULTS = [
     (40000, 28814, 8, 7, "Result", 2, 1),
     # 42: two-digit code.
     (42, 42, 1, 7, "Result", 2, 1),
+    # KNOWN PRMS BUG: IPSR 2023 (v2) / IPSR 2024 (v5) reports fail publicly.
+    # 14935: QA'd package in IPSR 2024, still edited in IPSR 2025 → link v7.
+    (16597, 14935, 5, 10, "Result", 2, 1),
+    (29600, 14935, 7, 10, "Result", 1, 1),
+    # 16106 / 8271: exist ONLY in the broken phases → dashboard fallback.
+    (17803, 16106, 5, 11, "Result", 2, 1),
+    (8869, 8271, 2, 11, "Result", 1, 1),
 ]
 
 
@@ -148,6 +155,39 @@ def test_ipsr_module_uses_ipsr_details(snapshot):
 def test_bilateral_and_open_phase_only_codes(snapshot):
     assert resolve_result_code_url(26115) == R.format(26115, 6)
     assert resolve_result_code_url(28814) == R.format(28814, 8)
+
+
+def test_broken_ipsr_phase_is_skipped_for_a_later_working_phase(snapshot):
+    # QA'd in IPSR 2024 (broken report) but also present in IPSR 2025 → v7.
+    assert resolve_result_code_url(14935) == I.format(14935, 7)
+    assert get_result_link(14935).dashboard_fallback is False
+
+
+def test_code_only_in_broken_ipsr_phases_falls_back_to_the_dashboard(snapshot):
+    dash = "https://www.cgiar.org/food-security-impact/results-dashboard/?result_code={}"
+    for code in (16106, 8271):
+        url = resolve_result_code_url(code)
+        assert url == dash.format(code)
+        assert get_result_link(code).dashboard_fallback is True
+        assert not is_session_gated_url(url)
+
+
+def test_fallback_codes_stay_clickable_and_are_not_flagged(snapshot):
+    report = linkify_result_codes_report("Packages [R16106] and R8271 and R14935.")
+    assert "[R16106](https://www.cgiar.org/food-security-impact/results-dashboard/?result_code=16106)" in report.text
+    assert "[R8271](https://www.cgiar.org/food-security-impact/results-dashboard/?result_code=8271)" in report.text
+    assert f"[R14935]({I.format(14935, 7)})" in report.text
+    assert report.unknown == [] and UNKNOWN_CODE_NOTE not in report.text
+    assert linkify_result_codes(report.text) == report.text  # idempotent
+
+
+def test_no_link_ever_targets_a_known_broken_prms_report(snapshot):
+    from synapsis.tools.result_code_citation import PRMS_BROKEN_IPSR_REPORT_PHASES
+
+    for code in {str(r[1]) for r in _RESULTS}:
+        url = resolve_result_code_url(code)
+        for phase in PRMS_BROKEN_IPSR_REPORT_PHASES:
+            assert not url.endswith(f"ipsr-details/{code}?phase={phase}"), url
 
 
 def test_unknown_code_is_never_guessed(snapshot):
