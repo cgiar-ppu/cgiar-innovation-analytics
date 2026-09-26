@@ -67,3 +67,21 @@ def test_prompt_never_prints_the_snapshot_file(prompt):
     # only the live snapshot's own file must not appear.)
     assert "SQLite database at" not in prompt and "- Path: `" not in prompt
     assert "never name the database file" in prompt
+
+
+def test_theme_questions_are_answered_first_with_a_stated_default(prompt):
+    """QA-4 observation: theme questions triggered a clarifying round-trip before any list."""
+    assert "Ask before you search" not in prompt
+    rule = prompt.split("**Answer first, with a stated default", 1)[1].split("\n", 1)[0]
+    assert "do NOT open with a clarifying question" in rule
+    assert "say which you used" in rule
+    assert "offer the refinements" in rule
+    assert "truly ambiguous" in rule
+
+
+def test_prms_search_tool_no_longer_demands_asking_first():
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "synapsis" / "tools" / "prms_search.py").read_text()
+    assert "ASK THE USER" not in src
+    assert "Run it straight away with the default (hybrid)" in src

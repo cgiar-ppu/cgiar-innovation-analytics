@@ -433,8 +433,9 @@ def _run_search(args: dict[str, Any]) -> dict[str, Any]:
     "consistent with canonical dedup rules); supports 'find results similar to a "
     "given result_code'. Modes: 'keyword' (exact lexical, zero embedding noise), "
     "'hybrid' (BM25 + semantic fused via RRF, default), 'semantic' (conceptual). "
-    "ASK THE USER whether they want exact-keyword-only or also semantically "
-    "related themes before running, to avoid noise. Returns result_codes you can "
+    "Run it straight away with the default (hybrid) and state the mode used; "
+    "then offer exact-keyword-only or purely semantic as a refinement (ask first "
+    "only when the question is truly ambiguous). Returns result_codes you can "
     "then pass to prms_query for full structured detail.",
     {
         "query": str,
