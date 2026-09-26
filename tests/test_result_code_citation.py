@@ -421,3 +421,15 @@ async def test_chat_handler_sends_no_extra_frame_when_nothing_to_link(snapshot):
             streamed_thinking=False, send_json=send_json,
         )
     assert sent == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["`" * 5000 + " R1003", "[" * 5000 + "R1003", ("[abc " * 3000) + "] (x", "|" * 10000],
+)
+def test_pathological_input_stays_fast(snapshot, text):
+    import time
+
+    t0 = time.perf_counter()
+    linkify_result_codes(text)
+    assert time.perf_counter() - t0 < 1.0

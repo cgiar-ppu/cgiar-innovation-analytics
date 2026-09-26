@@ -352,7 +352,7 @@ class LinkifyReport:
 _PROTECTED_RE = re.compile(
     r"(?P<fence>^[ \t]*(?P<fch>`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*(?P=fch)[ \t]*$|\Z))"
     r"|(?P<chart><chart>.*?</chart>)"
-    r"|(?P<code>(?P<bt>`+)[^\n]+?(?P=bt))"
+    r"|(?P<code>(?P<bt>`{1,3})[^`\n][^\n]*?(?P=bt))"
     r"|(?P<mdlink>!?\[(?P<ltext>(?:[^\[\]]|\[[^\[\]]*\])*)\]\((?P<href>[^()\s]*(?:\([^()\s]*\)[^()\s]*)*)(?P<ltitle>\s+\"[^\"]*\")?\))"
     r"|(?P<autolink><https?://[^>\s]+>)"
     r"|(?P<html></?[A-Za-z][^>\n]*>)"
