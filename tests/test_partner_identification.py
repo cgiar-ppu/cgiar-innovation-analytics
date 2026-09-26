@@ -89,7 +89,8 @@ class TestQueryBuilding:
         sql, params = _build_partner_query(country="Kenya")
         assert "result_country" in sql
         assert "clarisa_countries" in sql
-        assert any("Kenya" in str(p) for p in params)
+        # Exact, case-insensitive match (L2-10): the name is bound lower-cased.
+        assert any(str(p).lower() == "kenya" for p in params)
 
     def test_region_filter_builds_join(self):
         """Region filter should add result_region JOIN."""
@@ -310,3 +311,55 @@ class TestPRMSIntegration:
         assert "PRMS Database (snapshot " in text
         assert "2026-03-18" not in text  # the old hard-coded March footer must be gone
         assert "Query executed in:" in text
+
+
+# ---------------------------------------------------------------------------
+# L2-10: country filter is an exact match; counts are distinct result codes
+# ---------------------------------------------------------------------------
+
+class TestCountryExactMatch:
+
+    def test_country_filter_is_not_a_substring_like(self):
+        sql, params = _build_partner_query(country="Niger")
+        assert "cc.name LIKE" not in sql
+        assert "LOWER(TRIM(cc.name)) = ?" in sql
+        assert "niger" in params and "%Niger%" not in params
+
+    def test_counts_distinct_result_codes_with_the_quality_gate(self):
+        sql, _ = _build_partner_query(country="Kenya")
+        assert "COUNT(DISTINCT r.result_code) AS result_count" in sql
+        assert "r.source = 'API' AND r.status_id = 6" in sql
+        assert "r.source = 'Result' AND r.status_id = 2" in sql
+
+
+@pytest.mark.skipif(
+    not os.path.isfile(PRMS_DB_PATH),
+    reason="PRMS database not available"
+)
+class TestNigerIsNotNigeria:
+
+    def test_niger_filter_never_matches_nigeria_rows(self):
+        import sqlite3
+        sql, params = _build_partner_query(country="Niger")
+        # Re-select the matched country names through the same WHERE clause.
+        probe = sql.split("WHERE", 1)
+        conn = sqlite3.connect(f"file:{PRMS_DB_PATH}?mode=ro", uri=True)
+        try:
+            where = probe[1].split("GROUP BY", 1)[0]
+            rows = conn.execute(
+                "SELECT DISTINCT cc.name FROM results_by_institution rbi "
+                "JOIN clarisa_institutions ci ON rbi.institutions_id = ci.id "
+                "JOIN institution_role ir ON rbi.institution_roles_id = ir.id "
+                "JOIN result r ON rbi.result_id = r.id "
+                "JOIN result_country rc ON r.id = rc.result_id AND rc.is_active = 1 "
+                "JOIN clarisa_countries cc ON rc.country_id = cc.id WHERE " + where,
+                params,
+            ).fetchall()
+        finally:
+            conn.close()
+        names = {r[0] for r in rows}
+        assert names == {"Niger"}, names
+
+    def test_iso3_code_matches_exactly(self):
+        sql, params = _build_partner_query(country="NGA")
+        assert params[:3] == ("nga", "NGA", "NGA")
