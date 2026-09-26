@@ -52,6 +52,11 @@ from synapsis.exporters.watermark import (
     watermark_markdown,
     watermark_markdown_footer,
 )
+from synapsis.exporters.render import (
+    markdown_into_docx,
+    prepare_assistant_text,
+    replace_charts_with_markdown_tables,
+)
 from synapsis.user_files import new_output_path
 from synapsis.utils.responses import error_response, success_response
 
@@ -145,7 +150,9 @@ def table_to_markdown(table: dict) -> str:
 def render_markdown(title: str, content: str, tables: list[dict], now: datetime) -> str:
     parts = [watermark_markdown(now), f"# {title}", ""]
     if content:
-        parts += [content.strip(), ""]
+        # Same export pipeline as chat exports: result codes linked to their
+        # public PRMS report, <chart> blocks as captioned tables (L6-02).
+        parts += [replace_charts_with_markdown_tables(prepare_assistant_text(content)).strip(), ""]
     for t in tables:
         parts += [table_to_markdown(t), ""]
     parts.append(watermark_markdown_footer(now))
@@ -176,32 +183,6 @@ def render_csv(title: str, tables: list[dict], now: datetime) -> str:
 # DOCX (python-docx)
 # ---------------------------------------------------------------------------
 
-_BOLD = re.compile(r"(\*\*[^*]+\*\*)")
-
-
-def _add_runs(paragraph, text: str) -> None:
-    for piece in _BOLD.split(text):
-        if not piece:
-            continue
-        if piece.startswith("**") and piece.endswith("**") and len(piece) > 4:
-            paragraph.add_run(piece[2:-2]).bold = True
-        else:
-            paragraph.add_run(piece)
-
-
-def _is_md_table_sep(line: str) -> bool:
-    return bool(re.match(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$", line))
-
-
-def _split_md_row(line: str) -> list[str]:
-    s = line.strip()
-    if s.startswith("|"):
-        s = s[1:]
-    if s.endswith("|"):
-        s = s[:-1]
-    return [c.strip() for c in s.split("|")]
-
-
 def _add_docx_table(doc, columns: list, rows: list) -> None:
     table = doc.add_table(rows=1, cols=max(1, len(columns)))
     table.style = "Table Grid"
@@ -215,43 +196,16 @@ def _add_docx_table(doc, columns: list, rows: list) -> None:
             cells[i].text = _clean(v)
 
 
-def _markdown_into_docx(doc, content: str) -> None:
-    """Small Markdown subset → Word: headings, bullets, numbers, pipe tables, bold."""
-    lines = content.splitlines()
-    i = 0
-    while i < len(lines):
-        line = _clean(lines[i]).rstrip()
-        nxt = lines[i + 1] if i + 1 < len(lines) else ""
-        if line.strip().startswith("|") and _is_md_table_sep(nxt):
-            header = _split_md_row(line)
-            i += 2
-            body = []
-            while i < len(lines) and lines[i].strip().startswith("|"):
-                body.append(_split_md_row(_clean(lines[i])))
-                i += 1
-            _add_docx_table(doc, header, body)
-            continue
-        m = re.match(r"^(#{1,6})\s+(.*)$", line)
-        if m:
-            doc.add_heading(m.group(2).strip(), level=min(len(m.group(1)), 4))
-        elif re.match(r"^\s*[-*+]\s+", line):
-            _add_runs(doc.add_paragraph(style="List Bullet"), re.sub(r"^\s*[-*+]\s+", "", line))
-        elif re.match(r"^\s*\d+[.)]\s+", line):
-            _add_runs(doc.add_paragraph(style="List Number"), re.sub(r"^\s*\d+[.)]\s+", "", line))
-        elif line.strip() in ("---", "***"):
-            doc.add_paragraph("")
-        elif line.strip():
-            _add_runs(doc.add_paragraph(), line.strip())
-        i += 1
-
-
 def render_docx(title: str, content: str, tables: list[dict], now: datetime) -> bytes:
     from docx import Document
 
     doc = Document()
     doc.add_heading(title, level=0)
     if content:
-        _markdown_into_docx(doc, content)
+        # The shared chat-export renderer (review L6-02): headings, bold/italic,
+        # lists, tables, clickable links (result codes linked to their public
+        # PRMS report) and <chart> blocks as captioned data tables.
+        markdown_into_docx(doc, prepare_assistant_text(content))
     for t in tables:
         doc.add_heading(t["title"], level=2)
         _add_docx_table(doc, t["columns"], t["rows"])
@@ -461,7 +415,8 @@ def create_document_file(
     "an Excel workbook ('xlsx'), a CSV ('csv') or a Markdown file ('md'). This "
     "is the ONLY way to produce a file — there is no shell or file-writing tool. "
     "Pass a 'title', optional Markdown 'content' (headings, bullet/numbered "
-    "lists, **bold**, pipe tables are rendered in docx), and optional 'tables' "
+    "lists, **bold**/*italic*, links, pipe tables and [R<code>] citations are "
+    "rendered in docx), and optional 'tables' "
     "as a JSON array of {\"title\": str, \"columns\": [str], \"rows\": [[...]]}. "
     "xlsx needs at least one table (one sheet per table); csv needs exactly one "
     "table. Give each table ONCE: either as a pipe table inside 'content' or in "
