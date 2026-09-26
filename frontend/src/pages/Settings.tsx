@@ -7,6 +7,7 @@ import Badge from '../components/common/Badge';
 import { api } from '../lib/api';
 import type { AppConfig, HealthStatus } from '../lib/types';
 import InvitationManager from '../components/guardrails/InvitationManager';
+import AdminFeedbackPanel from '../components/feedback/AdminFeedbackPanel';
 
 export default function Settings() {
   const { theme, setTheme } = useUIStore();
@@ -42,6 +43,7 @@ export default function Settings() {
       </div>
 
       {config?.invited_login_enabled && <InvitationManager />}
+      <AdminFeedbackPanel />
       {/* Theme */}
       <GlassCard>
         <h3 className="text-sm font-semibold text-[var(--text)] mb-4 flex items-center gap-2">
