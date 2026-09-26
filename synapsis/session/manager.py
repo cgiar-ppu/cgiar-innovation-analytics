@@ -125,6 +125,13 @@ class SessionManager:
     async def cleanup_session_client(self, session_id: str) -> None:
         return await self._client_registry.cleanup_session_client(session_id)
 
+    async def replace_session_client(
+        self, session_id: str, sessions_dict: dict, *, model: Optional[str], resume: bool = True,
+    ) -> ClaudeSDKClient:
+        return await self._client_registry.replace_session_client(
+            session_id, sessions_dict, model=model, resume=resume,
+        )
+
     async def cleanup_orphaned_sessions(self) -> int:
         """Clean up sessions with no WebSocket viewers and no active task.
 
