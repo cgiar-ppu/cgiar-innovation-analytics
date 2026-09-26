@@ -61,3 +61,18 @@ def test_is_aup_error_no_match(message: str):
 def test_aup_patterns_are_nonempty():
     """Sanity check: the AUP_ERROR_PATTERNS list must contain at least one entry."""
     assert len(AUP_ERROR_PATTERNS) > 0
+
+
+@pytest.mark.parametrize("message", ["Taupe rice varieties", "inviolate standards", "the policy is unchanged"])
+def test_is_aup_error_short_tokens_match_whole_words_only(message: str):
+    """"aup"/"violate" only count as whole words (no Taupe/inviolate hits)."""
+    assert is_aup_error(message) is False
+
+
+def test_runtime_messages_are_english_and_parameterised():
+    from synapsis import constants as c
+    assert "{limit" in c.TURN_BUDGET_ERROR and "{limit}" in c.MAX_TURNS_ERROR
+    assert "{contact}" in c.DAILY_LIMIT_ERROR and "{duration}" in c.STALL_ERROR
+    for name in ("CLI_RECONNECT_FAILED_ERROR", "GENERIC_TURN_ERROR", "STREAM_ENDED_EARLY_ERROR"):
+        text = getattr(c, name)
+        assert text.isascii() and "sesión" not in text
