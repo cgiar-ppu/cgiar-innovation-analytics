@@ -463,6 +463,64 @@ async def test_chat_handler_sends_no_extra_frame_when_nothing_to_link(snapshot):
     assert sent == []
 
 
+@pytest.mark.asyncio
+async def test_result_text_is_linked_like_the_text_rows(snapshot):
+    """QA-4 D1: the ``result`` row repeats the final answer. It must be linked
+    exactly like the ``text`` row, so a reopened chat can de-duplicate it and
+    never shows a second, unlinked copy of the answer."""
+    from unittest.mock import AsyncMock, patch
+
+    from claude_agent_sdk import ResultMessage, TextBlock
+
+    from synapsis import message_handlers
+
+    sent: list[dict] = []
+
+    async def send_json(payload, sid=None):
+        sent.append(payload)
+
+    raw = "Top result: [R1003] and R17."
+    with patch.object(message_handlers, "save_message", new=AsyncMock()) as save, \
+            patch.object(message_handlers, "save_claude_session_id", new=AsyncMock()):
+        await message_handlers.handle_assistant_block(
+            TextBlock(text=raw), "sid-1", streamed_text=True,
+            streamed_thinking=False, send_json=send_json,
+        )
+        await message_handlers.handle_result_message(
+            ResultMessage(subtype="success", duration_ms=10, duration_api_ms=5,
+                          is_error=False, num_turns=1, session_id="sdk-1",
+                          total_cost_usd=0.01, result=raw),
+            "sid-1", send_json,
+        )
+    text_row = save.await_args_list[0].args[2]["content"]
+    result_row = save.await_args_list[1].args[2]["result_text"]
+    assert result_row == text_row
+    assert f"[R1003]({R.format(1003, 6)})" in result_row
+    frame = next(p for p in sent if p.get("type") == "result")
+    assert frame["result_text"] == text_row
+
+
+@pytest.mark.asyncio
+async def test_empty_result_text_stays_empty(snapshot):
+    from unittest.mock import AsyncMock, patch
+
+    from claude_agent_sdk import ResultMessage
+
+    from synapsis import message_handlers
+
+    async def send_json(payload, sid=None):
+        pass
+
+    with patch.object(message_handlers, "save_message", new=AsyncMock()) as save, \
+            patch.object(message_handlers, "save_claude_session_id", new=AsyncMock()):
+        await message_handlers.handle_result_message(
+            ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1,
+                          is_error=False, num_turns=1, session_id="sdk-1", result=None),
+            "sid-1", send_json,
+        )
+    assert save.await_args.args[2]["result_text"] == ""
+
+
 @pytest.mark.parametrize(
     "text",
     ["`" * 5000 + " R1003", "[" * 5000 + "R1003", ("[abc " * 3000) + "] (x", "|" * 10000],

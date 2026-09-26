@@ -259,6 +259,14 @@ async def handle_result_message(
     # Forward the result text from slash commands (e.g. /config, /usage)
     # that return output solely via ResultMessage.result without streaming.
     result_text = message.result or ""
+    # The SDK's ``result`` repeats the final answer text UNLINKED. Link it the
+    # same way as the text rows (idempotent), so a reopened chat never shows a
+    # second, unlinked copy of the answer (QA-4 D1) and the client-side
+    # de-duplication of history compares like with like.
+    if result_text:
+        import asyncio
+        from synapsis.tools.result_code_citation import linkify_result_codes
+        result_text = await asyncio.to_thread(linkify_result_codes, result_text)
 
     # Debug: log all ResultMessage fields for diagnostic purposes
     logger.debug(
