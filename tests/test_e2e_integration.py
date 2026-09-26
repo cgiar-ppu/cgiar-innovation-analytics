@@ -517,51 +517,18 @@ async def run_all_tests():
         record("5a. Multi-turn context retained across turns", False, str(e))
 
     # =========================================================================
-    # 6. Direct Agent WebSocket Test
+    # 6. Direct Agent WebSocket is GONE (P0-1, 2026-09-26)
     # =========================================================================
-    print("\n━━━ 6. Direct Agent Access ━━━")
-
-    print("\n  [6a] Testing direct PRMS Data Analyst agent...")
+    # The Synapsis-era /ws/agent/{id} socket accepted anonymous callers and was
+    # removed. The acceptance check is now that it no longer upgrades.
+    print("\n━━━ 6. Direct Agent Access removed ━━━")
     try:
         url = f"{AGENT_WS_URL}/prms_data_analyst"
         async with websockets.connect(url, close_timeout=5) as ws:
-            # Should get agent_info first
-            raw = await asyncio.wait_for(ws.recv(), timeout=CONNECT_TIMEOUT)
-            info = json.loads(raw)
-
-            is_correct_agent = (
-                info.get("type") == "agent_info" and
-                info.get("agent_id") == "prms_data_analyst"
-            )
-
-            if is_correct_agent:
-                await ws.send(json.dumps({
-                    "message": "Count the total number of active results in the database, grouped by result type. Show counts only."
-                }))
-
-                resp = await collect_ws_response(ws, timeout=MSG_TIMEOUT)
-                text = resp["text"]
-
-                prms_used = any(
-                    t.get("tool") in ("prms_query", "mcp__synapsis__prms_query")
-                    for t in resp["tool_uses"]
-                )
-
-                import re
-                has_numbers = bool(re.search(r'\d{3,}', text))  # 3+ digit numbers expected
-
-                passed = resp["result"] is not None and has_numbers
-                details = (
-                    f"correct_agent={is_correct_agent}, prms_used={prms_used}, "
-                    f"has_numbers={has_numbers}, text_len={len(text)}"
-                )
-            else:
-                passed = False
-                details = f"Wrong agent info: {info}"
-
-            record("6a. Direct PRMS Data Analyst responds with data", passed, details)
+            await asyncio.wait_for(ws.recv(), timeout=CONNECT_TIMEOUT)
+        record("6a. /ws/agent no longer accepts connections", False, "socket accepted a connection")
     except Exception as e:
-        record("6a. Direct PRMS Data Analyst responds with data", False, str(e))
+        record("6a. /ws/agent no longer accepts connections", True, f"refused: {type(e).__name__}")
 
     # =========================================================================
     # Summary

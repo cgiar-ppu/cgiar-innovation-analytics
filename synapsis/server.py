@@ -51,9 +51,6 @@ from synapsis.auth.sso_provider import validate_settings as validate_sso_setting
 from synapsis.routes.voice import router as voice_router
 from synapsis.voice import sessions as voice_sessions
 from synapsis.websocket import ws_chat, get_activity_stats, cleanup_session_client
-from synapsis.workflow_ws import ws_workflow
-from synapsis.agent_ws import ws_agent
-from synapsis.fleet_ws import ws_fleet
 
 
 # ---------------------------------------------------------------------------
@@ -102,10 +99,11 @@ app.include_router(images_router)
 app.include_router(scope_router)
 
 # -- Register WebSocket endpoints --
+# /ws/chat is the ONLY WebSocket. The Synapsis-era /ws/agent, /ws/workflow and
+# /ws/fleet sockets accepted anonymous handshakes and drove a shell-capable
+# agent (review 2026-09-23, P0-1); they were removed, not just guarded.
+# tests/test_ws_auth.py pins this set.
 app.websocket("/ws/chat")(ws_chat)
-app.add_api_websocket_route("/ws/workflow/{workflow_id}", ws_workflow)
-app.add_api_websocket_route("/ws/agent/{agent_id}", ws_agent)
-app.add_api_websocket_route("/ws/fleet/{fleet_id}", ws_fleet)
 
 
 # -- Startup event: initialize database --

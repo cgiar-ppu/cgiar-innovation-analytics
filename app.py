@@ -14,7 +14,6 @@ Module structure:
     ├── agent_options.py        — ClaudeAgentOptions builder (tools, hooks, MCP, subagents)
     ├── server.py               — FastAPI assembly, router registration, startup, static mount
     ├── websocket.py            — /ws/chat streaming handler + session management
-    ├── workflow_ws.py          — /ws/workflow/{id} pipeline execution via WebSocket
     ├── ws_utils.py             — Shared WebSocket utilities
     ├── stream_handler.py       — Consumes async generator from ClaudeSDKClient
     ├── stream_core.py          — Shared streaming utilities for chat and workflow paths
