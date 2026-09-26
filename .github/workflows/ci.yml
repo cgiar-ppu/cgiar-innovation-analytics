@@ -1,0 +1,187 @@
+name: CI (tests)
+
+# Runs the backend and frontend test suites on every push to the DEV branch and
+# on every pull request (review L7-06: no workflow ran pytest/vitest/tsc before).
+#
+# Security notes (the repository is PUBLIC):
+#   * `pull_request` only -- never `pull_request_target` -- so fork code never
+#     runs with this repository's secrets or an OIDC token.
+#   * No secrets are used. The only cloud access is the read of the published
+#     PRMS snapshot in `backend-prms-data`, which runs ONLY on `push` to
+#     feature/innovation-platform-foundation (trusted code, the same code the
+#     DEV deploy builds) through the DEV OIDC role, exactly as deploy.yml does.
+#   * The snapshot is downloaded into the runner's temp dir and never uploaded
+#     as an artifact (public-repo artifacts are downloadable by anyone).
+#
+# The backend runs in prod-auth mode (SYNAPSIS_PLATFORM=linux: authentication
+# enforced, macOS dev bypass off), which is what every deployed environment runs.
+
+on:
+  push:
+    branches: [feature/innovation-platform-foundation]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: '3.12'
+  NODE_VERSION: '20'
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Backend, no PRMS data (pull requests). The data-dependent tests skip when
+  # the snapshot is absent; the job summary reports how many and why.
+  # -------------------------------------------------------------------------
+  backend:
+    name: Backend tests (prod-auth, no PRMS data)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SYNAPSIS_PLATFORM: linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin test paths (runner temp)
+        run: |
+          echo "SYNAPSIS_WORKSPACE=$RUNNER_TEMP/ia-workspace" >> "$GITHUB_ENV"
+          echo "PRMS_DB_PATH=$RUNNER_TEMP/no-prms-snapshot/prdb.sqlite" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt "pytest>=8,<10" "pytest-asyncio>=0.24,<2" "pytest-timeout>=2.3,<3"
+
+      - name: pytest (prod-auth mode)
+        run: |
+          mkdir -p "$SYNAPSIS_WORKSPACE"
+          python -m pytest -q -p no:cacheprovider --timeout=600 -rs \
+            --junitxml="$RUNNER_TEMP/pytest-junit.xml"
+
+      - name: Test summary (pass / fail / skip counts)
+        if: always()
+        run: >-
+          python3 .github/scripts/pytest-summary.py "$RUNNER_TEMP/pytest-junit.xml"
+          "Backend tests (prod-auth mode, no PRMS data)"
+          "PRMS-data tests skip here; they run on push in *Backend tests (prod-auth, PRMS data)*."
+
+  # -------------------------------------------------------------------------
+  # Backend with the published PRMS snapshot (push to the DEV branch only).
+  # -------------------------------------------------------------------------
+  backend-prms-data:
+    name: Backend tests (prod-auth, PRMS data)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/feature/innovation-platform-foundation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: eu-central-1
+      EXPECTED_ACCOUNT: '972793825893'
+      SYNAPSIS_PLATFORM: linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin test paths (runner temp)
+        run: |
+          echo "SYNAPSIS_WORKSPACE=$RUNNER_TEMP/ia-workspace" >> "$GITHUB_ENV"
+          echo "PRMS_DB_PATH=$RUNNER_TEMP/prms/prdb.sqlite" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt "pytest>=8,<10" "pytest-asyncio>=0.24,<2" "pytest-timeout>=2.3,<3"
+
+      - name: Configure AWS credentials (DEV, read the published snapshot)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+
+      - name: Download the published PRMS snapshot (DEV artifact bucket)
+        run: |
+          set -euo pipefail
+          ACTUAL=$(aws sts get-caller-identity --query Account --output text)
+          if [[ "$ACTUAL" != "$EXPECTED_ACCOUNT" ]]; then
+            echo "::error::Account mismatch (expected the DEV account)"; exit 1
+          fi
+          BUCKET="cgiar-ia-artifacts-$EXPECTED_ACCOUNT"
+          DIR="$(dirname "$PRMS_DB_PATH")"; mkdir -p "$DIR"
+          aws s3 cp --only-show-errors "s3://$BUCKET/prdb.manifest.json" "$DIR/prdb.manifest.json"
+          PREFIX=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["s3_prefix"])' "$DIR/prdb.manifest.json")
+          aws s3 cp --only-show-errors "s3://$BUCKET/$PREFIX/prdb.sqlite" "$PRMS_DB_PATH"
+          python3 - "$DIR/prdb.manifest.json" <<'PY'
+          import hashlib, json, os, sqlite3, sys
+          m = json.load(open(sys.argv[1])); db = os.environ['PRMS_DB_PATH']
+          assert hashlib.file_digest(open(db, 'rb'), 'sha256').hexdigest() == m['sha256'], 'snapshot checksum mismatch'
+          n = sqlite3.connect(f'file:{db}?mode=ro', uri=True).execute('select count(*) from result').fetchone()[0]
+          assert n == m['result_count'], 'result row count mismatch'
+          print(json.dumps({'snapshot': m['snapshot_date'], 'result_rows': n, 'checksum': 'verified'}))
+          PY
+
+      - name: Index the runner's private copy of the snapshot
+        # The runner's copy only; the published artifact is never modified.
+        run: |
+          mkdir -p "$SYNAPSIS_WORKSPACE"
+          python -c 'import os; from synapsis.db_init import ensure_result_indexes; ensure_result_indexes(os.environ["PRMS_DB_PATH"])'
+
+      - name: pytest (prod-auth mode, PRMS data)
+        run: |
+          python -m pytest -q -p no:cacheprovider --timeout=600 -rs \
+            --junitxml="$RUNNER_TEMP/pytest-junit.xml"
+
+      - name: Test summary (pass / fail / skip counts)
+        if: always()
+        run: >-
+          python3 .github/scripts/pytest-summary.py "$RUNNER_TEMP/pytest-junit.xml"
+          "Backend tests (prod-auth mode, published PRMS snapshot)"
+
+  # -------------------------------------------------------------------------
+  # Frontend: vitest, type check, production build (push and pull request).
+  # -------------------------------------------------------------------------
+  frontend:
+    name: Frontend (vitest, tsc, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: vitest
+        run: npx vitest run
+
+      - name: Type check (tsc -b --noEmit)
+        run: npx tsc -b --noEmit
+
+      - name: Production build
+        run: npm run build
