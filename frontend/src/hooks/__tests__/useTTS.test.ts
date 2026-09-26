@@ -10,11 +10,20 @@ import { useAuthStore } from '../../stores/auth'
 import { useTTSStore } from '../../stores/tts'
 import { requestTTSAudio } from '../useTTS'
 
+type FetchArgs = [string, RequestInit]
+
 describe('read-aloud request', () => {
-  let fetchMock: ReturnType<typeof vi.fn>
+  let fetchMock: ReturnType<typeof vi.fn<(...args: FetchArgs) => Promise<Response>>>
+
+  const call = (i: number): FetchArgs => {
+    const c = fetchMock.mock.calls[i]
+    if (!c) throw new Error(`fetch call ${i} missing`)
+    return c
+  }
 
   beforeEach(() => {
-    fetchMock = vi.fn().mockResolvedValue(new Response(new ArrayBuffer(8), { status: 200 }))
+    fetchMock = vi.fn<(...args: FetchArgs) => Promise<Response>>()
+      .mockResolvedValue(new Response(new ArrayBuffer(8), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
   })
 
@@ -27,7 +36,7 @@ describe('read-aloud request', () => {
     useAuthStore.setState({ token: 'tok-123' })
     await requestTTSAudio('Hello there.', 'opus')
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0]
+    const [url, init] = call(0)
     expect(url).toBe('/api/tts')
     expect(init.method).toBe('POST')
     const headers = init.headers as Record<string, string>
@@ -40,7 +49,7 @@ describe('read-aloud request', () => {
     await requestTTSAudio('One.', 'opus')
     useAuthStore.setState({ token: 'new' })
     await requestTTSAudio('Two.', 'mp3')
-    const auth = fetchMock.mock.calls.map(([, init]) => (init.headers as Record<string, string>).Authorization)
+    const auth = [call(0), call(1)].map(([, init]) => (init.headers as Record<string, string>).Authorization)
     expect(auth).toEqual(['Bearer old', 'Bearer new'])
   })
 
@@ -48,7 +57,7 @@ describe('read-aloud request', () => {
     useAuthStore.setState({ token: 't' })
     useTTSStore.setState({ settings: { voice: 'sage', model: 'tts-1-hd', instructions: 'calm', speed: 1.25 } })
     await requestTTSAudio('Text.', 'mp3')
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string)
+    const body = JSON.parse(call(0)[1].body as string)
     expect(body).toMatchObject({ text: 'Text.', voice: 'sage', speed: 1.25, instructions: 'calm', response_format: 'mp3' })
     expect(body).not.toHaveProperty('model')
   })
