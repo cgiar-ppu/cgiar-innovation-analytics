@@ -18,6 +18,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { Bot, Check, ChevronDown } from 'lucide-react'
 import { usePersonaStore } from '../../stores/persona'
+import type { PersonaOption } from '../../stores/persona'
+
+/**
+ * Audience personas ("Funder / investor", "Scientist / researcher") come from
+ * the same GET /api/personas list, tagged `type: "Audience"`. They change who
+ * the answer is WRITTEN FOR instead of which specialist answers, so the menu
+ * groups them first and the summary reads "Written for …".
+ */
+const AUDIENCE_TYPE = 'Audience'
+const isAudience = (p: PersonaOption | undefined) => p?.type === AUDIENCE_TYPE
 
 function useClickOutside(onOutside: () => void) {
   const ref = useRef<HTMLDivElement>(null)
@@ -63,6 +73,45 @@ export function PersonaPicker() {
     selectPersona(id)
     setOpen(false)
   }
+
+  const audiences = options.filter((p) => isAudience(p))
+  const specialists = options.filter((p) => !isAudience(p))
+  const grouped = audiences.length > 0 && specialists.length > 0
+
+  const renderOption = (p: PersonaOption) => (
+    <button
+      key={p.id}
+      type="button"
+      role="menuitemradio"
+      aria-checked={selected === p.id}
+      onClick={() => choose(p.id)}
+      className="w-full flex items-start gap-2 px-2 py-2 rounded-lg text-left hover:bg-surface-2"
+      data-testid={`persona-option-${p.id}`}
+    >
+      <span className="w-4 shrink-0 pt-0.5">
+        {selected === p.id && (
+          <Check size={13} className="text-accent" aria-hidden="true" />
+        )}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5">
+          {p.color && (
+            <span
+              className="w-2 h-2 rounded-full shrink-0"
+              style={{ backgroundColor: p.color }}
+              aria-hidden="true"
+            />
+          )}
+          <span className="text-xs font-medium text-text-primary truncate">
+            {p.name}
+          </span>
+        </span>
+        <span className="block text-[11px] text-text-muted leading-snug mt-0.5 line-clamp-3">
+          {p.description}
+        </span>
+      </span>
+    </button>
+  )
 
   return (
     <div ref={ref} className="relative flex items-center" data-testid="persona-picker">
@@ -134,40 +183,18 @@ export function PersonaPicker() {
             </p>
           )}
 
-          {options.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              role="menuitemradio"
-              aria-checked={selected === p.id}
-              onClick={() => choose(p.id)}
-              className="w-full flex items-start gap-2 px-2 py-2 rounded-lg text-left hover:bg-surface-2"
-              data-testid={`persona-option-${p.id}`}
-            >
-              <span className="w-4 shrink-0 pt-0.5">
-                {selected === p.id && (
-                  <Check size={13} className="text-accent" aria-hidden="true" />
-                )}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-1.5">
-                  {p.color && (
-                    <span
-                      className="w-2 h-2 rounded-full shrink-0"
-                      style={{ backgroundColor: p.color }}
-                      aria-hidden="true"
-                    />
-                  )}
-                  <span className="text-xs font-medium text-text-primary truncate">
-                    {p.name}
-                  </span>
-                </span>
-                <span className="block text-[11px] text-text-muted leading-snug mt-0.5 line-clamp-3">
-                  {p.description}
-                </span>
-              </span>
-            </button>
-          ))}
+          {grouped && (
+            <p className="px-2 pt-1 pb-1 text-[10px] uppercase tracking-wide text-text-muted" data-testid="persona-group-audience">
+              Write the answer for
+            </p>
+          )}
+          {audiences.map(renderOption)}
+          {grouped && (
+            <p className="px-2 pt-2 pb-1 text-[10px] uppercase tracking-wide text-text-muted" data-testid="persona-group-specialists">
+              Or ask a specialist
+            </p>
+          )}
+          {specialists.map(renderOption)}
         </div>
       )}
 
@@ -178,7 +205,7 @@ export function PersonaPicker() {
           role="status"
           data-testid="persona-active-summary"
         >
-          Answered by {active.name}
+          {isAudience(active) ? 'Written for' : 'Answered by'} {active.name}
         </span>
       )}
     </div>
