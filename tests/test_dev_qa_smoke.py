@@ -188,7 +188,8 @@ def test_deploy_runs_the_dev_qa_smoke_after_the_opus_check():
     assert "env.STAGE == 'dev'" in qa["if"] and "!cancelled()" in qa["if"]
     assert ".github/scripts/dev-qa-smoke.py" in qa["run"] and "zlib.compress" in qa["run"]
     assert "scrub(r['StandardErrorContent'])" in qa["run"]
-    assert qa["env"]["QA_REQUIRE_LANES"] == ""
+    # Strict since the wave-3b merge: a missing C/E/H feature fails the run instead of skipping.
+    assert qa["env"]["QA_REQUIRE_LANES"] == "C,E,H"
 
 
 def test_ci_workflow_is_safe_for_a_public_repo():

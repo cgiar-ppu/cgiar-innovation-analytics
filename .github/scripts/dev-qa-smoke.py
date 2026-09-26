@@ -37,6 +37,9 @@ WHAT IT CHECKS (one JSON line on stdout; exit 1 if any check FAILS)
                     date, every seeded result code a link, owner-only
   exports_rendered  [Lane C] tables/bold/links rendered in HTML and DOCX, no '**',
                     no 'file://', legacy bare codes linked at export time
+  pdf_export        [Lane C] a real PDF (application/pdf, not the HTML fallback) printed by
+                    the container's Chromium: no browser header/footer (no file:// URL, no
+                    temp-file name), the seeded table text present, result codes as /URI links
   ui_config         [Lane E] anonymous /api/health hides the model list, /api/config
                     serves contacts and drops leftovers, /api/activity needs a login
   feedback          [Lane H] owner-only answer feedback, admin list + CSV, 404 for others
@@ -465,6 +468,40 @@ class QA:
         assert not problems, problems
         return 'html+docx: tables, bold, links rendered; no **, no file://; legacy bare code linked'
 
+    async def c_pdf_export(self):
+        """Lane C risk 1: the no-header flag with Debian Chromium in the container."""
+        import importlib.util
+        if importlib.util.find_spec(LANE_C_MARKER) is None:
+            raise Skip(f'Lane C PDF path ({LANE_C_MARKER}) not deployed', 'C')
+        from synapsis.tools.result_code_citation import resolve_result_code_url
+        t0 = time.monotonic()
+        r = await self.http.get(self.base + '/api/export/' + self.export_sid,
+                                params={'format': 'pdf', 'token': self.tok['a']})
+        seconds = round(time.monotonic() - t0, 1)
+        assert r.status_code == 200, ('pdf export status', r.status_code)
+        ctype = r.headers.get('content-type', '')
+        assert ctype.startswith('application/pdf'), ('pdf export fell back to', ctype.split(';')[0], seconds)
+        body = r.content
+        assert body[:5] == b'%PDF-' and b'%%EOF' in body[-2048:], 'incomplete PDF'
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(body))
+        text = '\n'.join((page.extract_text() or '') for page in reader.pages)
+        uris = set()
+        for page in reader.pages:
+            for annot in (page.get('/Annots') or []):
+                action = (annot.get_object().get('/A') or {})
+                if action.get('/URI'):
+                    uris.add(str(action['/URI']))
+        problems = [f'browser header/footer: {needle!r} in the PDF text'
+                    for needle in ('file://', '_temp.html', '/workspace/exports', 'ia-pdf-') if needle in text]
+        if 'QA-Col-Alpha' not in text:
+            problems.append('seeded table text missing from the PDF')
+        want = {c: resolve_result_code_url(c) for c in FIXTURE_CODES}
+        problems += [f'R{c} not a /URI link' for c, u in want.items() if u and u not in uris]
+        assert not problems, problems
+        return {'pages': len(reader.pages), 'bytes': len(body), 'seconds': seconds,
+                'uri_links': len(uris), 'no_file_url_footer': True}
+
     async def c_ui_config(self):
         anon_cfg = (await self.get('/api/config')).json()
         if 'contacts' not in anon_cfg:
@@ -603,7 +640,8 @@ async def main(base: str) -> int:
                   ('admin_usage', qa.c_admin_usage), ('removed_routes', qa.c_removed_routes),
                   ('security_headers', qa.c_security_headers), ('citation_mapping', qa.c_citation_mapping),
                   ('personas', qa.c_personas), ('prms_stats', qa.c_prms_stats), ('exports', qa.c_exports),
-                  ('exports_rendered', qa.c_exports_rendered), ('ui_config', qa.c_ui_config),
+                  ('exports_rendered', qa.c_exports_rendered), ('pdf_export', qa.c_pdf_export),
+                  ('ui_config', qa.c_ui_config),
                   ('feedback', qa.c_feedback), ('cohort_invites', qa.c_cohort_invites),
                   ('real_turn', qa.c_real_turn)]
         try:

@@ -540,9 +540,10 @@ jobs:
         env:
           IA_INSTANCE_ID: ${{ steps.get-outputs.outputs.instance_id }}
           # Lanes whose feature checks must PASS instead of being skipped when
-          # their feature is not detected (e.g. "C,E,H" once merged). Empty =
-          # tolerant (a missing feature is reported as "skip", never "fail").
-          QA_REQUIRE_LANES: ''
+          # their feature is not detected. Empty = tolerant (a missing feature is
+          # reported as "skip", never "fail"). Strict since the wave-3b merge:
+          # Lanes C, E and H are all on this branch.
+          QA_REQUIRE_LANES: 'C,E,H'
         run: |
           python3 - <<'PY'
           import base64, json, os, re, shlex, time, zlib, boto3
