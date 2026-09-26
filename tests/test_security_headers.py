@@ -86,7 +86,19 @@ async def test_headers_on_api_spa_and_errors(client):
 
 @pytest.mark.asyncio
 async def test_large_static_assets_are_gzipped(client):
-    resp = await client.get("/assets/app.js", headers={"Accept-Encoding": "gzip"})
+    # When a real frontend build exists (static/ in the cwd at import time),
+    # server.py mounts /assets from it and the fixture's patched _static_dir is
+    # not consulted, so request the largest real asset instead of app.js.
+    from starlette.routing import Mount
+    from synapsis.server import app
+
+    path = "/assets/app.js"
+    mount = next((r for r in app.routes if isinstance(r, Mount) and r.path == "/assets"), None)
+    if mount is not None:
+        real = sorted(Path(mount.app.directory).glob("*.js"), key=lambda p: p.stat().st_size)
+        if real and real[-1].stat().st_size >= 1024:
+            path = "/assets/" + real[-1].name
+    resp = await client.get(path, headers={"Accept-Encoding": "gzip"})
     assert resp.status_code == 200
     assert resp.headers.get("content-encoding") == "gzip"
 
