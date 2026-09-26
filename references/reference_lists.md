@@ -1,6 +1,6 @@
 # CGIAR Reference Lists
 
-Curated control lists extracted from the PRMS database (snapshot: March 2026, 32,005 total results). Use these as authoritative reference for validating queries, filtering data, and understanding the CGIAR data landscape.
+Curated control lists extracted from the PRMS database (extracted from the March-2026 snapshot; lists are stable, but counts shown here are illustrative — quote current counts from a query and its snapshot footer). Use these as authoritative reference for validating queries, filtering data, and understanding the CGIAR data landscape.
 
 ---
 
@@ -137,7 +137,7 @@ Curated control lists extracted from the PRMS database (snapshot: March 2026, 32
 | 10 | Innovation Package | 255 | Bundles of complementary innovations for scaling |
 | 11 | Complementary innovation | 612 | Supporting innovations within packages |
 
-**Total results in PRMS:** 32,005
+**Total results in PRMS:** 32,005 in the March-2026 snapshot (illustrative; query the current snapshot for today's count)
 
 ---
 

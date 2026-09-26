@@ -1,8 +1,7 @@
 # PRMS Database Schema Reference
 
-**Database:** `/Users/smithai/workspace/coding/PRMSDB/prdb.sqlite` (SQLite 3.x, ~398 MB)
-**Snapshot date:** 2026-03-18 (from AWS RDS MySQL `prmsdb`)
-**Total tables:** 197 | **Active results:** ~27,803 (is_active=1 in `result`)
+**Database:** the published PRMS Reporting snapshot the app reads (SQLite 3.x). Its extraction date, data-as-of date, table count and row count are printed in every `prms_query` footer and in the system prompt — quote those, not numbers remembered from this file.
+**Schema documented from:** the March-2026 dump; later snapshots carry 200+ tables (the columns below are unchanged). Row counts quoted in this file are illustrative, not current.
 
 ---
 
@@ -19,20 +18,15 @@ PRMS (Performance and Results Management System) tracks CGIAR research outputs a
 
 **Soft-delete pattern:** Most tables have `is_active` (tinyint, 0/1). Always filter `WHERE is_active = 1` unless analyzing deleted records.
 
-**CRITICAL — discontinuation filter (innovations only):** The `result` table also has `is_discontinued` (tinyint, three-value: NULL=legacy/not discontinued, 0=explicitly not discontinued, 1=discontinued). For innovation queries (result_type_id IN (2, 7, 10)), ALWAYS add `AND (is_discontinued IS NULL OR is_discontinued = 0)` in addition to `is_active = 1`. Using only `is_active = 1` will surface 532 discontinued innovations (status_id=4) that should be excluded. 58.5% of legacy rows have NULL (not 0) for is_discontinued, so the NULL-safe form is required.
+**CRITICAL — quality gate (supersedes the old discontinuation-only filter):** For innovation queries (result_type_id IN (2, 7, 10)) the default filter is `is_active = 1 AND ((source = 'Result' AND status_id = 2) OR (source = 'API' AND status_id = 6))` — W1/W2 "Quality Assessed" plus W3/bilateral "Approved", broken out. This already excludes discontinued (`status_id = 4`), editing, submitted and rejected records. `is_discontinued` (NULL/0/1) is a legacy flag; `is_active = 1` alone is NOT a sufficient filter. Also exclude open (in-progress) reporting phases — see the system prompt and `prms_data_guide` §1.1.
 
 **CRITICAL — result.id vs result.result_code (the multi-year identity problem):**
 - `result.id` — unique per annual submission row. The SAME innovation gets a NEW `id` every reporting year (2022, 2023, 2024). Do NOT count by `id` when answering "how many innovations".
 - `result.result_code` — persistent identifier. The same innovation keeps the same `result_code` across all years.
 - Rule: When asked "how many innovations", count `COUNT(DISTINCT result_code)`, never `COUNT(*)` or `COUNT(DISTINCT id)`.
-- Example: 5,615 active innovation rows exist, but only 2,755 distinct result_codes (unique innovations). Counting by id would overstate by 135%.
+- Counting rows or ids instead of result codes roughly doubles an innovation count, because most innovations are re-reported in several phases.
 
-**Canonical active innovation counts (calibrated against PRMS Results Dashboard, March 2026):**
-- Type 2 (Innovation Use): 668 unique innovations
-- Type 7 (Innovation Development): 1,992 unique innovations
-- Type 10 (Innovation Package): 95 unique innovations
-- Total: 2,755 unique active innovations
-These counts use: is_active=1, is_discontinued=0/NULL, COUNT(DISTINCT result_code).
+**Canonical counts are NOT in this file.** The superseded "calibrated" totals that used to be here (filtered on `is_active` / `is_discontinued` only, no quality gate) were wrong and have been removed. The canonical counts and methods live in `prms_data_guide` §1 (e.g. all-years Innovation Developments 1,852 = 1,630 W1/W2 + 222 W3/bilateral; per-year alive-in-year 477 / 872 / 1,016 / 1,185). Always re-run the query and quote the snapshot date.
 
 **Reporting years:** Results have `reported_year_id` (values: 2022, 2023, 2024, 2025 -- note 610 rows have NULL year).
 
