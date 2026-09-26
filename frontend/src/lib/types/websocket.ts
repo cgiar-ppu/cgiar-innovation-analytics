@@ -14,6 +14,8 @@
 export type ServerMessage =
   /** A chunk of streamed assistant text. */
   | { type: 'text'; content: string }
+  /** The just-streamed text block `original`, re-sent with every PRMS result code linked to its public source. */
+  | { type: 'text_links'; original: string; content: string }
   /** A chunk of streamed thinking/reasoning text. */
   | { type: 'thinking'; content: string }
   /** The agent is about to call a tool. */
