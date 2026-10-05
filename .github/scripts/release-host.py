@@ -14,7 +14,12 @@ env={'AWS_REGION':'eu-central-1','LITESTREAM_S3_BUCKET':f'cgiar-ia-artifacts-{ac
  'IA_PASSWORD_LOGIN_ENABLED':'false','IA_INVITED_LOGIN_ENABLED':'true','IA_SSO_ENABLED':'true',
  'IA_SSO_ISSUER':cfg['issuer'],'IA_SSO_CLIENT_ID':cfg['client'],'IA_SSO_DOMAIN':cfg['domain'],
  'IA_SSO_ORIGIN':cfg['origin'],'IA_SSO_ADMIN_SUBJECTS':cfg['admins'],
- 'IA_VOICE_ENABLED':'true','IA_VOICE_ORIGINS':cfg['origin'],'SYNAPSIS_PORT':'7780','SYNAPSIS_HOST':'0.0.0.0','SYNAPSIS_PLATFORM':'linux',
+ 'IA_VOICE_ENABLED':'true','IA_VOICE_ORIGINS':cfg['origin'],
+ # Azure OpenAI voice/dictation (2026-10-05). Empty = app defaults (syn-ia, realtime, gpt-realtime-mini, gpt-4o-transcribe).
+ # Target-model flip is configuration: promotion-request.json models_config voice_protocol/voice_model/voice_backend_model.
+ 'IA_OPENAI_ENDPOINT':cfg.get('openai_endpoint',''),'IA_VOICE_PROTOCOL':cfg.get('voice_protocol',''),
+ 'IA_VOICE_MODEL':cfg.get('voice_model',''),'IA_VOICE_BACKEND_MODEL':cfg.get('voice_backend_model',''),
+ 'IA_TRANSCRIBE_MODELS':cfg.get('transcribe_models',''),'SYNAPSIS_PORT':'7780','SYNAPSIS_HOST':'0.0.0.0','SYNAPSIS_PLATFORM':'linux',
  'PRMS_DB_PATH':'/app/data/prdb.sqlite','SYNAPSIS_WORKSPACE':'/workspace','SYNAPSIS_MAX_TURNS':'200',
  'SYNAPSIS_MODEL':cfg.get('model','claude-sonnet-4-6'),
  'SYNAPSIS_FALLBACK_MODEL':cfg.get('fallback','claude-opus-4-8'),
