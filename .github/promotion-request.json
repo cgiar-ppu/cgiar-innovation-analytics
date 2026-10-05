@@ -1,8 +1,10 @@
 {
-  "stage": "staging",
+  "stage": "prod",
   "sha": "e402156cbf25087a33d50ee0ab8b23b1540d625b",
-  "sequence": 19,
-  "rotate_secrets": ["openai-api-key"],
+  "sequence": 20,
+  "rotate_secrets": [
+    "openai-api-key"
+  ],
   "models_config": {
     "model": "claude-sonnet-5",
     "fallback": "claude-opus-5",
