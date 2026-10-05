@@ -96,6 +96,11 @@ class TTSSettingsUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _get_api_key() -> str:
+    # No speech/image deployment exists on the Azure resource (2026-10-05 migration) and the old OpenAI
+    # organisation is closed: refuse before any outbound call instead of sending the Azure key to OpenAI.
+    from synapsis import ai_endpoint
+    if ai_endpoint.is_azure():
+        raise HTTPException(status_code=503, detail="Read-aloud (text-to-speech) is not available in this environment.")
     key = os.getenv("OPENAI_API_KEY")
     if not key:
         raise HTTPException(status_code=503, detail="Read-aloud is not configured on this server.")
