@@ -5,12 +5,16 @@ import { useWebSocketContext } from '../../contexts/WebSocketContext'
 import { api } from '../../lib/api'
 import { makeAdapter } from '../../lib/voice/actions'
 import { LiveClient, type Caption, type VoiceStatus } from '../../lib/voice/liveClient'
+import { RealtimeClient } from '../../lib/voice/realtimeClient'
 import { useTTSStore } from '../../stores/tts'
 import { useSessionsStore } from '../../stores/sessions'
 
 type Source = { file: string; start_line: number; end_line: number; text: string }
 /** Server truth about the voice service. provider_ok is a cached real provider probe; null = no key configured. */
-export type ServiceStatus = { enabled: boolean; configured: boolean; provider_ok: boolean | null; max_seconds: number }
+export type ServiceStatus = { enabled: boolean; configured: boolean; provider_ok: boolean | null; max_seconds: number; protocol?: 'live' | 'realtime'; provider?: string }
+type VoiceClient = LiveClient | RealtimeClient
+/** The server decides the protocol (IA_VOICE_PROTOCOL); an older server without the field speaks Live. */
+export const clientClassFor = (service: ServiceStatus | null) => service?.protocol === 'realtime' ? RealtimeClient : LiveClient
 export const UNAVAILABLE_MESSAGE = 'Voice is temporarily unavailable'
 export const isUnavailable = (service: ServiceStatus | null) => !!service && (!service.configured || service.provider_ok === false)
 const RECHECK_MS = 60000
@@ -23,7 +27,8 @@ export default function VoiceGuide() {
   const location = useLocation()
   const current = useRef({ path: location.pathname, connected: isConnected, send, navigate })
   current.current = { path: location.pathname, connected: isConnected, send, navigate }
-  const client = useRef<LiveClient | null>(null)
+  const client = useRef<VoiceClient | null>(null)
+  const makeClient = useRef<((service: ServiceStatus | null) => VoiceClient) | null>(null)
   const [service, setService] = useState<ServiceStatus | null>(null)
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<VoiceStatus>('idle')
@@ -54,18 +59,19 @@ export default function VoiceGuide() {
     // While the provider is unavailable, re-check so recovery shows without a reload (the server caches its probe).
     const timer = setInterval(() => { if (isUnavailable(serviceRef.current)) void refresh() }, RECHECK_MS)
     const adapter = makeAdapter(message => current.current.send(message), path => current.current.navigate(path), () => current.current.path, () => current.current.connected)
-    const instance = new LiveClient({
+    const callbacks = {
       status: (state, text) => { if (mounted) { setStatus(state); setMessage(text); if (state === 'connected') setStartedAt(Date.now()); if (state === 'idle' || state === 'error') setStartedAt(null) } },
       caption: caption => { if (mounted) setCaptions(rows => [...rows, caption].slice(-500)) },
       task: text => { if (mounted) setActivity(rows => [...rows, text].slice(-8)) },
       playbackBlocked: value => { if (mounted) setBlocked(value) },
       usage: () => {},
-      evidence: result => { if (mounted && Array.isArray(result.excerpts)) setSources(result.excerpts as Source[]) },
-    }, adapter)
-    client.current = instance
-    const unload = () => instance.dispose()
+      evidence: (result: Record<string, unknown>) => { if (mounted && Array.isArray(result.excerpts)) setSources(result.excerpts as Source[]) },
+    } satisfies ConstructorParameters<typeof LiveClient>[0]
+    makeClient.current = service => new (clientClassFor(service))(callbacks, adapter)
+    client.current = makeClient.current(null)
+    const unload = () => client.current?.dispose()
     window.addEventListener('pagehide', unload)
-    return () => { mounted = false; clearInterval(timer); window.removeEventListener('pagehide', unload); instance.dispose(); client.current = null }
+    return () => { mounted = false; clearInterval(timer); window.removeEventListener('pagehide', unload); client.current?.dispose(); client.current = null }
   }, [])
   useEffect(() => { client.current?.contextChanged() }, [location.pathname])
   useEffect(() => {
@@ -79,6 +85,9 @@ export default function VoiceGuide() {
     if (unavailable) return
     useTTSStore.getState().setEnabled(false)
     setMuted(false); setPaused(false); setCaptions([]); setActivity([]); setSources([]); setElapsed(0)
+    if (client.current && !(client.current instanceof clientClassFor(service)) && makeClient.current) {
+      client.current.dispose(); client.current = makeClient.current(service)
+    }
     void client.current?.start()
   }
   const ask = (text: string) => { client.current?.typeMessage(text); setActivity(rows => [...rows, `You: ${text}`].slice(-8)); setTyped('') }
@@ -108,7 +117,7 @@ export default function VoiceGuide() {
         {!running && <>
           <p className="text-sm text-text-muted">Ask how the app works, explore data definitions, move between chats, or send an analysis question.</p>
           <div className="grid grid-cols-2 gap-2">{examples.map(text => <div key={text} className="rounded-xl border border-border p-2 text-xs text-text-muted">“{text}”</div>)}</div>
-          <p className="text-xs text-text-muted leading-relaxed">Starting voice shares your audio and relevant chat or methodology excerpts with OpenAI. Voice recording is off. Questions sent to Chat are saved there as usual. Calls end after {minutes} minutes.</p>
+          <p className="text-xs text-text-muted leading-relaxed">Starting voice shares your audio and relevant chat or methodology excerpts with {service?.provider || 'OpenAI'}. Voice recording is off. Questions sent to Chat are saved there as usual. Calls end after {minutes} minutes.</p>
           <button onClick={start} disabled={unavailable} title={unavailable ? UNAVAILABLE_MESSAGE : undefined} className="w-full rounded-xl bg-accent py-3 text-sm font-medium text-white flex gap-2 justify-center disabled:opacity-50 disabled:cursor-not-allowed"><Mic size={17} />{unavailable ? 'Voice unavailable' : status === 'error' ? 'Retry voice' : 'Start voice conversation'}</button>
         </>}
         {running && <>

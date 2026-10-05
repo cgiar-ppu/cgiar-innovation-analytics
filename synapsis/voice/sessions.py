@@ -12,9 +12,10 @@ from urllib.parse import quote
 import httpx
 from fastapi import HTTPException
 from synapsis.config import logger
+from synapsis import ai_endpoint
 from synapsis.database import get_db
 from . import health
-from .config import enabled, session_config
+from .config import enabled, protocol, realtime_session_config, session_config
 
 MAX_SECONDS = 600
 HEARTBEAT_SECONDS = 60
@@ -66,9 +67,54 @@ async def update(owner, request_id, **values):
 
 
 async def provider(path, body=None):
+    """Live protocol call on the configured endpoint (Azure /openai/v1/live/..., or OpenAI /v1/live/...)."""
     async with httpx.AsyncClient(timeout=25 if path == 'sessions' else 8) as client:
-        return await client.post('https://api.openai.com/v1/live/' + path,
-                                 headers={'Authorization': 'Bearer ' + os.getenv('OPENAI_API_KEY', '')}, json=body or {})
+        return await client.post(ai_endpoint.v1('live/' + path), headers=ai_endpoint.auth_headers(), json=body or {})
+
+
+class _Answer:
+    """Normalised provider outcome so _finish_create handles both protocols identically."""
+    def __init__(self, status_code, data=None):
+        self.status_code = status_code
+        self.is_success = 200 <= status_code < 300
+        self._data = data or {}
+
+    def json(self):
+        return self._data
+
+
+async def _realtime_create(sdp):
+    """GA Realtime over WebRTC, negotiated server-side so neither the key nor the ephemeral secret reaches
+    the browser: mint a client secret carrying the session config, then exchange the SDP with it.
+    The call ID comes back in the Location header (``/v1/realtime/calls/rtc_...``)."""
+    async with httpx.AsyncClient(timeout=25) as client:
+        minted = await client.post(ai_endpoint.v1('realtime/client_secrets'), headers=ai_endpoint.auth_headers(),
+                                   json={'session': realtime_session_config()})
+        if not minted.is_success:
+            return _Answer(minted.status_code)
+        secret = minted.json().get('value') or ''
+        if not secret:
+            raise ValueError('client secret missing')
+        call = await client.post(ai_endpoint.v1('realtime/calls'), content=sdp.encode(),
+                                 headers={'Authorization': 'Bearer ' + secret, 'Content-Type': 'application/sdp'})
+        del secret
+        if not call.is_success:
+            return _Answer(call.status_code)
+        call_id = call.headers.get('location', '').rstrip('/').rsplit('/', 1)[-1]
+        return _Answer(call.status_code, {'session': {'id': call_id or None}, 'transport': {'sdp': call.text}})
+
+
+async def _provider_create(sdp):
+    if protocol() == 'realtime':
+        return await _realtime_create(sdp)
+    return await provider('sessions', {'session': session_config(), 'transport': {'type': 'webrtc', 'sdp': sdp}})
+
+
+async def _provider_hangup(provider_id):
+    if protocol() == 'realtime' or provider_id.startswith('rtc_'):
+        async with httpx.AsyncClient(timeout=8) as client:
+            return await client.post(ai_endpoint.v1('realtime/calls/' + quote(provider_id, safe='') + '/hangup'), headers=ai_endpoint.auth_headers())
+    return await provider('sessions/' + quote(provider_id, safe='') + '/hangup')
 
 
 async def _record_closed(row, provider_status, provider_seconds=None):
@@ -84,7 +130,7 @@ async def _record_closed(row, provider_status, provider_seconds=None):
 async def _hangup(row):
     """Ask the provider to end a known session. Returns (confirmed, http_status); never raises."""
     try:
-        response = await provider('sessions/' + quote(row['provider_id'], safe='') + '/hangup')
+        response = await _provider_hangup(row['provider_id'])
         if response.is_success or response.status_code in (404, 410):
             return True, response.status_code
         logger.warning('voice_hangup_unconfirmed owner=%s request_id=%s provider_status=%s', row['owner'], row['request_id'], response.status_code)
@@ -163,7 +209,7 @@ def provider_error(status: int) -> str:
 
 async def _finish_create(owner, request_id, sdp):
     try:
-        response = await provider('sessions', {'session': session_config(), 'transport': {'type': 'webrtc', 'sdp': sdp}})
+        response = await _provider_create(sdp)
         if not response.is_success:
             # 5xx outcomes may be uncertain. Never release those leases blindly.
             await update(owner, request_id, status='uncertain' if response.status_code >= 500 else 'rejected')

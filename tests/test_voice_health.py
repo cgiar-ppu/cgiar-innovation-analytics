@@ -11,6 +11,9 @@ from synapsis.voice import health
 def fresh(monkeypatch):
     monkeypatch.setenv('OPENAI_API_KEY', 'sk-test-secret-value')
     monkeypatch.setenv('IA_VOICE_MODEL', 'gpt-live-1')
+    # These cases cover the direct-OpenAI probe; the Azure deployment probe is in tests/test_voice_azure.py.
+    monkeypatch.setenv('IA_OPENAI_ENDPOINT', 'https://api.openai.com')
+    monkeypatch.setenv('IA_VOICE_PROTOCOL', 'live')
     health.invalidate()
     yield
     health._transport = None

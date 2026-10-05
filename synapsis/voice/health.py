@@ -14,8 +14,9 @@ import os
 import time
 
 import httpx
+from synapsis import ai_endpoint
 from synapsis.config import logger
-from .config import model
+from .config import backend_model, model, protocol
 
 CACHE_SECONDS = 600
 TIMEOUT_SECONDS = 5
@@ -37,11 +38,22 @@ def snapshot() -> dict:
     return {'provider_ok': _cache['ok'], 'provider_status': _cache['status'], 'checked_at': _cache['checked'] or None}
 
 
+def _probe_urls() -> list[str]:
+    """Azure: the deployment itself must exist (GET /openai/models answers 200 for any catalogue model, deployed
+    or not). The Live protocol also needs its delegated backend deployment. OpenAI: model visibility."""
+    if ai_endpoint.is_azure():
+        names = [model()] + ([backend_model()] if protocol() == 'live' else [])
+        return [ai_endpoint.azure_deployment_url(name) for name in names]
+    return [ai_endpoint.v1('models/' + model())]
+
+
 async def _probe() -> tuple[bool, int | None]:
-    key = os.getenv('OPENAI_API_KEY', '')
     async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS, transport=_transport) as client:
-        response = await client.get('https://api.openai.com/v1/models/' + model(), headers={'Authorization': 'Bearer ' + key})
-    return response.is_success, response.status_code
+        for url in _probe_urls():
+            response = await client.get(url, headers=ai_endpoint.auth_headers())
+            if not response.is_success:
+                return False, response.status_code
+    return True, response.status_code
 
 
 async def provider_ok() -> bool | None:
