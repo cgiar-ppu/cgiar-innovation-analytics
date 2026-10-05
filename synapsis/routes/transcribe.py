@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from synapsis import ai_endpoint
 from synapsis.auth.middleware import get_current_user
 from synapsis.config import logger
 
@@ -21,7 +22,18 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 # about audio format/metadata; whisper-1 is more permissive.
 _TRANSCRIPTION_MODELS = ["gpt-4o-transcribe", "whisper-1"]
 
-_OPENAI_TRANSCRIPTION_URL = "https://api.openai.com/v1/audio/transcriptions"
+
+
+def _transcription_targets() -> list[tuple[str, str, dict]]:
+    """(model, url, extra form fields) in fallback order for the configured endpoint.
+
+    Azure serves audio only on the deployments path (not /openai/v1); the deployment name is the model.
+    ``IA_TRANSCRIBE_MODELS`` (comma-separated deployment/model names) overrides the default order.
+    """
+    configured = [m.strip() for m in (os.getenv("IA_TRANSCRIBE_MODELS") or "").split(",") if m.strip()]
+    if ai_endpoint.is_azure():
+        return [(m, ai_endpoint.azure_transcription_url(m), {}) for m in (configured or ["gpt-4o-transcribe"])]
+    return [(m, ai_endpoint.v1("audio/transcriptions"), {"model": m}) for m in (configured or _TRANSCRIPTION_MODELS)]
 
 #: OpenAI's own upload limit; larger bodies are refused before any call
 #: (review L6-07: the upload used to be read whole with no cap).
@@ -82,13 +94,13 @@ async def transcribe_audio(file: UploadFile = File(...)):
 
         last_error_detail = ""
 
-        for model in _TRANSCRIPTION_MODELS:
+        for model, url, form in _transcription_targets():
             async with httpx.AsyncClient(timeout=60.0) as client:
                 with open(tmp_path, "rb") as audio_file:
                     resp = await client.post(
-                        _OPENAI_TRANSCRIPTION_URL,
-                        headers={"Authorization": f"Bearer {api_key}"},
-                        data={"model": model},
+                        url,
+                        headers=ai_endpoint.auth_headers(api_key),
+                        data=form,
                         files={"file": (filename, audio_file, clean_ct)},
                     )
 

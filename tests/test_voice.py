@@ -12,6 +12,14 @@ from synapsis.voice.knowledge import lookup, data_catalog
 from synapsis.voice.config import session_config
 
 
+@pytest.fixture(autouse=True)
+def live_protocol(monkeypatch):
+    # The lease tests below drive the Live protocol through the patched ``provider``; the Azure/GA Realtime
+    # path is covered in tests/test_voice_azure.py. Never let a unit test reach a real endpoint.
+    monkeypatch.setenv('IA_VOICE_PROTOCOL', 'live')
+    monkeypatch.setenv('IA_OPENAI_ENDPOINT', 'https://api.openai.com')
+
+
 @pytest.fixture
 async def voice_db(initialized_db):
     await s.init()
