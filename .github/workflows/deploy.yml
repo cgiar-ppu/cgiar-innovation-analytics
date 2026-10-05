@@ -8,7 +8,15 @@ on:
       environment:
         type: choice
         description: Target environment
-        options: [dev, staging, prod]
+        options: [dev]
+      build_only:
+        type: boolean
+        default: false
+        description: Build and push the image for this commit only (release hotfix); do not touch the DEV stack or container
+      pin_from_sha:
+        type: string
+        default: ''
+        description: With build_only, install exactly the Python packages of this already-released image SHA (no dependency drift)
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -126,6 +134,19 @@ jobs:
       # -----------------------------------------------------------------
       # Docker: Build and push image
       # -----------------------------------------------------------------
+      - name: Pin Python packages to the released image (build_only hotfix)
+        if: ${{ inputs.build_only && inputs.pin_from_sha != '' }}
+        env:
+          PIN_IMAGE: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${{ inputs.pin_from_sha }}
+        run: |
+          set -euo pipefail
+          docker pull -q "$PIN_IMAGE"
+          docker run --rm --entrypoint python "$PIN_IMAGE" -m pip freeze --exclude-editable > /tmp/released-freeze.txt
+          test -s /tmp/released-freeze.txt
+          grep -q '^claude-agent-sdk==' /tmp/released-freeze.txt
+          cp /tmp/released-freeze.txt requirements.txt
+          echo "Pinned $(wc -l < requirements.txt) packages from ${{ inputs.pin_from_sha }}"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -135,8 +156,9 @@ jobs:
           context: .
           file: Dockerfile.prod
           push: true
+          # build_only never moves the stage tag (an instance reboot pulls it).
           tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${{ env.STAGE }}
+            ${{ !inputs.build_only && format('{0}/{1}:{2}', steps.login-ecr.outputs.registry, env.ECR_REPO_NAME, env.STAGE) || '' }}
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${{ github.sha }}
           build-args: |
             GIT_SHA=${{ github.sha }}
@@ -148,6 +170,7 @@ jobs:
       # SSM: Store secrets as parameters
       # -----------------------------------------------------------------
       - name: Store secrets in SSM Parameter Store
+        if: ${{ !inputs.build_only }}
         run: |
           SSM_PREFIX="/cgiar-ia-${{ env.STAGE }}"
 
@@ -188,6 +211,7 @@ jobs:
       # CloudFormation: Deploy infrastructure
       # -----------------------------------------------------------------
       - name: Clean up stuck stack if needed
+        if: ${{ !inputs.build_only }}
         run: |
           STACK_NAME="${{ env.STACK_NAME_PREFIX }}-${{ env.STAGE }}"
           STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
@@ -201,6 +225,7 @@ jobs:
           fi
 
       - name: Deploy CloudFormation stack
+        if: ${{ !inputs.build_only }}
         run: |
           STACK_NAME="${{ env.STACK_NAME_PREFIX }}-${{ env.STAGE }}"
           ECR_TAG="${{ env.STAGE }}"
@@ -237,6 +262,7 @@ jobs:
       # EC2: Update container via SSM Run Command
       # -----------------------------------------------------------------
       - name: Get stack outputs
+        if: ${{ !inputs.build_only }}
         id: get-outputs
         run: |
           STACK_NAME="${{ env.STACK_NAME_PREFIX }}-${{ env.STAGE }}"
@@ -277,6 +303,7 @@ jobs:
           echo "ALB DNS: $ALB_DNS"
 
       - name: Wait for SSM agent (reboot if unresponsive)
+        if: ${{ !inputs.build_only }}
         run: |
           INSTANCE_ID="${{ steps.get-outputs.outputs.instance_id }}"
           echo "Waiting for SSM agent on $INSTANCE_ID..."
@@ -322,7 +349,7 @@ jobs:
           exit 1
 
       - name: Record DEV users and chat ownership before update
-        if: env.STAGE == 'dev'
+        if: ${{ !inputs.build_only && (env.STAGE == 'dev') }}
         env:
           IA_INSTANCE_ID: ${{ steps.get-outputs.outputs.instance_id }}
         run: |
@@ -330,6 +357,7 @@ jobs:
           python3 .github/scripts/sso-continuity.py before
 
       - name: Update container via SSM
+        if: ${{ !inputs.build_only }}
         id: ssm-update
         run: |
           INSTANCE_ID="${{ steps.get-outputs.outputs.instance_id }}"
@@ -375,7 +403,7 @@ jobs:
           echo "SSM Command ID: $COMMAND_ID"
 
       - name: Wait for SSM command completion
-        if: steps.ssm-update.outputs.ssm_sent == 'true'
+        if: ${{ !inputs.build_only && (steps.ssm-update.outputs.ssm_sent == 'true') }}
         run: |
           COMMAND_ID="${{ steps.ssm-update.outputs.command_id }}"
           INSTANCE_ID="${{ steps.get-outputs.outputs.instance_id }}"
@@ -411,12 +439,13 @@ jobs:
       # Health check (adapts to ALB vs direct HTTP mode)
       # -----------------------------------------------------------------
       - name: Verify DEV users and chat ownership after update
-        if: env.STAGE == 'dev'
+        if: ${{ !inputs.build_only && (env.STAGE == 'dev') }}
         env:
           IA_INSTANCE_ID: ${{ steps.get-outputs.outputs.instance_id }}
         run: python3 .github/scripts/sso-continuity.py after
 
       - name: Final health check
+        if: ${{ !inputs.build_only }}
         run: |
           HAS_ALB="${{ steps.get-outputs.outputs.has_alb }}"
           AGENT_URL="${{ steps.get-outputs.outputs.agent_url }}"
@@ -459,6 +488,7 @@ jobs:
           exit 1
 
       - name: Verify deployed version
+        if: ${{ !inputs.build_only }}
         run: |
           AGENT_URL="${{ steps.get-outputs.outputs.agent_url }}"
           ALB_DNS="${{ steps.get-outputs.outputs.alb_dns }}"
