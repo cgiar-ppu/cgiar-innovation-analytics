@@ -10,13 +10,17 @@
  * - the persistent footer renders the same contacts from the shared module;
  * - both surfaces read from contacts.ts, so they cannot drift apart.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import DisclaimerModal from '../DisclaimerModal'
 import DisclaimerFooter from '../DisclaimerFooter'
 import { GUARDRAIL_CONTACTS, CONTACT_LINE_TEXT } from '../contacts'
+import { useAppConfigStore } from '../../../stores/appConfig'
+import type { AppConfig } from '../../../lib/types'
 
 describe('guardrail contact route', () => {
+  beforeEach(() => useAppConfigStore.getState().reset())
+
   it('the shared contacts module defines at least one reachable contact', () => {
     expect(GUARDRAIL_CONTACTS.length).toBeGreaterThan(0)
     for (const c of GUARDRAIL_CONTACTS) {
@@ -55,6 +59,31 @@ describe('guardrail contact route', () => {
         'href',
         `mailto:${c.email}`,
       )
+    }
+  })
+})
+
+describe('configurable contact (R-09, 2026-09-26)', () => {
+  beforeEach(() => useAppConfigStore.getState().reset())
+
+  it('the built-in technical default is the CGIAR mailbox, never the bounced address', () => {
+    const technical = GUARDRAIL_CONTACTS.find((c) => c.remit === 'technical')
+    expect(technical?.email).toBe('J.Berenguer@cgiar.org')
+    expect(JSON.stringify(GUARDRAIL_CONTACTS)).not.toContain('synapsis-analytics.com')
+    // Marc stays the scope & use contact.
+    expect(GUARDRAIL_CONTACTS.find((c) => c.remit === 'scope & use')?.email).toBe('marc.schut@cgiar.org')
+  })
+
+  it('modal and footer follow the contacts served by /api/config', () => {
+    useAppConfigStore.setState({
+      config: { model: 'm', contacts: [{ name: 'IA support desk', email: 'ia-support@example.org', remit: 'technical' }] } as unknown as AppConfig,
+      loadedFor: 'anonymous',
+    })
+    render(<><DisclaimerModal /><DisclaimerFooter /></>)
+    for (const id of ['disclaimer-contact', 'disclaimer-footer-contact']) {
+      const line = screen.getByTestId(id)
+      expect(within(line).getByRole('link', { name: 'IA support desk' })).toHaveAttribute('href', 'mailto:ia-support@example.org')
+      expect(within(line).queryByRole('link', { name: 'Marc Schut' })).toBeNull()
     }
   })
 })

@@ -19,12 +19,26 @@
  */
 
 import { create } from 'zustand'
+import { claimUserState, resetUserState } from './userStateReset'
+import { navigation } from '../lib/navigation'
 
 const TOKEN_KEY = 'ia-auth-token'
 const ACK_KEY_PREFIX = 'ia-disclaimer-ack:'
 const METHOD_KEY = 'ia-auth-method'
 let authEpoch = 0
 let ssoRestore: Promise<void> | null = null
+
+/**
+ * Back-off between SSO session-refresh retries (L4-08). A network error, a
+ * 5xx during a deploy or a 429 must not sign the user out mid-answer; only a
+ * definitive answer from the server (401/403) ends the session.
+ */
+let ssoRetryDelaysMs: number[] = [1_000, 4_000, 10_000]
+
+/** Test hook: shorten the SSO retry back-off. */
+export function setSsoRetryDelays(delays: number[]): void {
+  ssoRetryDelaysMs = delays
+}
 
 /** The resolved, identity-provider-agnostic user. */
 export interface AuthUser {
@@ -128,6 +142,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (res.ok) {
         const raw = await res.json()
         const user = toAuthUser(raw)
+        claimUserState(user.userId)
         set({
           token,
           user,
@@ -160,6 +175,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const data = await res.json()
       const token: string = data.token
       const user = toAuthUser(data.user ?? {})
+      claimUserState(user.userId)
       localStorage.setItem(METHOD_KEY, "password")
       localStorage.setItem(TOKEN_KEY, token)
       set({
@@ -200,6 +216,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const data = await res.json()
       const token: string = data.token
       const user = toAuthUser(data.user ?? {})
+      claimUserState(user.userId)
       localStorage.setItem(METHOD_KEY, "password")
       localStorage.setItem(TOKEN_KEY, token)
       set({
@@ -220,14 +237,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(METHOD_KEY)
     set({ token: null, user: null, disclaimerAcknowledged: false, ssoError: null })
+    // L4-04: nothing of this user's chats may survive in the tab - wipe every
+    // per-user store and the persisted active chat, then reload from scratch.
+    resetUserState()
     if (wasSso) {
       fetch('/api/auth/sso/logout', { method: 'POST' })
         .then(async response => {
           if (!response.ok) throw new Error('Logout failed')
           const data = await response.json()
-          window.location.assign(data.logout_url)
+          navigation.hardNavigate(data.logout_url)
         })
         .catch(() => set({ ssoError: 'Local sign-out is complete, but the server could not end your CGIAR session. Reconnect and try again.' }))
+    } else {
+      navigation.hardNavigate('/')
     }
   },
 
@@ -252,6 +274,7 @@ export function isSsoSession(): boolean {
 export function acceptInvitedSession(data: { token: string; user: Parameters<typeof toAuthUser>[0] }) {
   authEpoch++
   const user = toAuthUser(data.user)
+  claimUserState(user.userId)
   localStorage.setItem(METHOD_KEY, 'invited')
   localStorage.setItem(TOKEN_KEY, data.token)
   useAuthStore.setState({ token: data.token, user, ready: true, authRequired: true,
@@ -260,24 +283,64 @@ export function acceptInvitedSession(data: { token: string; user: Parameters<typ
 
 function acceptSso(data: { token: string; user: Parameters<typeof toAuthUser>[0] }) {
   const user = toAuthUser(data.user)
+  claimUserState(user.userId)
   localStorage.setItem(METHOD_KEY, 'sso')
   localStorage.setItem(TOKEN_KEY, data.token)
   useAuthStore.setState({ token: data.token, user, ready: true, authRequired: true,
     disclaimerAcknowledged: readAck(user.userId), ssoError: null })
 }
 
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+
+/** Statuses that mean "try again later", not "your session has ended". */
+function isTransientStatus(status: number): boolean {
+  return status >= 500 || status === 408 || status === 429
+}
+
+/**
+ * Restore / refresh the SSO-backed app session (L4-08).
+ *
+ * - 2xx: accept the fresh app token.
+ * - 401/403 (or another definitive 4xx): the CGIAR session has ended - sign out.
+ * - network error, 5xx, 408, 429, unreadable body: retry with back-off; if it
+ *   still fails, KEEP the current session (the next poll retries). Only on a
+ *   first restore with no session at all do we show the sign-in screen, with
+ *   a "could not reach" message instead of "session ended".
+ */
 async function restoreSso(): Promise<void> {
   const epoch = authEpoch
-  try {
-    const response = await fetch('/api/auth/sso/session', { method: 'POST' })
-    const data = await response.json()
+  for (let attempt = 0; ; attempt++) {
+    let status = 0
+    let data: { token: string; user: Parameters<typeof toAuthUser>[0] } | null = null
+    try {
+      const response = await fetch('/api/auth/sso/session', { method: 'POST' })
+      status = response.status
+      if (response.ok) data = await response.json()
+    } catch {
+      status = 0 // network error or unreadable body: transient
+      data = null
+    }
     if (epoch !== authEpoch) return
-    if (!response.ok) throw new Error('Session unavailable')
-    acceptSso(data)
-  } catch {
+    if (data && data.token) {
+      acceptSso(data)
+      return
+    }
+    const transient = status === 0 || isTransientStatus(status) || (status >= 200 && status < 300)
+    if (!transient) {
+      localStorage.removeItem(TOKEN_KEY)
+      useAuthStore.setState({ token: null, user: null, ready: true, authRequired: true,
+        ssoError: 'Your CGIAR session could not be restored. Please sign in again.' })
+      return
+    }
+    const delay = ssoRetryDelaysMs[attempt]
+    if (delay === undefined) {
+      const { user } = useAuthStore.getState()
+      if (user) return // keep working; the next refresh tick tries again
+      useAuthStore.setState({ ready: true, authRequired: true,
+        ssoError: 'The CGIAR sign-in service could not be reached. Check your connection and try again.' })
+      return
+    }
+    await sleep(delay)
     if (epoch !== authEpoch) return
-    localStorage.removeItem(TOKEN_KEY)
-    useAuthStore.setState({ token: null, user: null, ready: true, authRequired: true,
-      ssoError: 'Your CGIAR session could not be restored. Please sign in again.' })
   }
 }

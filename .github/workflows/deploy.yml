@@ -3,12 +3,16 @@ name: Deploy Innovation Analytics
 on:
   push:
     branches: [feature/innovation-platform-foundation]
+  # Manual re-deploy of DEV only. The former `staging`/`prod` options were removed
+  # (review L5-02): TST/PRD are deployed exclusively by the release lane
+  # (release-promote.yml on feat/ia-release-20260914); no workflow or script
+  # dispatches this one with another target (last such dispatch: June 2026).
   workflow_dispatch:
     inputs:
       environment:
         type: choice
-        description: Target environment
-        options: [dev, staging, prod]
+        description: Target environment (DEV only on this branch)
+        options: [dev]
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -65,6 +69,14 @@ jobs:
       # -----------------------------------------------------------------
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Refuse any target other than DEV
+        # Fail closed: this branch's workflow deploys DEV only (L5-02).
+        run: |
+          if [[ "${{ env.STAGE }}" != "dev" || "${{ env.EXPECTED_ACCOUNT }}" != "972793825893" ]]; then
+            echo "::error::deploy.yml on this branch only deploys DEV (got stage '${{ env.STAGE }}')."
+            exit 1
+          fi
 
       # -----------------------------------------------------------------
       # AWS Authentication (OIDC)
@@ -361,7 +373,7 @@ jobs:
               'chown 1000:1000 /opt/cgiar-ia/synapsis 2>/dev/null || true',
               'mkdir -p /opt/cgiar-ia/workspace-files/{uploads,outputs,exports,analysis}',
               'chown -R 1000:1000 /opt/cgiar-ia/workspace-files 2>/dev/null || true',
-              'docker run -d --name $CONTAINER_NAME --restart always --log-driver=awslogs --log-opt awslogs-region=$REGION --log-opt awslogs-group=/cgiar-ia/${{ env.STAGE }} --log-opt awslogs-stream=$CONTAINER_NAME --log-opt awslogs-create-group=true --log-opt mode=non-blocking --log-opt max-buffer-size=4m -p 7780:7780 -v /opt/cgiar-ia/synapsis:/workspace/.synapsis -v /opt/cgiar-ia/workspace-files/uploads:/workspace/uploads -v /opt/cgiar-ia/workspace-files/outputs:/workspace/outputs -v /opt/cgiar-ia/workspace-files/exports:/workspace/exports -v /opt/cgiar-ia/workspace-files/analysis:/workspace/analysis -e AWS_REGION=$REGION -e LITESTREAM_S3_BUCKET=cgiar-ia-artifacts-$ACCOUNT -e ANTHROPIC_API_KEY=\$ANTHROPIC_KEY -e OPENAI_API_KEY=\$OPENAI_KEY -e IA_AUTH_DISABLED=false -e IA_JWT_SECRET=\$JWT_SECRET -e IA_SELF_SIGNUP=\$SELF_SIGNUP -e IA_PASSWORD_LOGIN_ENABLED=false -e IA_INVITED_LOGIN_ENABLED=${{ vars.IA_INVITED_LOGIN_ENABLED || 'false' }} -e IA_SSO_ENABLED=true -e IA_SSO_ISSUER=${{ vars.IA_SSO_ISSUER }} -e IA_SSO_CLIENT_ID=${{ vars.IA_SSO_CLIENT_ID }} -e IA_SSO_DOMAIN=${{ vars.IA_SSO_DOMAIN }} -e IA_SSO_ORIGIN=${{ vars.IA_SSO_ORIGIN }} -e IA_SSO_ADMIN_SUBJECTS=${{ vars.IA_SSO_ADMIN_SUBJECTS }} -e IA_VOICE_ENABLED=${{ env.STAGE == 'dev' && 'true' || 'false' }} -e SYNAPSIS_PORT=7780 -e SYNAPSIS_HOST=0.0.0.0 -e SYNAPSIS_PLATFORM=linux -e PRMS_DB_PATH=/app/data/prdb.sqlite -e SYNAPSIS_MODEL=claude-sonnet-5 -e SYNAPSIS_FALLBACK_MODEL=claude-opus-5 -e SYNAPSIS_AVAILABLE_MODELS=\"claude-sonnet-5,claude-opus-5,claude-fable-5-1,claude-sonnet-4-6,claude-opus-4-8[1m]\" -e SYNAPSIS_MAX_TURNS=200 -e SYNAPSIS_WORKSPACE=/workspace $ECR_URI:$ECR_TAG',
+              'docker run -d --name $CONTAINER_NAME --restart always --log-driver=awslogs --log-opt awslogs-region=$REGION --log-opt awslogs-group=/cgiar-ia/${{ env.STAGE }} --log-opt awslogs-stream=$CONTAINER_NAME --log-opt awslogs-create-group=true --log-opt mode=non-blocking --log-opt max-buffer-size=4m -p 7780:7780 -v /opt/cgiar-ia/synapsis:/workspace/.synapsis -v /opt/cgiar-ia/workspace-files/uploads:/workspace/uploads -v /opt/cgiar-ia/workspace-files/outputs:/workspace/outputs -v /opt/cgiar-ia/workspace-files/exports:/workspace/exports -v /opt/cgiar-ia/workspace-files/analysis:/workspace/analysis -e AWS_REGION=$REGION -e LITESTREAM_S3_BUCKET=cgiar-ia-artifacts-$ACCOUNT -e ANTHROPIC_API_KEY=\$ANTHROPIC_KEY -e OPENAI_API_KEY=\$OPENAI_KEY -e IA_AUTH_DISABLED=false -e IA_JWT_SECRET=\$JWT_SECRET -e IA_SELF_SIGNUP=\$SELF_SIGNUP -e IA_PASSWORD_LOGIN_ENABLED=false -e IA_INVITED_LOGIN_ENABLED=${{ vars.IA_INVITED_LOGIN_ENABLED || 'false' }} -e IA_SSO_ENABLED=true -e IA_SSO_ISSUER=${{ vars.IA_SSO_ISSUER }} -e IA_SSO_CLIENT_ID=${{ vars.IA_SSO_CLIENT_ID }} -e IA_SSO_DOMAIN=${{ vars.IA_SSO_DOMAIN }} -e IA_SSO_ORIGIN=${{ vars.IA_SSO_ORIGIN }} -e IA_SSO_ADMIN_SUBJECTS=${{ vars.IA_SSO_ADMIN_SUBJECTS }} -e IA_VOICE_ENABLED=${{ env.STAGE == 'dev' && 'true' || 'false' }} -e IA_OPENAI_ENDPOINT=${{ vars.IA_OPENAI_ENDPOINT }} -e IA_VOICE_PROTOCOL=${{ vars.IA_VOICE_PROTOCOL }} -e IA_VOICE_MODEL=${{ vars.IA_VOICE_MODEL }} -e IA_VOICE_BACKEND_MODEL=${{ vars.IA_VOICE_BACKEND_MODEL }} -e IA_TRANSCRIBE_MODELS=${{ vars.IA_TRANSCRIBE_MODELS }} -e SYNAPSIS_PORT=7780 -e SYNAPSIS_HOST=0.0.0.0 -e SYNAPSIS_PLATFORM=linux -e PRMS_DB_PATH=/app/data/prdb.sqlite -e SYNAPSIS_MODEL=claude-sonnet-5 -e SYNAPSIS_FALLBACK_MODEL=claude-opus-5 -e SYNAPSIS_AVAILABLE_MODELS=\"${{ env.STAGE == 'dev' && 'claude-sonnet-5,claude-opus-5-5,claude-opus-5,claude-fable-5-1,claude-sonnet-4-6,claude-opus-4-8[1m]' || 'claude-sonnet-5,claude-opus-5,claude-fable-5-1,claude-sonnet-4-6,claude-opus-4-8[1m]' }}\" -e SYNAPSIS_MAX_TURNS=60 -e IA_ENVIRONMENT=${{ env.STAGE }} -e IA_SUPPORT_CONTACT=\"${{ vars.IA_SUPPORT_CONTACT || 'J.Berenguer@cgiar.org' }}\" -e SYNAPSIS_WORKSPACE=/workspace $ECR_URI:$ECR_TAG',
               'for i in \$(seq 1 15); do if curl -sf http://localhost:7780/api/health; then echo \"Container healthy\"; exit 0; fi; sleep 2; done; echo \"Health check timed out\"; exit 1'
             ]" \
             --query "Command.CommandId" --output text 2>&1) || {
@@ -375,6 +387,7 @@ jobs:
           echo "SSM Command ID: $COMMAND_ID"
 
       - name: Wait for SSM command completion
+        id: ssm-wait
         if: steps.ssm-update.outputs.ssm_sent == 'true'
         run: |
           COMMAND_ID="${{ steps.ssm-update.outputs.command_id }}"
@@ -479,3 +492,108 @@ jobs:
           done
           echo "::warning::Version mismatch (Running=$RUNNING Expected=$EXPECTED). This may be expected if git_sha is not set in health response."
           echo "Proceeding anyway — container is running."
+
+      # -----------------------------------------------------------------
+      # DEV only: prove Claude Opus 5.5 is usable through the deployed app
+      # (SDK-observed model + real WebSocket chat with a PRMS tool call).
+      # -----------------------------------------------------------------
+      - name: Live Opus 5.5 check (DEV)
+        if: env.STAGE == 'dev'
+        env:
+          IA_INSTANCE_ID: ${{ steps.get-outputs.outputs.instance_id }}
+        run: |
+          python3 - <<'PY'
+          import base64, os, shlex, time, boto3
+          from pathlib import Path
+          assert boto3.client('sts').get_caller_identity()['Account'] == os.environ['EXPECTED_ACCOUNT']
+          ssm = boto3.client('ssm')
+          instance = os.environ['IA_INSTANCE_ID']
+          encoded = base64.b64encode(Path('.github/scripts/dev-opus55-check.py').read_bytes()).decode()
+          cmd = 'docker exec cgiar-innovation-analytics python -c ' + shlex.quote(
+              'import base64;exec(base64.b64decode(' + repr(encoded) + '))')
+          cid = ssm.send_command(InstanceIds=[instance], DocumentName='AWS-RunShellScript',
+                                 Parameters={'commands': ['set -e', cmd]}, TimeoutSeconds=900)['Command']['CommandId']
+          print('SSM command', cid)
+          for _ in range(150):
+              time.sleep(5)
+              try:
+                  r = ssm.get_command_invocation(CommandId=cid, InstanceId=instance)
+              except ssm.exceptions.InvocationDoesNotExist:
+                  continue
+              if r['Status'] == 'Success':
+                  print(r['StandardOutputContent']); break
+              if r['Status'] in ('Failed', 'Cancelled', 'TimedOut'):
+                  print(r['StandardOutputContent']); print(r['StandardErrorContent'])
+                  raise SystemExit('Opus 5.5 DEV check failed: ' + cid)
+          else:
+              raise SystemExit('Opus 5.5 DEV check timed out: ' + cid)
+          PY
+
+      # -----------------------------------------------------------------
+      # DEV only: authenticated QA smoke (.github/scripts/dev-qa-smoke.py).
+      # Synthetic identities minted inside the container (never printed);
+      # no model turn of its own ($0) -- it reuses the Opus 5.5 check's turn.
+      # Results: one JSON line in this log + a table in the job summary.
+      # -----------------------------------------------------------------
+      - name: DEV QA smoke (authenticated, no model spend)
+        if: ${{ !cancelled() && env.STAGE == 'dev' && steps.ssm-wait.outcome == 'success' }}
+        env:
+          IA_INSTANCE_ID: ${{ steps.get-outputs.outputs.instance_id }}
+          # Lanes whose feature checks must PASS instead of being skipped when
+          # their feature is not detected. Empty = tolerant (a missing feature is
+          # reported as "skip", never "fail"). Strict since the wave-3b merge:
+          # Lanes C, E and H are all on this branch.
+          QA_REQUIRE_LANES: 'C,E,H'
+        run: |
+          python3 - <<'PY'
+          import base64, json, os, re, shlex, time, zlib, boto3
+          from pathlib import Path
+          assert boto3.client('sts').get_caller_identity()['Account'] == os.environ['EXPECTED_ACCOUNT']
+          ssm = boto3.client('ssm')
+          instance = os.environ['IA_INSTANCE_ID']
+          require = os.environ.get('QA_REQUIRE_LANES', '')
+          assert re.fullmatch(r'[A-Za-z,]*', require), 'QA_REQUIRE_LANES must be letters and commas'
+          encoded = base64.b64encode(zlib.compress(Path('.github/scripts/dev-qa-smoke.py').read_bytes(), 9)).decode()
+          cmd = ('docker exec -e IA_QA_REQUIRE=' + shlex.quote(require) + ' cgiar-innovation-analytics python -c '
+                 + shlex.quote('import base64,zlib;exec(zlib.decompress(base64.b64decode(' + repr(encoded) + ')))'))
+          cid = ssm.send_command(InstanceIds=[instance], DocumentName='AWS-RunShellScript',
+                                 Parameters={'commands': ['set -e', cmd]}, TimeoutSeconds=600)['Command']['CommandId']
+          print('SSM command', cid)
+
+          def scrub(text):  # belt and braces: the script never prints tokens
+              for rx, rep in ((r'(token=)[^&\s\'"]+', r'\1[REDACTED]'), (r'eyJ[\w-]+\.[\w-]+\.[\w-]+', '[JWT]'),
+                              (r'(#invite=)[^&\s\'"]+', r'\1[REDACTED]'), (r'(Bearer )[\w.-]+', r'\1[REDACTED]')):
+                  text = re.sub(rx, rep, text or '')
+              return text
+
+          def summarise(stdout):
+              line = next((l for l in reversed(stdout.splitlines()) if l.startswith('{"dev_qa_smoke"')), None)
+              if not line:
+                  return
+              qa = json.loads(line)['dev_qa_smoke']
+              rows = ['### DEV QA smoke', '', f"`{qa.get('summary')}` -- model spend ${qa.get('model_spend_usd', 0)}", '',
+                      '| check | status | detail |', '|---|---|---|']
+              for c in qa.get('checks', []):
+                  detail = json.dumps(c.get('detail'))[:300].replace('|', '/')
+                  rows.append(f"| {c['check']} | {c['status'].upper()} | {detail} |")
+              rows += ['', f"clean-up: `{json.dumps(qa.get('cleanup'))}`"]
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as fh:
+                  fh.write('\n'.join(rows) + '\n')
+
+          for _ in range(120):
+              time.sleep(5)
+              try:
+                  r = ssm.get_command_invocation(CommandId=cid, InstanceId=instance)
+              except ssm.exceptions.InvocationDoesNotExist:
+                  continue
+              if r['Status'] in ('Success', 'Failed', 'Cancelled', 'TimedOut'):
+                  out = scrub(r['StandardOutputContent'])
+                  print(out)
+                  summarise(out)
+                  if r['Status'] != 'Success':
+                      print(scrub(r['StandardErrorContent'])[-4000:])
+                      raise SystemExit('DEV QA smoke failed: ' + cid)
+                  break
+          else:
+              raise SystemExit('DEV QA smoke timed out: ' + cid)
+          PY

@@ -19,7 +19,9 @@ env={'AWS_REGION':'eu-central-1','LITESTREAM_S3_BUCKET':f'cgiar-ia-artifacts-{ac
  # Target-model flip is configuration: promotion-request.json models_config voice_protocol/voice_model/voice_backend_model.
  'IA_OPENAI_ENDPOINT':cfg.get('openai_endpoint',''),'IA_VOICE_PROTOCOL':cfg.get('voice_protocol',''),
  'IA_VOICE_MODEL':cfg.get('voice_model',''),'IA_VOICE_BACKEND_MODEL':cfg.get('voice_backend_model',''),
- 'IA_TRANSCRIBE_MODELS':cfg.get('transcribe_models',''),'SYNAPSIS_PORT':'7780','SYNAPSIS_HOST':'0.0.0.0','SYNAPSIS_PLATFORM':'linux',
+ 'IA_TRANSCRIBE_MODELS':cfg.get('transcribe_models',''),
+ # Parity with DEV deploy.yml since the 26-Sep round (ad98803): admin usage label + the contact named in the daily-cap message.
+ 'IA_ENVIRONMENT':stage,'IA_SUPPORT_CONTACT':cfg.get('support_contact','J.Berenguer@cgiar.org'),'SYNAPSIS_PORT':'7780','SYNAPSIS_HOST':'0.0.0.0','SYNAPSIS_PLATFORM':'linux',
  'PRMS_DB_PATH':'/app/data/prdb.sqlite','SYNAPSIS_WORKSPACE':'/workspace','SYNAPSIS_MAX_TURNS':'200',
  'SYNAPSIS_MODEL':cfg.get('model','claude-sonnet-4-6'),
  'SYNAPSIS_FALLBACK_MODEL':cfg.get('fallback','claude-opus-4-8'),

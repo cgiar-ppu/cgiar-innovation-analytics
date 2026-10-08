@@ -86,6 +86,27 @@ def _get_connection() -> sqlite3.Connection:
     return sqlite3.connect(f"file:{PRMS_DB_PATH}?mode=ro", uri=True)
 
 
+#: Default PRMS quality gate (both funding windows): W1/W2 "Quality Assessed"
+#: or W3/bilateral "Approved". Same rule as the dashboard and the agent prompt.
+_QUALITY_GATE_R = (
+    "r.is_active = 1 AND ((r.source = 'Result' AND r.status_id = 2) "
+    "OR (r.source = 'API' AND r.status_id = 6))"
+)
+
+
+def _closed_phase_filter_r() -> str:
+    """``AND r.version_id NOT IN (...)`` for the snapshot's OPEN phases, or ``""``.
+
+    Rows in an open (in-progress) reporting phase are provisional; like the
+    dashboard, partner evidence counts closed phases only. The ids are ints
+    read from the snapshot, never user input.
+    """
+    ids = get_snapshot_info(PRMS_DB_PATH).open_phase_ids
+    if not ids:
+        return ""
+    return " AND r.version_id NOT IN (" + ", ".join(str(int(i)) for i in ids) + ")"
+
+
 def _query_rows(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[dict]:
     """Execute SQL and return list of dicts."""
     cur = conn.cursor()
@@ -130,7 +151,7 @@ def _build_partner_query(
         ci.website_link,
         ci.headquarter_country_iso2 AS hq_country,
         ci.institution_type_code,
-        COUNT(DISTINCT rbi.result_id) AS result_count,
+        COUNT(DISTINCT r.result_code) AS result_count,
         GROUP_CONCAT(DISTINCT ir.name) AS roles,
         GROUP_CONCAT(DISTINCT rbi.institution_roles_id) AS role_ids
     """
@@ -145,7 +166,7 @@ def _build_partner_query(
     join_clauses: list[str] = []
     where_conditions: list[str] = [
         "rbi.is_active = 1",
-        "r.is_active = 1",
+        _QUALITY_GATE_R + _closed_phase_filter_r(),
         f"rbi.institution_roles_id IN ({','.join(str(r) for r in PARTNERSHIP_ROLES)})",
     ]
     params_list: list[Any] = []
@@ -156,9 +177,14 @@ def _build_partner_query(
             "JOIN result_country rc ON r.id = rc.result_id AND rc.is_active = 1 "
             "JOIN clarisa_countries cc ON rc.country_id = cc.id"
         )
-        where_conditions.append("(cc.name LIKE ? OR cc.iso_alpha_2 LIKE ? OR cc.iso_alpha_3 LIKE ?)")
-        country_pattern = f"%{country}%"
-        params_list.extend([country_pattern, country.upper(), country.upper()])
+        # L2-10: EXACT match on the country name or its ISO-2 / ISO-3 code.
+        # A substring LIKE made "Niger" also match Nigeria, "Mali" Somalia and
+        # "Sudan" South Sudan.
+        where_conditions.append(
+            "(LOWER(TRIM(cc.name)) = ? OR UPPER(cc.iso_alpha_2) = ? OR UPPER(cc.iso_alpha_3) = ?)"
+        )
+        country_clean = country.strip()
+        params_list.extend([country_clean.lower(), country_clean.upper(), country_clean.upper()])
 
     # Region filter
     if region:
@@ -253,12 +279,12 @@ def _get_partner_initiative_history(
 ) -> list[dict]:
     """Get the initiatives a partner has worked on (top 5 by result count)."""
     sql = """
-    SELECT cinit.short_name AS initiative, COUNT(DISTINCT rbi_inst.result_id) AS result_count
+    SELECT cinit.short_name AS initiative, COUNT(DISTINCT r.result_code) AS result_count
     FROM results_by_institution rbi_inst
     JOIN result r ON rbi_inst.result_id = r.id
     JOIN results_by_inititiative rbi_init ON r.id = rbi_init.result_id AND rbi_init.is_active = 1
     JOIN clarisa_initiatives cinit ON rbi_init.inititiative_id = cinit.id
-    WHERE rbi_inst.institutions_id = ? AND rbi_inst.is_active = 1 AND r.is_active = 1
+    WHERE rbi_inst.institutions_id = ? AND rbi_inst.is_active = 1 AND """ + _QUALITY_GATE_R + _closed_phase_filter_r() + """
     GROUP BY cinit.short_name
     ORDER BY result_count DESC
     LIMIT 5
@@ -276,9 +302,9 @@ def _get_partner_country_coverage(
     JOIN result r ON rbi_inst.result_id = r.id
     JOIN result_country rc ON r.id = rc.result_id AND rc.is_active = 1
     JOIN clarisa_countries cc ON rc.country_id = cc.id
-    WHERE rbi_inst.institutions_id = ? AND rbi_inst.is_active = 1 AND r.is_active = 1
+    WHERE rbi_inst.institutions_id = ? AND rbi_inst.is_active = 1 AND """ + _QUALITY_GATE_R + _closed_phase_filter_r() + """
     GROUP BY cc.name
-    ORDER BY COUNT(DISTINCT rbi_inst.result_id) DESC
+    ORDER BY COUNT(DISTINCT r.result_code) DESC
     LIMIT 8
     """
     rows = _query_rows(conn, sql, (institution_id,))
@@ -290,13 +316,13 @@ def _get_partner_innovation_levels(
 ) -> dict[str, int]:
     """Get IRL distribution for innovations this partner is linked to."""
     sql = """
-    SELECT cirl.level, COUNT(DISTINCT r.id) AS count
+    SELECT cirl.level, COUNT(DISTINCT r.result_code) AS count
     FROM results_by_institution rbi_inst
     JOIN result r ON rbi_inst.result_id = r.id
     JOIN results_innovations_dev rid ON r.id = rid.results_id AND rid.is_active = 1
     JOIN clarisa_innovation_readiness_level cirl ON rid.innovation_readiness_level_id = cirl.id
     WHERE rbi_inst.institutions_id = ?
-      AND rbi_inst.is_active = 1 AND r.is_active = 1
+      AND rbi_inst.is_active = 1 AND """ + _QUALITY_GATE_R + _closed_phase_filter_r() + """
       AND r.result_type_id = 7
     GROUP BY cirl.level
     ORDER BY cirl.level
@@ -525,6 +551,11 @@ def _format_prms_results(partners: list[dict], query_context: str) -> str:
     lines.append("## PRMS-Validated Partners")
     lines.append("")
     lines.append("Partners with documented CGIAR partnership history in the specified area:")
+    lines.append(
+        "*Method: \"Partnership Results\" = distinct PRMS result codes (not yearly rows), "
+        "quality-assured only (W1/W2 Quality Assessed + W3/bilateral Approved), closed "
+        "reporting phases only; countries matched exactly by name or ISO code.*"
+    )
     lines.append("")
 
     for i, p in enumerate(partners, 1):

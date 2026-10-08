@@ -2,12 +2,15 @@
  * @file ModelSelector.tsx
  * @module components/layout
  *
- * Chat model-selector pill. Lets the user switch the active session between
- * the models exposed by the backend (`config.selectable_models`, e.g.
- * Sonnet 4.6 and Opus 4.8). Selecting a model:
+ * Chat model-selector pill. Lists exactly the models `/api/config` offers
+ * the caller (`selectable_models`, role-aware since 2026-09-26: researchers
+ * and invited users get one model, administrators the stage list) and hides
+ * itself when there is nothing to choose. Selecting a model:
  *   1. optimistically updates the session's model in the sessions store, and
  *   2. sends a `switch_model` frame over the WebSocket so the backend recreates
  *      the session's SDK client under the new model (preserving context).
+ * If the socket is down or the server answers `model_not_allowed`, the label
+ * rolls back and a notice is shown (L4-10).
  *
  * Mirrors the parent Synapsis platform's model pill pattern. The pill is
  * disabled while the agent is busy (you cannot switch mid-response).
@@ -18,6 +21,7 @@ import { Check, ChevronDown } from 'lucide-react';
 import { useWebSocketContext } from '../../contexts/WebSocketContext';
 import { useSessionsStore } from '../../stores/sessions';
 import { useChatStore } from '../../stores/chat';
+import { runWhileConnected } from '../../lib/connectionNotice';
 import type { AppConfig } from '../../lib/types';
 
 interface Props {
@@ -28,19 +32,26 @@ export function ModelSelector({ config }: Props) {
   const { send } = useWebSocketContext();
   const activeSessionId = useSessionsStore((s) => s.activeSessionId);
   const sessions = useSessionsStore((s) => s.sessions);
-  const setSessionModel = useSessionsStore((s) => s.setSessionModel);
+  const beginModelSwitch = useSessionsStore((s) => s.beginModelSwitch);
+  const rollbackModelSwitch = useSessionsStore((s) => s.rollbackModelSwitch);
   const isBusy = useChatStore((s) => s.isBusy);
 
   if (!config) return null;
 
   const selectableModels = config.selectable_models ?? [];
+  // Nothing to choose (one model for this role): no picker, no model badge.
+  if (selectableModels.length <= 1) return null;
+
+  const allowed = new Set(selectableModels.map((m) => m.id));
+  const sessionModel = sessions.find((s) => s.session_id === activeSessionId)?.model;
+  // A chat started on a model this role no longer has resumes on the default.
   const currentModel =
-    sessions.find((s) => s.session_id === activeSessionId)?.model || config.model;
+    sessionModel && allowed.has(sessionModel) ? sessionModel : (config.model_policy?.default_model || config.model);
   const currentLabel =
     selectableModels.find((m) => m.id === currentModel)?.label ?? currentModel;
 
-  // No active session or no selectable models — show a static badge.
-  if (!activeSessionId || selectableModels.length === 0) {
+  // No active session yet — show a static badge.
+  if (!activeSessionId) {
     return (
       <span className="text-[10px] px-2 py-0.5 rounded-full text-[var(--text-muted)]/60 hidden xl:inline-block font-mono border border-[var(--border)]">
         {currentLabel}
@@ -81,8 +92,10 @@ export function ModelSelector({ config }: Props) {
                 disabled={isBusy || isSelected}
                 onSelect={() => {
                   if (!activeSessionId) return;
-                  setSessionModel(activeSessionId, id);
-                  send({ type: 'switch_model', model: id });
+                  beginModelSwitch(activeSessionId, id);
+                  if (!runWhileConnected(() => send({ type: 'switch_model', model: id }))) {
+                    rollbackModelSwitch();
+                  }
                 }}
                 className={`flex items-center gap-3 px-3 py-2.5 text-sm cursor-pointer
                   outline-none transition-colors

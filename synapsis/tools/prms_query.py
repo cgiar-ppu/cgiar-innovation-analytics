@@ -40,6 +40,10 @@ MAX_ROWS: int = 5000
 # the caller overrides the default.
 MAX_ROW_LIMIT: int = 100000
 QUERY_TIMEOUT_SECONDS: int = 30
+# How often (in SQLite VM instructions) the progress handler checks the deadline,
+# and how long the caller waits for the worker to unwind after an interrupt.
+_PROGRESS_STEPS: int = 10_000
+_INTERRUPT_GRACE_SECONDS: float = 5.0
 
 # SQL patterns that are NOT allowed (anything other than SELECT)
 _FORBIDDEN_SQL = re.compile(
@@ -118,22 +122,45 @@ class _TimeoutError(Exception):
 def _execute_with_timeout(
     db_path: str, sql: str, timeout: int = QUERY_TIMEOUT_SECONDS
 ) -> tuple[list[dict], list[str], int]:
-    """Execute a SQL query with a timeout.
+    """Execute a SQL query with a timeout that really stops SQLite.
 
     Returns (rows_as_dicts, column_names, total_row_count).
     Raises _TimeoutError if the query takes too long.
     Raises sqlite3.Error on SQL errors.
+
+    L2-07 (2026-09-26): a timed-out query used to keep running in its daemon
+    thread (the join simply stopped waiting), so one runaway recursive CTE could
+    pin a CPU core of the backend until the process restarted. Two independent
+    stops now end it:
+
+    * a SQLite progress handler that aborts the statement once the deadline has
+      passed (checked every ``_PROGRESS_STEPS`` VM instructions, in the worker
+      thread itself), and
+    * ``Connection.interrupt()`` called from the waiting thread when the join
+      times out (belt and braces for statements that sit in a single long step).
+
+    The connection is opened read-only (``mode=ro`` URI) and always closed.
     """
     result_holder: dict[str, Any] = {}
     error_holder: dict[str, Any] = {}
+    conn_holder: dict[str, sqlite3.Connection] = {}
+    deadline = time.monotonic() + timeout
+
+    def _past_deadline() -> int:
+        # Non-zero return value makes SQLite abort with "interrupted".
+        return 1 if time.monotonic() > deadline else 0
 
     def _run():
+        conn = None
         try:
             conn = sqlite3.connect(
-                db_path,
+                f"file:{db_path}?mode=ro",
+                uri=True,
                 timeout=10,
                 check_same_thread=False,
             )
+            conn_holder["conn"] = conn
+            conn.set_progress_handler(_past_deadline, _PROGRESS_STEPS)
             conn.execute("PRAGMA query_only = ON;")
             conn.row_factory = sqlite3.Row
 
@@ -145,23 +172,41 @@ def _execute_with_timeout(
             result_holder["rows"] = [dict(row) for row in rows]
             result_holder["columns"] = columns
             result_holder["count"] = len(rows)
-
-            conn.close()
         except Exception as exc:
             error_holder["error"] = exc
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # pragma: no cover - best effort
+                    pass
 
-    thread = threading.Thread(target=_run, daemon=True)
+    thread = threading.Thread(target=_run, name="prms-query", daemon=True)
     thread.start()
     thread.join(timeout=timeout)
 
     if thread.is_alive():
+        conn = conn_holder.get("conn")
+        if conn is not None:
+            try:
+                conn.interrupt()
+            except Exception:  # pragma: no cover - connection already closed
+                pass
+        # Give SQLite a moment to unwind; the progress handler also fires.
+        thread.join(timeout=_INTERRUPT_GRACE_SECONDS)
         raise _TimeoutError(
-            f"Query timed out after {timeout} seconds. "
+            f"Query timed out after {timeout} seconds and was stopped. "
             "Try simplifying the query or adding more specific WHERE conditions."
         )
 
     if "error" in error_holder:
-        raise error_holder["error"]
+        exc = error_holder["error"]
+        if isinstance(exc, sqlite3.OperationalError) and "interrupt" in str(exc).lower():
+            raise _TimeoutError(
+                f"Query timed out after {timeout} seconds and was stopped. "
+                "Try simplifying the query or adding more specific WHERE conditions."
+            )
+        raise exc
 
     return (
         result_holder.get("rows", []),
@@ -187,6 +232,19 @@ def _get_total_count(db_path: str, sql: str) -> int | None:
     except Exception:
         pass
     return None
+
+
+# QA-4 D5: PRMS titles were cut at 80 characters in the table view (73 % of
+# result titles are longer), and the model "completed" them — once with an
+# invented qualifier — while claiming the titles were as stored. Title/name
+# columns now keep up to 250 characters (99 % of PRMS titles fit); anything
+# still cut ends in "..." and the prompt says to keep that ellipsis.
+_TITLE_COLUMN_RE = re.compile(r"(^|[_\s])(title|name)s?($|[_\s])", re.IGNORECASE)
+TITLE_CELL_LIMIT = 250
+
+
+def _cell_limit(column, default: int) -> int:
+    return max(default, TITLE_CELL_LIMIT) if _TITLE_COLUMN_RE.search(str(column)) else default
 
 
 def _format_results_text(
@@ -224,9 +282,10 @@ def _format_results_text(
             for c in columns:
                 v = row.get(c, "")
                 s = str(v) if v is not None else "NULL"
-                # Truncate long values
-                if len(s) > 80:
-                    s = s[:77] + "..."
+                # Truncate long values (titles/names get more room — QA-4 D5)
+                limit = _cell_limit(c, 80)
+                if len(s) > limit:
+                    s = s[:limit - 3] + "..."
                 vals.append(s)
             lines.append(" | ".join(vals))
     else:
@@ -235,8 +294,9 @@ def _format_results_text(
             lines.append(f"--- Row {i + 1} ---")
             for k, v in row.items():
                 s = str(v) if v is not None else "NULL"
-                if len(s) > 200:
-                    s = s[:197] + "..."
+                limit = _cell_limit(k, 200)
+                if len(s) > limit:
+                    s = s[:limit - 3] + "..."
                 lines.append(f"  {k}: {s}")
             lines.append("")
 
@@ -249,11 +309,15 @@ def _format_results_text(
 
 @tool(
     "prms_query",
-    "Execute a read-only SQL query against the CGIAR PRMS database (197 tables, "
-    "32K+ results covering innovations, knowledge products, capacity development, "
+    "Execute a read-only SQL query against the CGIAR PRMS database (a published "
+    "PRMS Reporting snapshot with 200+ tables and 32K+ result rows covering "
+    "innovations, knowledge products, capacity development, "
     "policy changes, partners, and geographies). "
     "Use the PRMS schema reference in your system prompt to construct valid SQL. "
-    "For innovations (result_type_id IN (2,7,10)): always filter is_active=1 AND (is_discontinued IS NULL OR is_discontinued=0). Count by result_code not id. "
+    "Counting rules for innovations (result_type_id IN (2,7,10)): count COUNT(DISTINCT result_code), never rows or ids; "
+    "apply the quality gate is_active=1 AND ((source='Result' AND status_id=2) OR (source='API' AND status_id=6)); "
+    "exclude open reporting phases (see the system prompt) unless the user asks for provisional data; "
+    "state the method and the snapshot date (printed in the 'Source:' footer) with every number. "
     "Returns structured results with row data, total count, and tables used. "
     "By default results are capped at 5000 rows; pass an integer 'row_limit' to "
     "raise or lower that cap when you need the full result set (or fewer rows). "

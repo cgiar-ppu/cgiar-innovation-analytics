@@ -191,6 +191,30 @@ function tryJsonArray(parsed: unknown): ChartData | null {
 // Strategy C — Markdown table with numeric columns
 // ---------------------------------------------------------------------------
 
+/** Plain label text from a markdown table cell: links, emphasis and code marks removed. */
+export function stripInlineMarkdown(cell: string): string {
+  return cell
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/(\*\*|__)(.*?)\1/g, '$2')
+    .replace(/(^|[^\w*])[*_](\S[^*_]*?)[*_](?=[^\w*]|$)/g, '$1$2')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/<[^>]+>/g, '')
+    .trim()
+}
+
+/** Headers of numeric columns that are ordinals or identifiers, not quantities. */
+const NON_QUANTITY_HEADER_RE =
+  /\b(IRL|readiness|level|stage|rank|ranking|year|years|phase|code|codes|id|ids)\b|^#$|^no\.?$/i
+
+const RESULT_CODE_CELL_RE = /^(?:R-?)?\d{1,9}$/i
+
+/** A text column whose values are result codes / ids (e.g. "R1003") is not a label axis. */
+function isIdentifierColumn(header: string, values: string[]): boolean {
+  if (/\b(result\s*code|code|id)\b/i.test(header)) return true
+  const nonEmpty = values.filter(v => v.trim() !== '')
+  return nonEmpty.length > 0 && nonEmpty.every(v => RESULT_CODE_CELL_RE.test(v.trim()))
+}
+
 function tryMarkdownTable(content: string): ChartData | null {
   // Find lines that look like a markdown table
   const lines = content.split('\n')
@@ -217,20 +241,20 @@ function tryMarkdownTable(content: string): ChartData | null {
   if (tableLines.length < 3) return null // need header + at least 2 data rows
 
   const parseRow = (line: string) =>
-    line.split('|').map(c => c.trim()).filter(c => c.length > 0)
+    line.split('|').map(c => stripInlineMarkdown(c.trim())).filter(c => c.length > 0)
 
   const headers = parseRow(tableLines[0]!)
   const rows = tableLines.slice(1).map(parseRow)
 
   if (headers.length < 2 || rows.length < 2) return null
 
-  // Determine numeric columns
+  // Determine numeric columns (after stripping markdown, so "**43**" is 43)
   const numericCols: number[] = []
   const stringCols: number[] = []
 
   for (let col = 0; col < headers.length; col++) {
     const values = rows.map(r => r[col] ?? '')
-    const allNumeric = values.every(v => !isNaN(Number(v.replace(/[,$%]/g, ''))) && v.trim() !== '')
+    const allNumeric = values.every(v => !isNaN(Number(v.replace(/[,$%\s]/g, ''))) && v.trim() !== '')
     if (allNumeric) {
       numericCols.push(col)
     } else {
@@ -238,21 +262,27 @@ function tryMarkdownTable(content: string): ChartData | null {
     }
   }
 
-  if (numericCols.length === 0 || stringCols.length === 0) return null
+  // QA-4 D9: a table is not a chart just because it has a number in it.
+  // Label: the first text column that is not a list of result codes / ids.
+  // Values: only quantities — never ordinals or identifiers (IRL per result,
+  // readiness level, rank, year, phase, code, id).
+  const labelCols = stringCols.filter(col => !isIdentifierColumn(headers[col]!, rows.map(r => r[col] ?? '')))
+  const valueCols = numericCols.filter(col => !NON_QUANTITY_HEADER_RE.test(headers[col]!))
+  if (valueCols.length === 0 || labelCols.length === 0) return null
 
-  const xAxisCol = stringCols[0]!
+  const xAxisCol = labelCols[0]!
   const xAxisKey = headers[xAxisCol]!
 
   const data = rows.map(row => {
     const obj: Record<string, unknown> = {}
     obj[xAxisKey] = row[xAxisCol] ?? ''
-    for (const col of numericCols) {
-      obj[headers[col]!] = Number((row[col] ?? '0').replace(/[,$%]/g, ''))
+    for (const col of valueCols) {
+      obj[headers[col]!] = Number((row[col] ?? '0').replace(/[,$%\s]/g, ''))
     }
     return obj
   })
 
-  const series: SeriesConfig[] = numericCols.map(col => ({ key: headers[col]! }))
+  const series: SeriesConfig[] = valueCols.map(col => ({ key: headers[col]! }))
 
   const chartType: ChartData['chartType'] = data.length >= 8 ? 'line' : 'bar'
 
@@ -291,4 +321,46 @@ export function detectChartData(content: string): ChartData | null {
   }
 
   return null
+}
+
+// ---------------------------------------------------------------------------
+// <chart> blocks: render every one, and keep their JSON out of the text body
+// ---------------------------------------------------------------------------
+
+const CHART_BLOCK_RE = /<chart>([\s\S]*?)<\/chart>/gi
+
+/** Every explicit `<chart>{spec}</chart>` block in the message, in order. */
+export function detectChartBlocks(content: string): ChartData[] {
+  const out: ChartData[] = []
+  if (!content) return out
+  for (const m of content.matchAll(CHART_BLOCK_RE)) {
+    const chart = tryExplicitChart(safeParse(m[1]!.trim()))
+    if (chart) out.push(chart)
+  }
+  return out
+}
+
+/**
+ * The charts to render for a message: every explicit `<chart>` block when
+ * there is at least one, otherwise the single auto-detected chart (JSON or a
+ * markdown table), if any.
+ */
+export function detectCharts(content: string): ChartData[] {
+  const blocks = detectChartBlocks(content)
+  if (blocks.length > 0) return blocks
+  const single = detectChartData(content)
+  return single ? [single] : []
+}
+
+/**
+ * The message text without the `<chart>` blocks that render as charts, so the
+ * raw spec JSON is not printed under the chart (QA-4 D2). A block that does
+ * not parse as a chart stays visible (nothing is hidden silently).
+ */
+export function stripRenderedChartBlocks(content: string): string {
+  if (!content || !/<chart>/i.test(content)) return content
+  return content
+    .replace(CHART_BLOCK_RE, (block, body: string) =>
+      tryExplicitChart(safeParse(body.trim())) ? '\n\n' : block)
+    .replace(/\n{3,}/g, '\n\n')
 }

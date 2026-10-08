@@ -6,12 +6,12 @@
  * undefined-field errors.
  */
 import { describe, it, expect } from 'vitest'
+import * as mockModule from '../mockData'
 import {
   mockAgents,
   mockWorkflows,
   mockDashboardStats,
   mockSessions,
-  mockMemories,
   mockActivityData,
 } from '../mockData'
 
@@ -106,16 +106,10 @@ describe('mockData', () => {
   })
 
   // -----------------------------------------------------------------------
-  // mockMemories
+  // mockMemories removed with the shared Memory feature (2026-09-26)
   // -----------------------------------------------------------------------
-  it('test_mockMemories_have_required_fields', () => {
-    expect(mockMemories.length).toBeGreaterThan(0)
-    for (const m of mockMemories) {
-      expect(m).toHaveProperty('id')
-      expect(m).toHaveProperty('category')
-      expect(m).toHaveProperty('content')
-      expect(m).toHaveProperty('importance')
-    }
+  it('test_no_memory_mock_after_memory_feature_removal', () => {
+    expect((mockModule as Record<string, unknown>).mockMemories).toBeUndefined()
   })
 
   // -----------------------------------------------------------------------
@@ -131,5 +125,12 @@ describe('mockData', () => {
       expect(point).toHaveProperty('messages')
       expect(typeof point.messages).toBe('number')
     }
+  })
+
+  // -----------------------------------------------------------------------
+  // L2-13 / L4-02: no invented PRMS dashboard figures anywhere
+  // -----------------------------------------------------------------------
+  it('test_no_mock_PRMS_dashboard_is_exported', () => {
+    expect('mockPRMSDashboard' in mockModule).toBe(false)
   })
 })

@@ -16,7 +16,7 @@ export default defineConfig({
         manualChunks: {
           'react-vendor': ['react', 'react-dom', 'react-router-dom'],
           'markdown': ['react-markdown', 'remark-gfm', 'react-syntax-highlighter'],
-          'charts': ['recharts', 'reactflow'],
+          'charts': ['recharts'],
           'ui-vendor': ['framer-motion', '@tanstack/react-query'],
         },
       },

@@ -1,18 +1,19 @@
-import { MessageSquare, FolderOpen, Brain, X } from 'lucide-react'
+import { MessageSquare, FolderOpen, X } from 'lucide-react'
 import { useUIStore } from '../../stores/ui'
 import { SessionList } from '../sidebar/SessionList'
 import { FileList } from '../sidebar/FileList'
-import { MemoryList } from '../sidebar/MemoryList'
 import type { ClientMessage } from '../../lib/types'
 
 interface SidebarProps {
   send: (msg: ClientMessage) => void
 }
 
-const tabs = [
+// "My files" lists only the caller's own uploads and generated files (the
+// server scopes it per user since 2026-09-26). The shared Memory tab is gone:
+// its backend was removed.
+export const SIDEBAR_TABS = [
   { id: 'sessions' as const, label: 'Sessions', icon: MessageSquare },
-  { id: 'files' as const, label: 'Files', icon: FolderOpen },
-  { id: 'memory' as const, label: 'Memory', icon: Brain },
+  { id: 'files' as const, label: 'My files', icon: FolderOpen },
 ]
 
 export function Sidebar({ send }: SidebarProps) {
@@ -41,7 +42,7 @@ export function Sidebar({ send }: SidebarProps) {
 
         {/* Tabs */}
         <div className="flex border-b border-border">
-          {tabs.map((tab) => (
+          {SIDEBAR_TABS.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setSidebarTab(tab.id)}
@@ -64,7 +65,6 @@ export function Sidebar({ send }: SidebarProps) {
         <div className="flex-1 overflow-y-auto">
           {sidebarTab === 'sessions' && <SessionList send={send} />}
           {sidebarTab === 'files' && <FileList />}
-          {sidebarTab === 'memory' && <MemoryList />}
         </div>
       </aside>
     </>

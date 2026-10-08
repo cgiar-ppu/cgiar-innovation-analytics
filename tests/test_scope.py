@@ -189,7 +189,9 @@ async def test_message_to_sdk_carries_the_preamble_when_scope_is_set():
     # The user's OWN message is persisted unmodified — the preamble is a
     # server-side wrapper, not something the user appears to have typed.
     user_rows = [d for (_, t, d) in persisted if t == "user"]
-    assert user_rows == [{"content": "how many innovations?"}]
+    # The scope is kept beside the text for answer feedback (Lane H), never in it.
+    assert user_rows == [{"content": "how many innovations?",
+                          "scope": {"years": [2024], "programs": ["SP09 — Scaling for Impact"]}}]
 
 
 @pytest.mark.asyncio
@@ -232,8 +234,8 @@ async def test_invalid_scope_tells_the_user_why():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_api_query_rejects_an_invalid_scope(test_client):
-    resp = await test_client.post(
+async def test_api_query_rejects_an_invalid_scope(researcher_client):
+    resp = await researcher_client.post(
         "/api/query", json={"message": "hi", "scope": {"years": [1999]}}
     )
     assert resp.status_code == 422
@@ -241,8 +243,8 @@ async def test_api_query_rejects_an_invalid_scope(test_client):
 
 
 @pytest.mark.asyncio
-async def test_scope_options_shape(test_client):
-    resp = await test_client.get("/api/scope/options")
+async def test_scope_options_shape(researcher_client):
+    resp = await researcher_client.get("/api/scope/options")
     assert resp.status_code == 200
     body = resp.json()
     assert body["years"] == [2022, 2023, 2024, 2025]

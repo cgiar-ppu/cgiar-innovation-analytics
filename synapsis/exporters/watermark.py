@@ -44,7 +44,10 @@ from synapsis.prms_snapshot import get_snapshot_info
 WATERMARK_BANNER: str = "AI V0 DRAFT — REQUIRES HUMAN VALIDATION"
 
 #: The composite provenance / QA notice (Addendum §4 "Suggested composite copy").
-#: ``{date}`` is substituted with the export date.
+#: ``{date}`` is the PRMS snapshot's DATA date (``SnapshotInfo.data_as_of``),
+#: never the export date — review L6-01: exports used to say "Data as of
+#: <today>" right above "PRMS snapshot … (data as of <real date>)". The export
+#: moment has its own line (:data:`EXPORT_TIMESTAMP_LINE`). Wording unchanged.
 PROVENANCE_NOTICE: str = (
     "Based on CGIAR innovation data (PRMS); includes AI-added interpretation; "
     "requires human quality assurance before use or citation. "
@@ -105,14 +108,37 @@ _WATERMARK_RGB: tuple[int, int, int] = (0xB4, 0x00, 0x00)
 EXPORT_TIMESTAMP_LINE: str = "Export generated on {date} at {time} UTC."
 
 
+#: Shown in place of a date when the snapshot's data date cannot be read.
+DATA_DATE_UNKNOWN: str = "an unknown date (PRMS snapshot unavailable)"
+
+
+def data_as_of_date(db_path: str | None = None) -> str:
+    """The date the exported figures describe: the PRMS snapshot's data date.
+
+    ``SnapshotInfo.data_as_of`` (``MAX(result.last_updated_date)``), falling
+    back to the extraction date, and to :data:`DATA_DATE_UNKNOWN` when no
+    snapshot is readable. Never the export date (review L6-01).
+    """
+    info = get_snapshot_info(db_path)
+    if not info.available:
+        return DATA_DATE_UNKNOWN
+    return info.data_as_of or info.extracted_on or DATA_DATE_UNKNOWN
+
+
 def watermark_date(date: datetime | None = None) -> str:
-    """Return the human-readable date string used in the provenance notice."""
+    """Return ``YYYY-MM-DD`` for *date* (default: now). Export-moment helper only."""
     return (date or datetime.now()).strftime("%Y-%m-%d")
 
 
-def provenance_notice(date: datetime | None = None) -> str:
-    """Return the provenance notice with the date substituted in."""
-    return PROVENANCE_NOTICE.format(date=watermark_date(date))
+def provenance_notice(date: datetime | None = None, *, db_path: str | None = None) -> str:
+    """Return the provenance notice: "… Data as of <snapshot data date>."
+
+    ``date`` is the EXPORT moment and is accepted for call compatibility only:
+    it no longer feeds "Data as of" (review L6-01). The export moment is
+    stated by :func:`export_timestamp_line`.
+    """
+    del date  # the export moment is not the data date
+    return PROVENANCE_NOTICE.format(date=data_as_of_date(db_path))
 
 
 def export_timestamp_line(date: datetime | None = None) -> str:
@@ -434,7 +460,8 @@ def apply_ai_watermark(doc, *, date: datetime | None = None, title: str | None =
     * a diagonal red **draft watermark on every page** (VML text shape in the
       section header, behind the content);
     * a per-page **header**: document title + bold-red banner, thin rule under;
-    * the existing per-page **footer**, plus a right-aligned ``Page N`` field.
+    * the per-page **footer** (product line, banner, provenance notice and the
+      snapshot line), plus a right-aligned ``Page N`` field.
 
     Args:
         doc:   A ``docx.Document`` instance.
@@ -546,7 +573,11 @@ def apply_ai_watermark(doc, *, date: datetime | None = None, title: str | None =
         footer.is_linked_to_previous = False
         fpara = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
         fpara.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        frun = fpara.add_run(f"{PRODUCT_FOOTER} • {WATERMARK_BANNER} • {provenance_notice(date)}")
+        # Review L6-01: the per-page footer also names the snapshot (it used
+        # to carry only the provenance notice).
+        frun = fpara.add_run(
+            f"{PRODUCT_FOOTER} • {WATERMARK_BANNER} • {provenance_notice(date)} {snapshot_line()}"
+        )
         frun.font.size = Pt(8)
         frun.font.color.rgb = banner_color
         # Right-aligned `Page N` field after the footer text (zero-draft layout).

@@ -12,10 +12,10 @@
  * {@link mapHistoryMessage}.
  */
 
-import type { Session, FileInfo, Memory, NewMemory, AppConfig, HealthStatus, ChatMessage, SearchResult, GitStatus, GitDiffResponse, GitLogResponse, GitShowResponse, TTSVoice, TTSSettings } from './types'
+import type { Session, FileInfo, AppConfig, HealthStatus, ChatMessage, SearchResult, TTSVoice, TTSSettings } from './types'
 import { isSuppressedSystemMessage } from '../stores/chat/systemMessageFilter'
-import type { SkillInfo } from './types-extended'
 import { getAuthToken } from '../stores/auth'
+import type { AdminUsage } from './types/usage'
 
 const BASE = ''
 
@@ -187,6 +187,48 @@ function mapHistoryMessage(msg: HistoryMessage, index: number): ChatMessage[] {
   }
 }
 
+/** Compare answer texts ignoring link targets, markdown emphasis and whitespace. */
+function normaliseAnswerText(text: string): string {
+  return text
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * Drop the assistant message injected from a `result` row's `result_text`
+ * when it only repeats the answer (QA-4 D1).
+ *
+ * The SDK's result text repeats the turn's final answer. The live chat shows
+ * it only when the turn streamed no text (slash commands), so on reload the
+ * `-rt` message is dropped whenever the same turn (since the last user
+ * message) already has an assistant text row, or when its normalised text
+ * equals an earlier answer. The comparison ignores link targets, so chats
+ * saved before the server linked `result_text` (unlinked copy) de-duplicate
+ * as well.
+ */
+export function dedupeHistoryMessages(mapped: ChatMessage[]): ChatMessage[] {
+  const seen = new Set<string>()
+  let turnHasAssistantText = false
+  const out: ChatMessage[] = []
+  for (const msg of mapped) {
+    if (msg.role === 'user') {
+      turnHasAssistantText = false
+    } else if (msg.role === 'assistant') {
+      const isResultText = msg.id.endsWith('-rt')
+      if (isResultText) {
+        if (turnHasAssistantText || seen.has(normaliseAnswerText(msg.content))) continue
+      } else if (msg.content.trim()) {
+        turnHasAssistantText = true
+        seen.add(normaliseAnswerText(msg.content))
+      }
+    }
+    out.push(msg)
+  }
+  return out
+}
+
 /**
  * Typed REST API client. Import and call methods directly:
  *
@@ -217,11 +259,15 @@ export const api = {
   /** Fetches the application configuration (model name, feature flags, etc.). */
   getConfig: () => get<AppConfig>('/api/config'),
 
-  /** Fetches the backend health status. */
+  /** Fetches the backend health status (diagnostic fields for admins only). */
   getHealth: () => get<HealthStatus>('/api/health'),
 
+  /** Admin-only usage summary (per-day turns, users, cost by role/model, voice). */
+  getAdminUsage: (days = 14) => get<AdminUsage>(`/api/admin/usage?days=${days}`),
+
   /** Returns the list of all chat sessions. */
-  getSessions: () => get<{ sessions: Session[] }>('/api/sessions'),
+  getSessions: (keep?: string | null) =>
+    get<{ sessions: Session[] }>(keep ? `/api/sessions?keep=${encodeURIComponent(keep)}` : '/api/sessions'),
 
   /**
    * Fetches the message history for a session and maps it to {@link ChatMessage} objects.
@@ -233,27 +279,7 @@ export const api = {
     const res = await get<{ messages: HistoryMessage[]; session_id: string }>(`/api/history/${id}`, signal)
     const mapped = res.messages.flatMap(mapHistoryMessage)
 
-    // Deduplicate: when a `result` DB row carries `result_text` that is
-    // identical to a preceding `text` (assistant) message, mapHistoryMessage
-    // creates a redundant assistant ChatMessage from the result_text.  This
-    // causes the same response to appear twice in the chat.  Remove the
-    // duplicate by collecting all assistant-message contents that came from
-    // real `text` DB rows, then filtering out result_text-sourced assistant
-    // messages whose content already appeared.
-    const seenAssistantContent = new Set<string>()
-    const deduped: typeof mapped = []
-    for (const msg of mapped) {
-      if (msg.role === 'assistant' && !msg.id.includes('-rt')) {
-        // Real assistant message (from a `text` DB row) — track its content
-        seenAssistantContent.add(msg.content)
-      }
-      if (msg.role === 'assistant' && msg.id.includes('-rt') && seenAssistantContent.has(msg.content)) {
-        // This is a result_text-sourced assistant message that duplicates
-        // a real assistant message — skip it
-        continue
-      }
-      deduped.push(msg)
-    }
+    const deduped = dedupeHistoryMessages(mapped)
 
     return {
       messages: deduped,
@@ -302,23 +328,6 @@ export const api = {
     return token ? `${url}?token=${encodeURIComponent(token)}` : url
   },
 
-  /** Returns the list of stored memories. */
-  getMemories: () => get<{ memories: Memory[] }>('/api/memories'),
-
-  /**
-   * Creates a new memory entry.
-   *
-   * @param m - The memory data to store.
-   */
-  createMemory: (m: NewMemory) => post<{ id: number; status: string }>('/api/memories', m),
-
-  /**
-   * Deletes a memory entry.
-   *
-   * @param id - The numeric ID of the memory to delete.
-   */
-  deleteMemory: (id: number) => del<{ status: string }>(`/api/memories/${id}`),
-
   /** Search across all conversations. */
   searchConversations: (q: string, limit?: number) =>
     get<{ results: SearchResult[]; query: string }>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit ?? 50}`),
@@ -339,32 +348,6 @@ export const api = {
   /** Toggle pin status on a session. */
   pinSession: (sessionId: string, pinned: boolean) =>
     post<{ status: string; pinned: boolean }>(`/api/sessions/${sessionId}/pin`, { pinned }),
-
-  // -- Git operations --
-
-  /** Fetches git status (branch, staged, unstaged, untracked files). */
-  getGitStatus: () => get<GitStatus>('/api/git/status'),
-
-  /** Fetches a diff for a specific file (or all files if no file specified). */
-  getGitDiff: (file?: string, staged?: boolean) => {
-    const params = new URLSearchParams()
-    if (file) params.set('file', file)
-    if (staged) params.set('staged', 'true')
-    return get<GitDiffResponse>(`/api/git/diff?${params}`)
-  },
-
-  /** Fetches recent commit log. */
-  getGitLog: (limit = 15) => get<GitLogResponse>(`/api/git/log?limit=${limit}`),
-
-  /** Fetches the content of a file at a given ref. */
-  getGitShow: (file: string, ref = 'HEAD') =>
-    get<GitShowResponse>(`/api/git/show?file=${encodeURIComponent(file)}&ref=${ref}`),
-
-  // -- Skills discovery --
-
-  /** Fetches available skills and SDK commands for slash-command autocomplete. */
-  getSkills: (invocableOnly = false) =>
-    get<{ skills: SkillInfo[] }>(`/api/skills${invocableOnly ? '?invocable_only=true' : ''}`),
 
   // -- TTS (text-to-speech) --
 

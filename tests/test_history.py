@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+from synapsis.auth import context as auth_context
 from synapsis.database import get_db
 from synapsis.database.history import (
     init_history_tables,
@@ -20,14 +21,30 @@ from synapsis.database.history import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _seed_session(session_id: str, messages: list[tuple[str, str]]):
-    """Insert a session and its messages into the database."""
+#: History is per user and fails closed when auth is enforced (the suite always
+#: enforces it -- see conftest). Every test runs as this signed-in owner and
+#: seeds sessions owned by it; the "legacy sentinel" identity sees nothing.
+OWNER = "history-owner@example.org"
+OTHER = "someone-else@example.org"
+
+
+@pytest.fixture(autouse=True)
+def _signed_in_owner():
+    uid = auth_context._current_user_id.set(OWNER)
+    role = auth_context._current_role.set("researcher")
+    yield
+    auth_context._current_user_id.reset(uid)
+    auth_context._current_role.reset(role)
+
+
+async def _seed_session(session_id: str, messages: list[tuple[str, str]], owner: str = OWNER):
+    """Insert a session (owned by ``owner``) and its messages into the database."""
     now = time.time()
     async with get_db() as db:
         await db.execute(
-            "INSERT OR IGNORE INTO sessions (session_id, title, created_at, updated_at, model, message_count) "
-            "VALUES (?, '', ?, ?, 'opus', ?)",
-            (session_id, now, now, len(messages)),
+            "INSERT OR IGNORE INTO sessions (session_id, title, created_at, updated_at, model, message_count, user_id) "
+            "VALUES (?, '', ?, ?, 'opus', ?, ?)",
+            (session_id, now, now, len(messages), owner),
         )
         for i, (msg_type, content) in enumerate(messages):
             data = json.dumps({"content": content})
@@ -253,3 +270,37 @@ class TestListIndexed:
         assert len(matching) == 1
         assert "estimated_tokens" in matching[0]
         assert matching[0]["estimated_tokens"] > 0
+
+
+class TestOwnerScoping:
+    """History is private per user and fails closed (review L7-06: these are the
+    behaviours the old bypass-mode tests could not see)."""
+
+    async def test_another_users_sessions_are_invisible(self, initialized_db):
+        await _seed_session("test-060", [("user", "Mine: zebra"), ("text", "Reply")])
+        await _seed_session("test-061", [("user", "Theirs: zebra"), ("text", "Reply")], owner=OTHER)
+        await index_session("test-060")
+        await index_session("test-061")
+
+        found = {r["session_id"] for r in await search_history("zebra")}
+        assert "test-060" in found and "test-061" not in found
+        listed = {s["session_id"] for s in await list_indexed_sessions()}
+        assert "test-061" not in listed
+        assert "error" in await retrieve_conversation("test-061")
+        result = await index_all_sessions(force=True)
+        assert result["total"] == 1  # only the owner's session
+
+    async def test_no_identity_sees_nothing_when_auth_is_enforced(self, initialized_db):
+        from unittest.mock import patch
+        from synapsis import config
+
+        await _seed_session("test-070", [("user", "Private walrus"), ("text", "Reply")])
+        await index_session("test-070")
+        token = auth_context._current_user_id.set(config.LEGACY_USER_ID)
+        try:
+            with patch("synapsis.config.AUTH_DISABLED", False):
+                assert await search_history("walrus") == []
+                assert await list_indexed_sessions() == []
+                assert (await index_all_sessions(force=True))["total"] == 0
+        finally:
+            auth_context._current_user_id.reset(token)

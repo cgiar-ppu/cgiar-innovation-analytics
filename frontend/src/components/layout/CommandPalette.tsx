@@ -2,19 +2,21 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  LayoutDashboard, MessageSquare, Bot, Network,
+  LayoutDashboard, MessageSquare, Bot,
   Settings, Search, Command
 } from 'lucide-react';
 import { useUIStore } from '../../stores/ui';
+import { useAuthStore } from '../../stores/auth';
+import { useIsAdmin } from '../../stores/appConfig';
 
-const COMMANDS = [
-  { id: 'chat', label: 'Go to Chat', icon: MessageSquare, path: '/chat', shortcut: '⌘1' },
-  { id: 'dashboard', label: 'Go to Dashboard', icon: LayoutDashboard, path: '/', shortcut: '⌘2' },
-  { id: 'agents', label: 'Go to Agents', icon: Bot, path: '/agents', shortcut: '⌘3' },
-  // { id: 'workflows', label: 'Go to Workflows', icon: GitBranch, path: '/workflows', shortcut: '⌘4' },  // temporarily hidden
-  { id: 'fleet', label: 'Go to Fleet', icon: Network, path: '/fleet', shortcut: '⌘4' },
-  // { id: 'files', label: 'Go to Files', icon: FolderOpen, path: '/files', shortcut: '⌘6' },              // temporarily hidden
-  { id: 'settings', label: 'Go to Settings', icon: Settings, path: '/settings', shortcut: '⌘5' },
+// Only pages that exist. The number shortcuts (Ctrl/Cmd+1..5) were removed
+// (L4-13): they took over the browser's own tab switching on every page, and
+// "Go to Fleet" pointed at a page that no longer exists.
+export const COMMANDS = [
+  { id: 'chat', label: 'Go to Chat', icon: MessageSquare, path: '/chat', adminOnly: false },
+  { id: 'dashboard', label: 'Go to Dashboard', icon: LayoutDashboard, path: '/', adminOnly: false },
+  { id: 'agents', label: 'Go to Agents', icon: Bot, path: '/agents', adminOnly: true },
+  { id: 'settings', label: 'Go to Settings', icon: Settings, path: '/settings', adminOnly: false },
 ];
 
 export default function CommandPalette() {
@@ -23,12 +25,16 @@ export default function CommandPalette() {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+  const isAdmin = useIsAdmin();
+  // Before "I understand" the app behind the disclaimer is inert: no shortcuts.
+  const acknowledged = useAuthStore((s) => s.disclaimerAcknowledged || !s.authRequired);
 
   const filtered = COMMANDS.filter(c =>
-    c.label.toLowerCase().includes(query.toLowerCase())
+    (isAdmin || !c.adminOnly) && c.label.toLowerCase().includes(query.toLowerCase())
   );
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (!acknowledged) return;
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
       e.preventDefault();
       if (window.location.pathname.startsWith('/chat')) {
@@ -39,17 +45,8 @@ export default function CommandPalette() {
         setSelectedIdx(0);
       }
     }
-    // Number shortcuts
-    if ((e.metaKey || e.ctrlKey) && e.key >= '1' && e.key <= '5') {
-      e.preventDefault();
-      const idx = parseInt(e.key) - 1;
-      if (COMMANDS[idx]) {
-        navigate(COMMANDS[idx].path);
-        setOpen(false);
-      }
-    }
     if (e.key === 'Escape') setOpen(false);
-  }, [navigate]);
+  }, [acknowledged]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -116,7 +113,6 @@ export default function CommandPalette() {
                 >
                   <cmd.icon className="w-4 h-4" />
                   <span className="flex-1 text-left">{cmd.label}</span>
-                  <span className="text-xs text-[var(--text-muted)]">{cmd.shortcut}</span>
                 </button>
               ))}
               {filtered.length === 0 && (

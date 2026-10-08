@@ -24,6 +24,7 @@ Runtime realism:
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import threading
 from pathlib import Path
@@ -32,6 +33,7 @@ from typing import Any
 from claude_agent_sdk import tool
 
 from synapsis.utils.responses import error_response, success_response
+from synapsis.prms_snapshot import get_snapshot_info
 
 # NOTE: synapsis.search and its submodules are import-safe (no torch/ST at
 # import time), so importing them here cannot break the app even with no index.
@@ -84,41 +86,109 @@ def index_present() -> bool:
 # Structured filter compilation -> eligible result_code set
 # ---------------------------------------------------------------------------
 
+#: Structured filter keys ``_compile_filters_sql`` understands. Anything else is
+#: rejected with an error instead of being silently ignored (L2-11).
+SUPPORTED_FILTER_KEYS: frozenset[str] = frozenset(
+    {"year", "years", "result_type_id", "country_iso3", "irl_min"}
+)
+
+
+class FilterError(ValueError):
+    """A structured ``filters`` dict contains an unknown key or a bad value."""
+
+
 def _compile_filters_sql(filters: dict) -> str | None:
     """Compile a structured ``filters`` dict into a SELECT returning result_code.
 
     Supported keys (all optional, AND-combined):
         year / years:        int or list[int]   -> reported_year_id
         result_type_id:      int or list[int]
-        country_iso3:        list[str]           -> via result_countries/clarisa
-        irl_min:             int                 -> investment/readiness level
-    The compiled query runs through the same validated read-only path as
-    prms_query. Geography/IRL joins are intentionally conservative; callers
-    who need richer geography (country-OR-region UNION) should pass an explicit
-    ``filter_sql`` instead.
+        country_iso3:        str or list[str]    -> result tagged to one of these
+                                                    countries (result_country ->
+                                                    clarisa_countries.iso_alpha_3)
+        irl_min:             int 0-9             -> Innovation Development with a
+                                                    readiness level >= irl_min
+    Every compiled filter also applies the default quality gate
+    ``((source='Result' AND status_id=2) OR (source='API' AND status_id=6))`` and
+    excludes the snapshot's OPEN reporting phases, so a filtered search runs
+    over the same population the counting rules use.
 
-    Returns None if no usable filter keys are present.
+    Geography here is COUNTRY-tagged only. For a region such as "Africa" the
+    counting rule is country-OR-region (a UNION with ``result_region``): pass an
+    explicit ``filter_sql`` for that.
+
+    Unknown keys or invalid values raise :class:`FilterError` (they used to be
+    silently ignored, which searched the whole corpus). Returns None if no
+    usable filter keys are present.
     """
-    clauses: list[str] = ["r.source IN ('Result','API')", "r.is_active = 1"]
+    unknown = sorted(set(filters) - SUPPORTED_FILTER_KEYS)
+    if unknown:
+        raise FilterError(
+            f"Unsupported filter key(s): {unknown}. Supported: "
+            f"{sorted(SUPPORTED_FILTER_KEYS)}. Use filter_sql for anything else."
+        )
+
+    clauses: list[str] = [
+        "r.is_active = 1",
+        "((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))",
+    ]
+    open_ids = get_snapshot_info(PRMS_DB_PATH).open_phase_ids
+    if open_ids:
+        clauses.append(
+            "r.version_id NOT IN (" + ",".join(str(int(i)) for i in open_ids) + ")"
+        )
 
     def _as_list(v):
         if v is None:
             return None
         return v if isinstance(v, (list, tuple)) else [v]
 
-    years = _as_list(filters.get("year") or filters.get("years"))
-    if years:
-        vals = ",".join(str(int(y)) for y in years)
-        clauses.append(f"r.reported_year_id IN ({vals})")
+    try:
+        years = _as_list(filters.get("year") or filters.get("years"))
+        if years:
+            vals = ",".join(str(int(y)) for y in years)
+            clauses.append(f"r.reported_year_id IN ({vals})")
 
-    types = _as_list(filters.get("result_type_id"))
-    if types:
-        vals = ",".join(str(int(t)) for t in types)
-        clauses.append(f"r.result_type_id IN ({vals})")
+        types = _as_list(filters.get("result_type_id"))
+        if types:
+            vals = ",".join(str(int(t)) for t in types)
+            clauses.append(f"r.result_type_id IN ({vals})")
+    except (TypeError, ValueError) as exc:
+        raise FilterError(f"year(s) and result_type_id must be integers: {exc}") from exc
+
+    isos = _as_list(filters.get("country_iso3"))
+    if isos:
+        codes = [str(c).strip().upper() for c in isos]
+        bad = [c for c in codes if not re.fullmatch(r"[A-Z]{3}", c)]
+        if bad:
+            raise FilterError(f"country_iso3 values must be 3-letter ISO codes; got {bad}.")
+        quoted = ",".join(f"'{c}'" for c in codes)  # validated [A-Z]{3} only
+        clauses.append(
+            "EXISTS (SELECT 1 FROM result_country rc "
+            "JOIN clarisa_countries cc ON rc.country_id = cc.id "
+            "WHERE rc.result_id = r.id AND rc.is_active = 1 "
+            f"AND UPPER(cc.iso_alpha_3) IN ({quoted}))"
+        )
+
+    irl_min = filters.get("irl_min")
+    if irl_min is not None:
+        try:
+            level = int(irl_min)
+        except (TypeError, ValueError) as exc:
+            raise FilterError(f"irl_min must be an integer 0-9; got {irl_min!r}.") from exc
+        if not 0 <= level <= 9:
+            raise FilterError(f"irl_min must be between 0 and 9; got {level}.")
+        clauses.append(
+            "EXISTS (SELECT 1 FROM results_innovations_dev rid "
+            "JOIN clarisa_innovation_readiness_level cirl "
+            "ON rid.innovation_readiness_level_id = cirl.id "
+            "WHERE rid.results_id = r.id AND rid.is_active = 1 "
+            f"AND cirl.level >= {level})"
+        )
 
     # Only emit a query if the caller actually constrained something beyond the
-    # always-on source/is_active guard.
-    constrained = bool(years or types)
+    # always-on quality/phase guard.
+    constrained = bool(years or types or isos or irl_min is not None)
     if not constrained:
         return None
 
@@ -138,7 +208,12 @@ def _resolve_eligible(filter_sql: str | None, filters: dict | None) -> tuple[set
     if filter_sql and filter_sql.strip():
         sql = filter_sql.strip()
     elif filters:
-        sql = _compile_filters_sql(filters)
+        if not isinstance(filters, dict):
+            return None, "filters must be an object (dict) of supported keys."
+        try:
+            sql = _compile_filters_sql(filters)
+        except FilterError as exc:
+            return None, f"filters error: {exc}"
 
     if not sql:
         return None, None
@@ -358,8 +433,9 @@ def _run_search(args: dict[str, Any]) -> dict[str, Any]:
     "consistent with canonical dedup rules); supports 'find results similar to a "
     "given result_code'. Modes: 'keyword' (exact lexical, zero embedding noise), "
     "'hybrid' (BM25 + semantic fused via RRF, default), 'semantic' (conceptual). "
-    "ASK THE USER whether they want exact-keyword-only or also semantically "
-    "related themes before running, to avoid noise. Returns result_codes you can "
+    "Run it straight away with the default (hybrid) and state the mode used; "
+    "then offer exact-keyword-only or purely semantic as a refinement (ask first "
+    "only when the question is truly ambiguous). Returns result_codes you can "
     "then pass to prms_query for full structured detail.",
     {
         "query": str,

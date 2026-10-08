@@ -12,9 +12,10 @@
  */
 
 import { Info } from 'lucide-react'
-import { GUARDRAIL_CONTACTS } from './contacts'
+import { useGuardrailContacts } from '../../stores/appConfig'
 
 export default function DisclaimerFooter() {
+  const contacts = useGuardrailContacts()
   return (
     <footer
       className="shrink-0 z-20 border-t border-[var(--border)] bg-[var(--bg)]/80 backdrop-blur px-4 py-1.5"
@@ -30,7 +31,7 @@ export default function DisclaimerFooter() {
         </span>
         <span data-testid="disclaimer-footer-contact">
           In doubt?{' '}
-          {GUARDRAIL_CONTACTS.map((c, i) => (
+          {contacts.map((c, i) => (
             <span key={c.email}>
               {i > 0 && ' or '}
               <a

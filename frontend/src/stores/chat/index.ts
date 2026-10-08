@@ -20,6 +20,7 @@ import { api } from '../../lib/api'
 import { finalizeAll, registerSetState } from './streamingHelpers'
 import { createSessionCacheActions } from './sessionCache'
 import { createHandleServerMessage } from './messageHandlers'
+import { onUserStateReset } from '../userStateReset'
 
 export type { ChatState, CachedSessionState } from './types'
 
@@ -142,3 +143,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
 // Register setState so streamingHelpers can flush buffers without a circular import.
 registerSetState(useChatStore.setState.bind(useChatStore))
+
+// L4-04: sign-out / identity change wipes the open chat and every cached one.
+onUserStateReset(() => {
+  useChatStore.setState({
+    messages: [], streamingText: '', streamingThinking: '', isBusy: false, cancelled: false,
+    currentRunId: null, activeAgent: null, toolActivity: null, aupError: null, replayMode: false,
+    pendingAttachments: [], _sessionCache: new Map(),
+  })
+})

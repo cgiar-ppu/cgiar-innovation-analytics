@@ -259,3 +259,94 @@ async def test_load_memories_context_with_data(initialized_db: Path, tmp_path: P
     assert "user_profile" in result
     assert "User prefers Python 3" in result
     assert "[Persistent memories from previous sessions:]" in result
+
+
+# ---------------------------------------------------------------------------
+# Shared-connection write safety (L3-10): lock + rollback + WAL
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_shared_connection_uses_wal_and_busy_timeout(initialized_db: Path):
+    import synapsis.database as db_module
+    db = await db_module._get_shared_db()
+    mode = (await (await db.execute("PRAGMA journal_mode")).fetchone())[0]
+    timeout_ms = (await (await db.execute("PRAGMA busy_timeout")).fetchone())[0]
+    assert mode.lower() == "wal"
+    assert timeout_ms >= 1000
+
+
+@pytest.mark.asyncio
+async def test_shared_write_rolls_back_on_exception(initialized_db: Path):
+    from synapsis.database import create_session
+    from synapsis.database.connection import shared_write
+    import synapsis.database as db_module
+
+    await create_session("rb-exc", title="t")
+    with pytest.raises(RuntimeError):
+        async with shared_write() as db:
+            await db.execute(
+                "INSERT INTO messages (session_id, ts, type, data) VALUES ('rb-exc', 1, 'user', '{}')"
+            )
+            raise RuntimeError("boom")
+    shared = await db_module._get_shared_db()
+    assert not shared.in_transaction
+    async with aiosqlite.connect(str(initialized_db)) as other:
+        count = (await (await other.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id='rb-exc'")).fetchone())[0]
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_cancel_between_execute_and_commit_leaves_no_open_transaction(initialized_db: Path):
+    """The 2026-09-10 incident pattern: a streaming task is cancelled after
+    its INSERT but before COMMIT. The shared connection must not keep the
+    write transaction open (it used to block every other writer ~30 s)."""
+    import asyncio
+    import time as _time
+    from synapsis.database import create_session
+    from synapsis.database.connection import shared_write
+    import synapsis.database as db_module
+
+    await create_session("rb-cancel", title="t")
+    inserted = asyncio.Event()
+
+    async def writer():
+        async with shared_write() as db:
+            await db.execute(
+                "INSERT INTO messages (session_id, ts, type, data) VALUES ('rb-cancel', 1, 'user', '{}')"
+            )
+            inserted.set()
+            await asyncio.sleep(10)  # cancelled here, before commit
+
+    task = asyncio.create_task(writer())
+    await inserted.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    shared = await db_module._get_shared_db()
+    assert not shared.in_transaction
+    # Another connection can write immediately (no 30 s lock wait).
+    start = _time.monotonic()
+    async with aiosqlite.connect(str(initialized_db), timeout=2) as other:
+        await other.execute("UPDATE sessions SET title='x' WHERE session_id='rb-cancel'")
+        await other.commit()
+        count = (await (await other.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id='rb-cancel'")).fetchone())[0]
+    assert _time.monotonic() - start < 1.5
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_save_message_calls_are_serialised(initialized_db: Path):
+    import asyncio
+    from synapsis.database import create_session, save_message
+
+    await create_session("rb-many", title="t")
+    await asyncio.gather(*(save_message("rb-many", "text", {"n": i}) for i in range(40)))
+    async with aiosqlite.connect(str(initialized_db)) as db:
+        msgs = (await (await db.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id='rb-many'")).fetchone())[0]
+        mc = (await (await db.execute(
+            "SELECT message_count FROM sessions WHERE session_id='rb-many'")).fetchone())[0]
+    assert msgs == 40 and mc == 40

@@ -70,6 +70,12 @@ async def api_query(payload: QueryRequest, user=Depends(get_current_user)):
     )
 
     set_current_user_id(resolve_user_id(user), resolve_role(user))
+    # Lane D: same soft daily spend cap as the chat socket (admins exempt).
+    from synapsis.runtime_policy import DailyBudgetExceeded, enforce_daily_budget
+    try:
+        await enforce_daily_budget()
+    except DailyBudgetExceeded as exc:
+        raise HTTPException(status_code=429, detail=exc.user_message) from None
     options = await build_agent_options()
 
     texts: list[str] = []
@@ -90,8 +96,19 @@ async def api_query(payload: QueryRequest, user=Depends(get_current_user)):
                 "duration_ms": message.duration_ms,
             }
 
+    if result_info:  # Lane D: per-question usage ledger (fresh process: total = this question)
+        from synapsis.database.usage import record_turn_usage
+        await record_turn_usage(
+            user_id=resolve_user_id(user), role=resolve_role(user), session_id=None,
+            model=options.model, turn_cost_usd=result_info.get("estimated_cost") or 0.0,
+            num_turns=result_info.get("turns"), duration_ms=result_info.get("duration_ms"), source="query",
+        )
+
+    # Same guarantee as the chat path: every result code carries its public link.
+    from synapsis.tools.result_code_citation import linkify_result_codes
+
     return {
-        "response": "\n".join(texts),
+        "response": linkify_result_codes("\n".join(texts)),
         "tool_uses": tool_uses,
         "result": result_info,
         "scope": scope,

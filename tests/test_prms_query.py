@@ -405,3 +405,59 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ---------------------------------------------------------------------------
+# L2-07: a timed-out query must really stop (not keep burning a core)
+# ---------------------------------------------------------------------------
+
+class TestTimeoutStopsSQLite:
+    """The timeout used to only stop *waiting*; SQLite kept running forever."""
+
+    _RUNAWAY = (
+        "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) "
+        "SELECT COUNT(*) FROM c"
+    )
+
+    def _db(self, tmp_path):
+        import sqlite3
+        path = tmp_path / "tiny.sqlite"
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE t (x INTEGER)")
+        conn.commit()
+        conn.close()
+        return str(path)
+
+    def test_recursive_cte_is_interrupted_and_the_worker_thread_ends(self, tmp_path):
+        import threading
+        import time
+        from synapsis.tools.prms_query import _execute_with_timeout, _TimeoutError
+
+        db = self._db(tmp_path)
+        start = time.monotonic()
+        with pytest.raises(_TimeoutError) as info:
+            _execute_with_timeout(db, self._RUNAWAY, timeout=1)
+        assert "stopped" in str(info.value)
+        # The worker must be gone shortly after the timeout, not still spinning.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and any(
+            t.name == "prms-query" and t.is_alive() for t in threading.enumerate()
+        ):
+            time.sleep(0.05)
+        assert not any(
+            t.name == "prms-query" and t.is_alive() for t in threading.enumerate()
+        ), "timed-out query thread is still running"
+        assert time.monotonic() - start < 8
+
+    def test_fast_query_is_unaffected(self, tmp_path):
+        from synapsis.tools.prms_query import _execute_with_timeout
+
+        rows, cols, n = _execute_with_timeout(self._db(tmp_path), "SELECT 1 AS one", timeout=5)
+        assert rows == [{"one": 1}] and cols == ["one"] and n == 1
+
+    def test_connection_is_read_only(self, tmp_path):
+        import sqlite3
+        from synapsis.tools.prms_query import _execute_with_timeout
+
+        with pytest.raises(sqlite3.Error):
+            _execute_with_timeout(self._db(tmp_path), "INSERT INTO t VALUES (1)", timeout=5)

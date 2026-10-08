@@ -25,7 +25,7 @@ Comprehensive glossary of terms used across CGIAR systems, the innovation analyt
 
 | Term | Definition | Context |
 |------|-----------|---------|
-| **PRMS** | Performance and Results Management System. CGIAR's central database for tracking all research outputs, outcomes, and impacts. Contains ~32,000 results across 197 tables. The primary data source for this platform. | Core data system; queried via SQLite |
+| **PRMS** | Performance and Results Management System. CGIAR's central database for tracking all research outputs, outcomes, and impacts. Contains 32,000+ results across 200+ tables (the app reads a published PRMS Reporting snapshot; its date is in every query footer). The primary data source for this platform. | Core data system; queried via SQLite |
 | **CLARISA** | CGIAR's reference data API providing controlled vocabularies for countries, regions, institutions, innovation readiness levels, SDG targets, and other master data. PRMS relies on CLARISA for data standardization. | Reference data system; master data source |
 | **OIKER** | Open Innovation Key Evidence Repository. A platform for sharing innovation evidence and documentation. | Evidence management system |
 | **ATR** | Annual Technical Report. The yearly reporting process where all Initiatives submit their results to PRMS. The ATR cycle drives the bulk of data entry. | Reporting process; annual cycle |

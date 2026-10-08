@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from synapsis import ai_endpoint
 from synapsis.auth.middleware import get_current_user
 from synapsis.config import logger
 
@@ -21,7 +22,22 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 # about audio format/metadata; whisper-1 is more permissive.
 _TRANSCRIPTION_MODELS = ["gpt-4o-transcribe", "whisper-1"]
 
-_OPENAI_TRANSCRIPTION_URL = "https://api.openai.com/v1/audio/transcriptions"
+
+
+def _transcription_targets() -> list[tuple[str, str, dict]]:
+    """(model, url, extra form fields) in fallback order for the configured endpoint.
+
+    Azure serves audio only on the deployments path (not /openai/v1); the deployment name is the model.
+    ``IA_TRANSCRIBE_MODELS`` (comma-separated deployment/model names) overrides the default order.
+    """
+    configured = [m.strip() for m in (os.getenv("IA_TRANSCRIBE_MODELS") or "").split(",") if m.strip()]
+    if ai_endpoint.is_azure():
+        return [(m, ai_endpoint.azure_transcription_url(m), {}) for m in (configured or ["gpt-4o-transcribe"])]
+    return [(m, ai_endpoint.v1("audio/transcriptions"), {"model": m}) for m in (configured or _TRANSCRIPTION_MODELS)]
+
+#: OpenAI's own upload limit; larger bodies are refused before any call
+#: (review L6-07: the upload used to be read whole with no cap).
+MAX_AUDIO_BYTES = 25 * 1024 * 1024
 
 
 def _clean_content_type(raw: str | None) -> str:
@@ -44,11 +60,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise HTTPException(
-            status_code=500,
-            detail="OPENAI_API_KEY environment variable is not set. "
-                   "Add it to your shell profile or export it before starting the server.",
-        )
+        raise HTTPException(status_code=503, detail="Dictation is not configured on this server.")
 
     try:
         import httpx
@@ -57,8 +69,12 @@ async def transcribe_audio(file: UploadFile = File(...)):
 
     # Save uploaded audio to a temp file (OpenAI API needs a file path/name)
     suffix = Path(file.filename or "audio.webm").suffix or ".webm"
+    if not suffix[1:].isalnum() or len(suffix) > 6:
+        suffix = ".webm"
+    content = await file.read(MAX_AUDIO_BYTES + 1)
+    if len(content) > MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="The recording is too long to transcribe (25 MB maximum).")
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        content = await file.read()
         tmp.write(content)
         tmp_path = tmp.name
 
@@ -78,13 +94,13 @@ async def transcribe_audio(file: UploadFile = File(...)):
 
         last_error_detail = ""
 
-        for model in _TRANSCRIPTION_MODELS:
+        for model, url, form in _transcription_targets():
             async with httpx.AsyncClient(timeout=60.0) as client:
                 with open(tmp_path, "rb") as audio_file:
                     resp = await client.post(
-                        _OPENAI_TRANSCRIPTION_URL,
-                        headers={"Authorization": f"Bearer {api_key}"},
-                        data={"model": model},
+                        url,
+                        headers=ai_endpoint.auth_headers(api_key),
+                        data=form,
                         files={"file": (filename, audio_file, clean_ct)},
                     )
 
@@ -94,17 +110,18 @@ async def transcribe_audio(file: UploadFile = File(...)):
                 logger.info("Transcription complete (%s): %d chars", model, len(text))
                 return {"text": text}
 
-            # Parse OpenAI error for better diagnostics
+            # Status and error type only: the provider message can echo a
+            # masked key fragment (review L6-07), so it is neither logged nor
+            # returned to the browser.
             try:
-                err_body = resp.json()
-                err_msg = err_body.get("error", {}).get("message", resp.text)
+                err_type = str(resp.json().get("error", {}).get("type") or "")[:60]
             except Exception:
-                err_msg = resp.text
+                err_type = ""
 
-            last_error_detail = f"{model}: {resp.status_code} - {err_msg}"
+            last_error_detail = f"{model}: provider status {resp.status_code}"
             logger.warning(
-                "OpenAI transcription failed with %s: %s %s",
-                model, resp.status_code, err_msg,
+                "OpenAI transcription failed with %s: provider_status=%s type=%s",
+                model, resp.status_code, err_type,
             )
 
             # Only fall back on 400 (format/validation errors).

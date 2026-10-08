@@ -1,23 +1,21 @@
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import TopBar from './TopBar';
 import VoiceGuide from '../voice/VoiceGuide';
 import { ToastProvider } from '../common/Toast';
 import { WebSocketProvider } from '../../contexts/WebSocketContext';
-import { DesktopViewer } from '../desktop/DesktopViewer';
-import { GitPanel } from '../git/GitPanel';
 import DisclaimerFooter from '../guardrails/DisclaimerFooter';
-import { useUIStore } from '../../stores/ui';
-import { api } from '../../lib/api';
-import type { AppConfig } from '../../lib/types';
+import { useAppConfigStore } from '../../stores/appConfig';
+import { useAuthStore } from '../../stores/auth';
 
 export default function Layout() {
-  const [config, setConfig] = useState<AppConfig | null>(null);
-  const { desktopPanelOpen, gitPanelOpen } = useUIStore();
+  const config = useAppConfigStore((s) => s.config);
+  const userId = useAuthStore((s) => s.user?.userId ?? null);
 
+  // /api/config is role-aware: (re)load it for whoever is signed in.
   useEffect(() => {
-    api.getConfig().then(setConfig).catch(() => {});
-  }, []);
+    void useAppConfigStore.getState().load();
+  }, [userId]);
 
   return (
     <WebSocketProvider>
@@ -31,12 +29,6 @@ export default function Layout() {
           <main className="flex-1 overflow-y-auto">
             <Outlet />
           </main>
-
-          {/* Global GitPanel — accessible from any page */}
-          {gitPanelOpen && <GitPanel />}
-
-          {/* Global DesktopViewer — accessible from any page */}
-          {desktopPanelOpen && <DesktopViewer config={config} />}
         </div>
 
         {/* Persistent AI-content disclaimer — visible on every view */}

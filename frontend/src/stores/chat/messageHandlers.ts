@@ -104,6 +104,37 @@ export function createHandleServerMessage(set: Set, get: Get) {
         break
       }
 
+      case 'text_links': {
+        // The server turned the result codes in a just-streamed text block
+        // into links to their public PRMS source (synapsis/tools/
+        // result_code_citation.py). Swap the linked text in wherever the raw
+        // block now lives: the live streaming buffer or the last finalized
+        // assistant message. No match (e.g. already reloaded) = no-op.
+        const { original, content } = msg
+        if (!original || original === content) break
+        if (_rafId !== null) {
+          cancelAnimationFrame(_rafId)
+        }
+        _flushPendingDeltas()
+        const cur = get()
+        if (cur.streamingText.includes(original)) {
+          set({ streamingText: cur.streamingText.replace(original, content) })
+          break
+        }
+        const idx = [...cur.messages].reverse().findIndex(
+          (m) => m.role === 'assistant' && m.content.includes(original),
+        )
+        if (idx !== -1) {
+          const at = cur.messages.length - 1 - idx
+          set({
+            messages: cur.messages.map((m, i) =>
+              i === at ? { ...m, content: m.content.replace(original, content) } : m,
+            ),
+          })
+        }
+        break
+      }
+
       case 'thinking': {
         _pendingThinking += msg.content
         if (_rafId === null) {

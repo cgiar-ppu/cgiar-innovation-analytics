@@ -293,7 +293,21 @@ function RenderStackedArea({ data, series, xAxisKey }: ChartData) {
   )
 }
 
-function RenderPie({ data, series }: ChartData) {
+/**
+ * Slice label for the pie: the slice's share of the total, computed from the
+ * charted values. Never read recharts' `percent` label prop: recharts spreads
+ * each data entry into the label props, so an entry that carries its own
+ * `percent` field (e.g. 34.1) overrides the library's fraction (0.341) and
+ * the label read "3410%" (QA-4 D3).
+ */
+export function pieShareLabel(data: ChartData['data'], key: string, index: number): string {
+  const total = data.reduce((sum, d) => sum + (Number(d[key]) || 0), 0)
+  const value = Number(data[index]?.[key]) || 0
+  if (total <= 0) return '0%'
+  return `${Math.round((value / total) * 100)}%`
+}
+
+function RenderPie({ data, series, xAxisKey }: ChartData) {
   const key = series[0]?.key
   if (!key) return null
 
@@ -306,14 +320,14 @@ function RenderPie({ data, series }: ChartData) {
       <Pie
         data={data}
         dataKey={key}
-        nameKey={Object.keys(data[0] || {}).find(k => k !== key) || 'name'}
+        nameKey={xAxisKey || Object.keys(data[0] || {}).find(k => k !== key) || 'name'}
         cx="50%"
         cy="50%"
         innerRadius="40%"
         outerRadius="75%"
         paddingAngle={2}
         animationDuration={800}
-        label={({ percent }: { percent?: number }) => `${((percent ?? 0) * 100).toFixed(0)}%`}
+        label={({ index }: { index?: number }) => pieShareLabel(data, key, index ?? -1)}
       >
         {data.map((_, i) => (
           <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />

@@ -13,6 +13,7 @@
 import { create } from 'zustand'
 import type { Session } from '../lib/types'
 import { api } from '../lib/api'
+import { ACTIVE_SESSION_KEY, onUserStateReset } from './userStateReset'
 
 /**
  * Shape of the sessions Zustand store.
@@ -67,6 +68,22 @@ interface SessionsState {
   setSessionModel: (id: string, model: string) => void
 
   /**
+   * Optimistic model switch awaiting the server's `model_switched` (L4-10):
+   * the previous model is kept so the pill can roll back when the send fails
+   * or the server answers `model_not_allowed`.
+   */
+  pendingModelSwitch: { sessionId: string; previous: string | undefined; model: string } | null
+
+  /** Record an optimistic switch and update the pill label. */
+  beginModelSwitch: (id: string, model: string) => void
+
+  /** The server confirmed the switch. */
+  confirmModelSwitch: (id: string, model: string) => void
+
+  /** Undo the optimistic switch (send failed or the server refused it). */
+  rollbackModelSwitch: () => void
+
+  /**
    * Sends a PATCH request to rename a session and optimistically updates the
    * local {@link sessions} list.
    *
@@ -89,18 +106,20 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
   sessions: [],
   activeSessionId: (() => {
     try {
-      return localStorage.getItem('synapsis_active_session') || null
+      return localStorage.getItem(ACTIVE_SESSION_KEY) || null
     } catch {
       return null
     }
   })(),
   loading: false,
   busySessions: new Set<string>(),
+  pendingModelSwitch: null,
 
   loadSessions: async () => {
     set({ loading: true })
     try {
-      const { sessions } = await api.getSessions()
+      // Empty chats are hidden server-side (QA-4 D12); keep the active one.
+      const { sessions } = await api.getSessions(get().activeSessionId)
       set({ sessions, loading: false })
     } catch {
       set({ loading: false })
@@ -112,9 +131,9 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     // Persist to localStorage so it survives page refreshes
     try {
       if (id) {
-        localStorage.setItem('synapsis_active_session', id)
+        localStorage.setItem(ACTIVE_SESSION_KEY, id)
       } else {
-        localStorage.removeItem('synapsis_active_session')
+        localStorage.removeItem(ACTIVE_SESSION_KEY)
       }
     } catch {
       // localStorage may be unavailable (private browsing, etc.)
@@ -139,6 +158,29 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     ),
   })),
 
+  beginModelSwitch: (id, model) => {
+    const previous = get().sessions.find((sess) => sess.session_id === id)?.model
+    set({ pendingModelSwitch: { sessionId: id, previous, model } })
+    get().setSessionModel(id, model)
+  },
+
+  confirmModelSwitch: (id, model) => {
+    get().setSessionModel(id, model)
+    const pending = get().pendingModelSwitch
+    if (pending && pending.sessionId === id) set({ pendingModelSwitch: null })
+  },
+
+  rollbackModelSwitch: () => {
+    const pending = get().pendingModelSwitch
+    if (!pending) return
+    set((s) => ({
+      pendingModelSwitch: null,
+      sessions: s.sessions.map((sess) =>
+        sess.session_id === pending.sessionId ? { ...sess, model: pending.previous ?? '' } : sess,
+      ),
+    }))
+  },
+
   renameSession: async (id, title) => {
     await api.renameSession(id, title)
     set((s) => ({
@@ -156,3 +198,8 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     })
   },
 }))
+
+// L4-04: the session list and the open chat belong to one user only.
+onUserStateReset(() => {
+  useSessionsStore.setState({ sessions: [], activeSessionId: null, loading: false, busySessions: new Set<string>(), pendingModelSwitch: null })
+})

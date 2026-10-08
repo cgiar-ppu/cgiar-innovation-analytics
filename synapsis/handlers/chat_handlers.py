@@ -19,15 +19,24 @@ from typing import Optional
 
 from claude_agent_sdk import ClaudeSDKClient
 
-from synapsis.config import logger, FALLBACK_MODEL, AVAILABLE_MODELS
-from synapsis.constants import SELECTABLE_MODEL_IDS
-from synapsis.agent_options import build_agent_options
+import synapsis.config as _config
+from synapsis.config import logger
+from synapsis.constants import MODEL_NOT_ALLOWED_ERROR, SELECTABLE_MODEL_IDS
 from synapsis.database import (
     save_message,
     consume_initial_context,
-    get_claude_session_id,
     update_session_model,
 )
+from synapsis.runtime_policy import (
+    ModelNotAllowedError,
+    PolicyError,
+    current_role,
+    current_user_id,
+    enforce_daily_budget,
+    fallback_model_for_role,
+    is_model_allowed,
+)
+from synapsis.session import replace_session_client
 from synapsis.chat_run_manager import chat_run_manager
 from synapsis.scope import (
     ScopeValidationError,
@@ -61,9 +70,22 @@ from synapsis.session_manager import (
 from synapsis.handlers.utils import launch_streaming_task
 
 
+def _turn_meta(scope, persona) -> dict:
+    """Specialist and data scope of this question, kept on the saved user row
+    so answer feedback can report what the rated answer was asked with
+    (Lane H). Empty selections add nothing; the SDK message is unchanged."""
+    meta = {}
+    if not persona_is_empty(persona):
+        meta["agent"] = persona
+    if not scope_is_empty(scope):
+        meta["scope"] = scope
+    return meta
+
+
 # ---------------------------------------------------------------------------
 # handle_cancel
 # ---------------------------------------------------------------------------
+
 
 async def handle_cancel(
     payload: dict,
@@ -82,8 +104,25 @@ async def handle_cancel(
     """
     from synapsis.database import update_session_task_status
 
-    target_sid = payload.get("session_id", session_id)
-    target_client = sessions.get(target_sid) if target_sid != session_id else client
+    target_sid = payload.get("session_id", session_id) or session_id
+    if target_sid != session_id and target_sid and not _config.AUTH_DISABLED:
+        # L3-07: a targeted cancel may only stop the caller's own chats (the
+        # same visibility rule as switch_session). Answer like "not found" so
+        # session ids cannot be probed.
+        from synapsis.auth.scoping import is_visible_to
+        from synapsis.database import get_session_owner
+
+        owner = await get_session_owner(target_sid)
+        if not is_visible_to(owner, current_user_id(), current_role()):
+            logger.warning(
+                "Blocked cross-user cancel: user %s -> session %s (owner %s)",
+                current_user_id(), target_sid, owner,
+            )
+            await send_json({"type": "error", "message": "Session not found."}, sid=target_sid)
+            return client
+    # Prefer the live client in the registry: after a lazy switch_session the
+    # connection's local ``client`` may still be None while an answer streams.
+    target_client = sessions.get(target_sid) or (client if target_sid == session_id else None)
 
     # Cancel the managed streaming task via ChatRunManager
     await chat_run_manager.cancel(target_sid)
@@ -154,19 +193,20 @@ async def handle_switch_session(
 async def handle_new_session(
     session_id: Optional[str],
     send_json,
-) -> tuple[str, ClaudeSDKClient]:
+) -> tuple[str, Optional[ClaudeSDKClient]]:
     """Handle a ``{"type": "new_session"}`` frame.
 
-    Optionally unregisters the current session viewer, delegates to
-    session_manager, and registers the new session viewer.
+    Delegates to session_manager (which enforces the per-user new-chat rate
+    limit and creates only the DB row -- the CLI starts on the first message)
+    and moves this connection's viewer registration to the new chat. On a
+    rate-limit error nothing changes and the error propagates.
 
     Returns:
-        (new_session_id, new_client)
+        (new_session_id, None)
     """
+    new_session_id, new_client = await _sm_handle_handle_new_session(sessions, send_json)
     if session_id:
         unregister_session_viewer(session_id, send_json)
-
-    new_session_id, new_client = await _sm_handle_handle_new_session(sessions, send_json)
     register_session_viewer(new_session_id, send_json)
     return new_session_id, new_client
 
@@ -217,17 +257,30 @@ async def handle_retry(
         )
         return None
 
+    # L3-06: validate against the caller's allowed models (like switch_model)
+    # BEFORE doing anything. No explicit model = the role's fallback model,
+    # and a role without one (researchers by default) cannot retry on another
+    # model.
+    model_to_use = (retry_model or "").strip() or fallback_model_for_role()
+    if (
+        not model_to_use
+        or model_to_use not in SELECTABLE_MODEL_IDS
+        or not is_model_allowed(model_to_use)
+    ):
+        raise ModelNotAllowedError(MODEL_NOT_ALLOWED_ERROR.format(model=model_to_use or retry_model or "?"))
+    if not session_id:
+        await send_json({"type": "error", "message": "No active chat to retry in."})
+        return None
+
+    await enforce_daily_budget()
+
     # Cancel any in-flight managed task for this session
     await chat_run_manager.cancel(session_id)
 
-    model_to_use = retry_model or FALLBACK_MODEL
-    options = await build_agent_options(resume_session_id=None, model_override=model_to_use)
-    retry_client = ClaudeSDKClient(options=options)
-    await retry_client.connect()
-
-    # Replace the tracked client for this session
-    if session_id:
-        sessions[session_id] = retry_client
+    # Disconnect the old CLI (was orphaned) and resume the conversation on the
+    # retry model so the context is kept (was silently dropped).
+    await update_session_model(session_id, model_to_use)
+    retry_client = await replace_session_client(session_id, sessions, model=model_to_use, resume=True)
 
     retry_lock_acquired = False
     if session_id:
@@ -236,7 +289,7 @@ async def handle_retry(
         retry_lock_acquired = True
 
     # Persist the user's text unmodified; only the SDK copy carries the scope.
-    await save_message(session_id, "user", {"content": retry_message})
+    await save_message(session_id, "user", {"content": retry_message, **_turn_meta(scope, persona)})
 
     await launch_streaming_task(
         session_id, retry_client,
@@ -274,17 +327,11 @@ async def handle_switch_model(
     Returns the new client on success, or None on validation failure / connect
     error (in which case the caller keeps its existing client ref).
     """
-    from synapsis.session_manager import cleanup_session_client
-
     new_model = payload.get("model", "").strip()
-    # Must be a curated model AND allowed by this deployment's
-    # SYNAPSIS_AVAILABLE_MODELS allow-list (defaults to all curated models).
-    if new_model not in SELECTABLE_MODEL_IDS or new_model not in AVAILABLE_MODELS:
-        await send_json(
-            {"type": "error", "message": f"Invalid model '{new_model}'"},
-            sid=session_id,
-        )
-        return None
+    # Must be a curated model, exposed by this deployment AND allowed for the
+    # caller's role (non-admins: the researcher list, Sonnet 5 by default).
+    if new_model not in SELECTABLE_MODEL_IDS or not is_model_allowed(new_model):
+        raise ModelNotAllowedError(MODEL_NOT_ALLOWED_ERROR.format(model=new_model))
     if not session_id:
         await send_json(
             {"type": "error", "message": "No active session to switch model on"}
@@ -299,26 +346,19 @@ async def handle_switch_model(
     # Persist first so any resume path picks up the new model
     await update_session_model(session_id, new_model)
 
-    # Tear down the old subprocess
-    await cleanup_session_client(session_id)
-
-    # Resume the Claude SDK conversation (if any) under the new model
-    claude_sid = await get_claude_session_id(session_id)
+    # Tear down the old subprocess and resume the conversation under the new
+    # model (honours the live-client cap).
     try:
-        options = await build_agent_options(
-            resume_session_id=claude_sid or None, model_override=new_model
-        )
-        new_client = ClaudeSDKClient(options=options)
-        await new_client.connect()
-    except Exception as exc:
+        new_client = await replace_session_client(session_id, sessions, model=new_model, resume=True)
+    except PolicyError:
+        raise
+    except Exception:
         logger.exception("Model switch failed for session %s", session_id)
         await send_json(
-            {"type": "error", "message": f"Model switch failed: {exc}"},
+            {"type": "error", "message": "Switching the model failed. Please try again."},
             sid=session_id,
         )
         return None
-
-    sessions[session_id] = new_client
 
     # Confirm to the switching device and all other viewers
     confirm = {"type": "model_switched", "model": new_model, "session_id": session_id}
@@ -389,6 +429,10 @@ async def handle_user_message(
         )
         raise ValueError(f"Invalid agent: {exc}") from None
 
+    # Soft daily spend cap per user (admins exempt): refuse politely before
+    # any work is done. Raises DailyBudgetExceeded -> error frame.
+    await enforce_daily_budget()
+
     await record_activity(time.time())
 
     # Cancel any existing in-flight managed task before starting a new one
@@ -401,7 +445,7 @@ async def handle_user_message(
     await send_json({"type": "session", "session_id": session_id}, sid=session_id)
 
     # Persist the user's message to the database
-    await save_message(session_id, "user", {"content": user_message})
+    await save_message(session_id, "user", {"content": user_message, **_turn_meta(scope, persona)})
 
     # Check if this session has initial context (e.g. from workflow continuation)
     # that needs to be prepended to the first message sent to the SDK.

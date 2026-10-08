@@ -200,3 +200,6 @@ async def init_db() -> None:
     await init_sso_tables()
     from synapsis.auth.invited_storage import init_invited_tables
     await init_invited_tables()
+    # Answer/voice feedback from test users (Lane H, 2026-09-26).
+    from synapsis.database.feedback import init_feedback_table
+    await init_feedback_table()

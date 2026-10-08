@@ -1,5 +1,5 @@
 # Synapsis Analytics Agent – Python dependencies
-claude-agent-sdk==0.2.152
+claude-agent-sdk==0.2.159
 fastapi>=0.115.0
 uvicorn[standard]>=0.34.0
 websockets>=14.0
@@ -37,3 +37,14 @@ python-docx>=1.1.0,<2.0.0
 
 # PDF extraction and verification of generated, watermarked documents.
 pypdf>=6,<7
+
+# Export rendering (review L6-02): the chat's Markdown answers are rendered to
+# real HTML/PDF (tables, emphasis, links) and Word structure instead of raw
+# `| --- |` / `**` text. Pure Python; raw HTML is disabled in the renderer.
+markdown-it-py==4.0.0
+
+# read_uploaded_file tool: the agent has no Python/shell any more, so reading
+# users' uploaded Excel workbooks needs a parser. defusedxml is picked up by
+# openpyxl automatically and guards against XML entity attacks in uploads.
+openpyxl==3.1.5
+defusedxml==0.7.1

@@ -25,19 +25,33 @@ async def init_invited_tables():
         await db.execute("""CREATE TABLE IF NOT EXISTS account_invitations (
           token_hash TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE,
           expires_at REAL NOT NULL, invited_by TEXT NOT NULL)""")
+        # Test-round cohort label (e.g. "WB TTLs Oct-2026"), added 2026-09-26.
+        # Older databases upgrade in place; '' = no cohort.
+        columns = {row[1] for row in await (await db.execute("PRAGMA table_info(invited_accounts)")).fetchall()}
+        if "cohort" not in columns:
+            await db.execute("ALTER TABLE invited_accounts ADD COLUMN cohort TEXT NOT NULL DEFAULT ''")
         await db.commit()
 
 
-async def create_invitation(email: str, name: str, invited_by: str) -> str:
+DEFAULT_EXPIRY_DAYS = 7
+MAX_EXPIRY_DAYS = 30
+
+
+async def create_invitation(email: str, name: str, invited_by: str, cohort: str | None = None,
+                            expires_days: int = DEFAULT_EXPIRY_DAYS) -> str:
+    """One-use link for ``email``. ``cohort=None`` keeps an existing label; '' clears it."""
     token = secrets.token_urlsafe(32)
+    days = max(1, min(int(expires_days), MAX_EXPIRY_DAYS))
     async with get_db() as db:
         await db.execute("BEGIN IMMEDIATE")
-        await db.execute("INSERT OR IGNORE INTO invited_accounts (email,user_id,name,created_at) VALUES (?,?,?,?)",
-                         (email, "invited:" + str(uuid.uuid4()), name, time.time()))
+        await db.execute("INSERT OR IGNORE INTO invited_accounts (email,user_id,name,created_at,cohort) VALUES (?,?,?,?,?)",
+                         (email, "invited:" + str(uuid.uuid4()), name, time.time(), cohort or ""))
+        if cohort is not None:
+            await db.execute("UPDATE invited_accounts SET cohort=? WHERE email=?", (cohort, email))
         # Reissue replaces only the outstanding invitation, not an active password.
         await db.execute("DELETE FROM account_invitations WHERE email=?", (email,))
         await db.execute("INSERT INTO account_invitations VALUES (?,?,?,?)",
-                         (token_hash(token), email, time.time() + 7 * 86400, invited_by))
+                         (token_hash(token), email, time.time() + days * 86400, invited_by))
         await db.commit()
     return token
 
@@ -98,7 +112,7 @@ def credential_is_current(user_id: str, version: int) -> bool:
 async def list_accounts() -> list[dict]:
     async with get_db() as db:
         rows = await (await db.execute("""SELECT a.email,a.name,a.enabled,
-          a.password_hash IS NOT NULL AS activated,i.expires_at
+          a.password_hash IS NOT NULL AS activated,i.expires_at,a.cohort
           FROM invited_accounts a LEFT JOIN account_invitations i ON i.email=a.email
           ORDER BY a.created_at DESC""")).fetchall()
     return [dict(r) for r in rows]
@@ -109,3 +123,22 @@ async def revoke(email: str):
         await db.execute("UPDATE invited_accounts SET enabled=0,credential_version=credential_version+1 WHERE email=?", (email,))
         await db.execute("DELETE FROM account_invitations WHERE email=?", (email,))
         await db.commit()
+
+
+async def set_cohort(email: str, cohort: str) -> bool:
+    async with get_db() as db:
+        cursor = await db.execute("UPDATE invited_accounts SET cohort=? WHERE email=?", (cohort, email))
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def revoke_cohort(cohort: str) -> int:
+    """Revoke every account of a test cohort (end of a test round). Returns how many."""
+    async with get_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        emails = [r[0] for r in await (await db.execute(
+            "SELECT email FROM invited_accounts WHERE cohort=? AND enabled=1", (cohort,))).fetchall()]
+        await db.execute("DELETE FROM account_invitations WHERE email IN (SELECT email FROM invited_accounts WHERE cohort=?)", (cohort,))
+        await db.execute("UPDATE invited_accounts SET enabled=0,credential_version=credential_version+1 WHERE cohort=?", (cohort,))
+        await db.commit()
+    return len(emails)

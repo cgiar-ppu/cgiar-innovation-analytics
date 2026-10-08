@@ -3,7 +3,7 @@
 import time
 from typing import Optional
 
-from synapsis.database.connection import _get_shared_db
+from synapsis.database.connection import _get_shared_db, shared_write
 
 
 async def update_session_task_status(session_id: str, status: str) -> None:
@@ -13,12 +13,11 @@ async def update_session_task_status(session_id: str, status: str) -> None:
         session_id: The application-level session identifier.
         status:     One of "idle", "running", "completed", "cancelled", "failed".
     """
-    db = await _get_shared_db()
-    await db.execute(
-        "UPDATE sessions SET task_status = ?, updated_at = ? WHERE session_id = ?",
-        (status, time.time(), session_id),
-    )
-    await db.commit()
+    async with shared_write() as db:
+        await db.execute(
+            "UPDATE sessions SET task_status = ?, updated_at = ? WHERE session_id = ?",
+            (status, time.time(), session_id),
+        )
 
 
 async def get_session_task_status(session_id: str) -> Optional[str]:

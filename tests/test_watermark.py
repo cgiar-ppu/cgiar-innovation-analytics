@@ -33,7 +33,10 @@ def test_banner_and_notice_wording():
     assert "CGIAR innovation data (PRMS)" in notice
     assert "AI-added interpretation" in notice
     assert "human quality assurance" in notice
-    assert "Data as of 2026-07-20." in notice
+    # Review L6-01: "Data as of" is the PRMS snapshot's DATA date, never the
+    # export date that is passed in (2026-07-20 here).
+    assert "Data as of 2026-07-20." not in notice
+    assert f"Data as of {wm.data_as_of_date()}." in notice
 
 
 def test_sop_disclosure_present():
@@ -387,6 +390,8 @@ def test_docx_footer_has_page_number_field():
     assert wm.PRODUCT_FOOTER in footer_text
     assert wm.WATERMARK_BANNER in footer_text
     assert wm.provenance_notice(PINNED) in footer_text
+    # Review L6-01: the per-page footer also names the snapshot.
+    assert wm.snapshot_line() in footer_text
 
 
 def test_docx_notice_box_is_bordered_and_shaded():

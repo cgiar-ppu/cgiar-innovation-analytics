@@ -4,13 +4,19 @@ import { AudioLines, Mic, MicOff, Pause, Play, Square, X, ChevronDown, BookOpen 
 import { useWebSocketContext } from '../../contexts/WebSocketContext'
 import { api } from '../../lib/api'
 import { makeAdapter } from '../../lib/voice/actions'
-import { LiveClient, type Caption, type VoiceStatus } from '../../lib/voice/liveClient'
+import { LiveClient, type Caption, type FeedbackPhase, type VoiceStatus } from '../../lib/voice/liveClient'
+import { RealtimeClient } from '../../lib/voice/realtimeClient'
+import { saveVoiceFeedback } from '../feedback/api'
+import VoiceFeedbackPrompt from '../feedback/VoiceFeedbackPrompt'
 import { useTTSStore } from '../../stores/tts'
 import { useSessionsStore } from '../../stores/sessions'
 
 type Source = { file: string; start_line: number; end_line: number; text: string }
 /** Server truth about the voice service. provider_ok is a cached real provider probe; null = no key configured. */
-export type ServiceStatus = { enabled: boolean; configured: boolean; provider_ok: boolean | null; max_seconds: number }
+export type ServiceStatus = { enabled: boolean; configured: boolean; provider_ok: boolean | null; max_seconds: number; feedback_prompt?: boolean; protocol?: 'live' | 'realtime'; provider?: string }
+type VoiceClient = LiveClient | RealtimeClient
+/** The server decides the protocol (IA_VOICE_PROTOCOL); an older server without the field speaks Live. */
+export const clientClassFor = (service: ServiceStatus | null) => service?.protocol === 'realtime' ? RealtimeClient : LiveClient
 export const UNAVAILABLE_MESSAGE = 'Voice is temporarily unavailable'
 export const isUnavailable = (service: ServiceStatus | null) => !!service && (!service.configured || service.provider_ok === false)
 const RECHECK_MS = 60000
@@ -23,7 +29,8 @@ export default function VoiceGuide() {
   const location = useLocation()
   const current = useRef({ path: location.pathname, connected: isConnected, send, navigate })
   current.current = { path: location.pathname, connected: isConnected, send, navigate }
-  const client = useRef<LiveClient | null>(null)
+  const client = useRef<VoiceClient | null>(null)
+  const makeClient = useRef<((service: ServiceStatus | null) => VoiceClient) | null>(null)
   const [service, setService] = useState<ServiceStatus | null>(null)
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<VoiceStatus>('idle')
@@ -37,6 +44,7 @@ export default function VoiceGuide() {
   const [typed, setTyped] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [startedAt, setStartedAt] = useState<number | null>(null)
+  const [feedbackPhase, setFeedbackPhase] = useState<FeedbackPhase>('idle')
   const activeId = useSessionsStore(s => s.activeSessionId)
   const title = useSessionsStore(s => s.sessions.find(chat => chat.session_id === activeId)?.title)
   const running = status === 'connected' || status === 'connecting' || status === 'closing'
@@ -49,23 +57,29 @@ export default function VoiceGuide() {
 
   useEffect(() => {
     let mounted = true
-    const refresh = () => api.get<ServiceStatus>('/api/voice/status').then(s => { if (mounted) setService(s) }).catch(() => {})
+    const refresh = () => api.get<ServiceStatus>('/api/voice/status').then(s => { if (mounted) { setService(s); client.current?.setFeedbackPrompt?.(s.feedback_prompt !== false) } }).catch(() => {})
     void refresh()
     // While the provider is unavailable, re-check so recovery shows without a reload (the server caches its probe).
     const timer = setInterval(() => { if (isUnavailable(serviceRef.current)) void refresh() }, RECHECK_MS)
     const adapter = makeAdapter(message => current.current.send(message), path => current.current.navigate(path), () => current.current.path, () => current.current.connected)
-    const instance = new LiveClient({
+    const callbacks = {
       status: (state, text) => { if (mounted) { setStatus(state); setMessage(text); if (state === 'connected') setStartedAt(Date.now()); if (state === 'idle' || state === 'error') setStartedAt(null) } },
       caption: caption => { if (mounted) setCaptions(rows => [...rows, caption].slice(-500)) },
       task: text => { if (mounted) setActivity(rows => [...rows, text].slice(-8)) },
       playbackBlocked: value => { if (mounted) setBlocked(value) },
       usage: () => {},
-      evidence: result => { if (mounted && Array.isArray(result.excerpts)) setSources(result.excerpts as Source[]) },
-    }, adapter)
-    client.current = instance
-    const unload = () => instance.dispose()
+      evidence: (result: Record<string, unknown>) => { if (mounted && Array.isArray(result.excerpts)) setSources(result.excerpts as Source[]) },
+      feedback: (phase: FeedbackPhase) => { if (mounted) setFeedbackPhase(phase) },
+    } satisfies ConstructorParameters<typeof LiveClient>[0]
+    makeClient.current = service => {
+      const made = clientClassFor(service) === RealtimeClient ? new RealtimeClient(callbacks, adapter, saveVoiceFeedback) : new LiveClient(callbacks, adapter)
+      made.setFeedbackPrompt?.(service?.feedback_prompt !== false)
+      return made
+    }
+    client.current = makeClient.current(null)
+    const unload = () => client.current?.dispose()
     window.addEventListener('pagehide', unload)
-    return () => { mounted = false; clearInterval(timer); window.removeEventListener('pagehide', unload); instance.dispose(); client.current = null }
+    return () => { mounted = false; clearInterval(timer); window.removeEventListener('pagehide', unload); client.current?.dispose(); client.current = null }
   }, [])
   useEffect(() => { client.current?.contextChanged() }, [location.pathname])
   useEffect(() => {
@@ -79,6 +93,9 @@ export default function VoiceGuide() {
     if (unavailable) return
     useTTSStore.getState().setEnabled(false)
     setMuted(false); setPaused(false); setCaptions([]); setActivity([]); setSources([]); setElapsed(0)
+    if (client.current && !(client.current instanceof clientClassFor(service)) && makeClient.current) {
+      client.current.dispose(); client.current = makeClient.current(service)
+    }
     void client.current?.start()
   }
   const ask = (text: string) => { client.current?.typeMessage(text); setActivity(rows => [...rows, `You: ${text}`].slice(-8)); setTyped('') }
@@ -108,7 +125,7 @@ export default function VoiceGuide() {
         {!running && <>
           <p className="text-sm text-text-muted">Ask how the app works, explore data definitions, move between chats, or send an analysis question.</p>
           <div className="grid grid-cols-2 gap-2">{examples.map(text => <div key={text} className="rounded-xl border border-border p-2 text-xs text-text-muted">“{text}”</div>)}</div>
-          <p className="text-xs text-text-muted leading-relaxed">Starting voice shares your audio and relevant chat or methodology excerpts with OpenAI. Voice recording is off. Questions sent to Chat are saved there as usual. Calls end after {minutes} minutes.</p>
+          <p className="text-xs text-text-muted leading-relaxed">Starting voice shares your audio and relevant chat or methodology excerpts with {service?.provider || 'OpenAI'}. Voice recording is off. Questions sent to Chat are saved there as usual. Calls end after {minutes} minutes.</p>
           <button onClick={start} disabled={unavailable} title={unavailable ? UNAVAILABLE_MESSAGE : undefined} className="w-full rounded-xl bg-accent py-3 text-sm font-medium text-white flex gap-2 justify-center disabled:opacity-50 disabled:cursor-not-allowed"><Mic size={17} />{unavailable ? 'Voice unavailable' : status === 'error' ? 'Retry voice' : 'Start voice conversation'}</button>
         </>}
         {running && <>
@@ -116,8 +133,9 @@ export default function VoiceGuide() {
           <div className="flex flex-wrap gap-2">
             <button disabled={!isLive} onClick={() => { client.current?.mute(!muted); setMuted(!muted) }} className="rounded-lg border border-border px-3 py-2 text-xs flex items-center gap-1.5 disabled:opacity-50">{muted ? <Mic size={15} /> : <MicOff size={15} />}{muted ? 'Unmute' : 'Mute'}</button>
             <button disabled={!isLive} onClick={() => { client.current?.pauseActions(!paused); setPaused(!paused) }} className="rounded-lg border border-border px-3 py-2 text-xs flex items-center gap-1.5 disabled:opacity-50">{paused ? <Play size={15} /> : <Pause size={15} />}{paused ? 'Resume actions' : 'Pause actions'}</button>
-            <button onClick={() => client.current?.end()} disabled={status === 'closing'} className="rounded-lg bg-red-500/10 text-red-600 px-3 py-2 text-xs flex items-center gap-1.5"><Square size={14} />End voice</button>
+            <button onClick={() => client.current?.end()} disabled={status === 'closing'} className="rounded-lg bg-red-500/10 text-red-600 px-3 py-2 text-xs flex items-center gap-1.5"><Square size={14} />{feedbackPhase === 'asking' ? 'End now' : 'End voice'}</button>
           </div>
+          <VoiceFeedbackPrompt phase={feedbackPhase} onSubmit={(rating, text) => client.current ? client.current.rateSession(rating, text, true) : Promise.resolve({ ok: false })} onSkip={() => client.current?.end({ skipFeedback: true })} />
           {muted && <p className="text-xs text-text-muted">Mute keeps the paid connection open. End voice to disconnect.</p>}
           {blocked && <button onClick={() => void client.current?.resumePlayback()} className="rounded-lg bg-accent px-3 py-2 text-white text-xs">Enable audio playback</button>}
           <div className="rounded-xl border border-border p-3 max-h-52 overflow-y-auto" aria-label="Voice captions" tabIndex={0}>

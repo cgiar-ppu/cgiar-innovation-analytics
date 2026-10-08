@@ -155,26 +155,46 @@ export interface WorkflowRunDetail extends WorkflowRunSummary {
   steps: WorkflowRunStep[];
 }
 
-// Settings
-export interface SettingsConfig {
-  theme: 'dark' | 'light';
-  model: string;
-  fallback_model: string;
-  max_turns: number;
-  memory_categories: string[];
+// PRMS Dashboard
+// A KPI whose backend query failed is null (never a stand-in 0) — see
+// `kpi_errors` — so the UI can say "unavailable" instead of showing a number.
+export interface PRMSKPIs {
+  total_results: number | null;
+  total_innovations: number | null;
+  innovation_uses: number | null;
+  active_initiatives: number | null;
+  countries_covered: number | null;
+  innovation_packages: number | null;
+  // W1/W2 and W3/bilateral components of total_innovations (all views).
+  total_innovations_w1w2?: number | null;
+  total_innovations_bilateral?: number | null;
 }
 
-// PRMS Dashboard
-export interface PRMSKPIs {
-  total_results: number;
-  total_innovations: number;
-  innovation_uses: number;
-  active_initiatives: number;
-  countries_covered: number;
-  innovation_packages: number;
-  // Per-year only (absent in all-years response):
-  total_innovations_w1w2?: number;
-  total_innovations_bilateral?: number;
+/** Plain-language method notes returned with every dashboard payload. */
+export interface PRMSMethodNotes {
+  data_source: string;
+  quality_gate: string;
+  bilateral_qa: string;
+  scope: string;
+  /** Centre / Program filter semantics (lead OR contribute; counted once). */
+  filters?: string;
+}
+
+/** Active Centre / Program filters as the backend applied them. */
+export interface PRMSDashboardFilters {
+  centers: { code: string; label: string }[];
+  programs: { code: string; label: string }[];
+  /** "Centre: CIMMYT · Program: SP01" — '' when no centre/program filter. */
+  label: string;
+  /** Friendly note when the program era and the years do not overlap. */
+  era_hint: string;
+}
+
+/** Values for the dashboard's Centre and Program/Accelerator dropdowns. */
+export interface PRMSDashboardFilterOptions {
+  centers: { code: string; acronym: string; name: string; label: string; results: number }[];
+  programs: { code: string; label: string; era: string; results: number }[];
+  source: 'prms' | 'fallback';
 }
 
 /** Which PRMS snapshot the backend read (mirrors synapsis/prms_snapshot.py). */
@@ -209,6 +229,14 @@ export interface PRMSDashboardData {
   /** Server-rendered label for the selection, e.g. "2024–2025" / "All years". */
   years_label?: string;
   last_updated: string;
-  /** Snapshot provenance; absent only on very old backends / mock data. */
+  /** Snapshot provenance; absent only on very old backends. */
   snapshot?: PRMSSnapshotInfo;
+  /** How the figures were counted (source, quality gate, bilateral QA, scope). */
+  method?: PRMSMethodNotes;
+  /** KPI keys whose query failed; their value is null. */
+  kpi_errors?: string[];
+  /** Active Centre / Program filters (absent on older backends). */
+  filters?: PRMSDashboardFilters;
+  /** Whole active scope in words, e.g. "2025 · Centre: CIMMYT · Program: SP01". */
+  scope_label?: string;
 }

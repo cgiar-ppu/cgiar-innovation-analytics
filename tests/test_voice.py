@@ -12,6 +12,14 @@ from synapsis.voice.knowledge import lookup, data_catalog
 from synapsis.voice.config import session_config
 
 
+@pytest.fixture(autouse=True)
+def live_protocol(monkeypatch):
+    # The lease tests below drive the Live protocol through the patched ``provider``; the Azure/GA Realtime
+    # path is covered in tests/test_voice_azure.py. Never let a unit test reach a real endpoint.
+    monkeypatch.setenv('IA_VOICE_PROTOCOL', 'live')
+    monkeypatch.setenv('IA_OPENAI_ENDPOINT', 'https://api.openai.com')
+
+
 @pytest.fixture
 async def voice_db(initialized_db):
     await s.init()
@@ -102,20 +110,23 @@ async def test_uncertain_leases_do_not_consume_shared_capacity_and_are_bounded(v
     rid = str(uuid4())
     with patch.object(s, 'provider', AsyncMock(return_value=answer())):
         assert (await s.create('user6', rid, 'v=0\r\noffer'))['request_id'] == rid
-    # ...but each affected owner is still blocked by their own uncertain lease.
+    # ...but each affected owner is still blocked by their own uncertain lease, briefly (L6-08),
+    # and is told roughly how long.
     with pytest.raises(HTTPException) as error:
         await s.create('user0', str(uuid4()), 'v=0\r\nagain')
     assert error.value.status_code == 409
-    # The reaper leaves young uncertain rows alone, then releases them after the maximum call length.
+    assert 'Try again in about 2 minutes' in error.value.detail
+    # The reaper leaves young uncertain rows alone, then releases them after the short window
+    # (90 s, was the 11-minute maximum call length: no answer was delivered, so no media exists).
     await s.reap_once()
     assert (await s.get('user0', rids['user0']))['status'] == 'uncertain'
     for owner, rid in rids.items():
-        await s.update(owner, rid, created=time.time() - s.MAX_SECONDS - s.HEARTBEAT_SECONDS - 1)
+        await s.update(owner, rid, created=time.time() - s.UNCERTAIN_NO_ID_RELEASE_SECONDS - 1)
     with caplog.at_level('WARNING', logger='synapsis_agent'):
         await s.reap_once()
     row = await s.get('user0', rids['user0'])
     assert row['status'] == 'closed_unconfirmed' and row['closed']
-    assert sum('voice_lease_unconfirmed' in r.message and 'reason=no_provider_id_after_max_call_length' in r.message for r in caplog.records) == 6
+    assert sum('voice_lease_unconfirmed' in r.message and 'reason=no_provider_id_no_answer_delivered' in r.message for r in caplog.records) == 6
     with patch.object(s, 'provider', AsyncMock(return_value=answer())):
         await s.create('user0', str(uuid4()), 'v=0\r\nagain')  # owner released
     assert (await s.usage_today())['sessions'] == 0  # unconfirmed leases never count as usage
@@ -295,3 +306,84 @@ def test_container_declares_voice_http_dependency():
     root = Path(__file__).resolve().parents[1]
     assert any(line.startswith('httpx>=') for line in (root / 'requirements.txt').read_text().splitlines())
     assert 'from synapsis.server import app' in (root / 'Dockerfile.prod').read_text()
+
+
+# ---------------------------------------------------------------------------
+# Review L6-08: one provider failure no longer locks a user out for 11–45 min
+# ---------------------------------------------------------------------------
+
+async def test_failed_start_releases_the_owner_after_90_seconds_without_waiting_for_the_reaper(voice_db):
+    rid = str(uuid4())
+    with patch.object(s, 'provider', AsyncMock(return_value=httpx.Response(503))):
+        with pytest.raises(HTTPException) as error:
+            await s.create('frank', rid, 'v=0\r\noffer')
+    assert error.value.status_code == 502
+    assert (await s.get('frank', rid))['status'] == 'uncertain'
+    with pytest.raises(HTTPException) as error:
+        await s.create('frank', str(uuid4()), 'v=0\r\nagain')
+    assert error.value.status_code == 409
+    # 91 s later the lease no longer blocks, even before the reaper has run.
+    await s.update('frank', rid, created=time.time() - s.UNCERTAIN_NO_ID_RELEASE_SECONDS - 1)
+    new_rid = str(uuid4())
+    with patch.object(s, 'provider', AsyncMock(return_value=answer())):
+        assert (await s.create('frank', new_rid, 'v=0\r\nagain'))['request_id'] == new_rid
+
+
+async def test_known_provider_session_blocks_owner_for_at_most_one_call_length(voice_db):
+    from synapsis.database import get_db
+    now = time.time()
+    rid = str(uuid4())
+    async with get_db() as db:
+        await db.execute("INSERT INTO voice_sessions(owner,request_id,sdp_hash,status,provider_id,created,expires,heartbeat) VALUES (?,?,?,?,?,?,?,?)",
+                         ('gina', rid, 'h', 'closing', 'live_slow_hangup', now - 300, now + 300, now - 1))
+        await db.commit()
+    with pytest.raises(HTTPException) as error:
+        await s.create('gina', str(uuid4()), 'v=0\r\noffer')
+    assert error.value.status_code == 409 and 'about 6 minutes' in error.value.detail
+    # Past the 10-minute limit + heartbeat the call cannot still be connected: the owner is free,
+    # while the reaper keeps retrying the hang-up for the old lease in the background.
+    await s.update('gina', rid, created=now - s.MAX_SECONDS - s.HEARTBEAT_SECONDS - 1)
+    with patch.object(s, 'provider', AsyncMock(return_value=answer())):
+        await s.create('gina', str(uuid4()), 'v=0\r\nagain')
+    assert (await s.get('gina', rid))['status'] == 'closing'
+
+
+async def test_active_lease_still_blocks_its_owner_without_a_time_hint(voice_db):
+    with patch.object(s, 'provider', AsyncMock(return_value=answer())):
+        await s.create('hana', str(uuid4()), 'v=0\r\noffer')
+        with pytest.raises(HTTPException) as error:
+            await s.create('hana', str(uuid4()), 'v=0\r\nsecond')
+    assert error.value.status_code == 409
+    assert 'End it before starting another.' in error.value.detail
+
+
+async def test_released_failures_still_count_towards_the_daily_start_cap(voice_db):
+    from synapsis.database import get_db
+    now = time.time()
+    async with get_db() as db:
+        for i in range(20):  # 20 earlier failed starts today, all already released
+            await db.execute("INSERT INTO voice_sessions(owner,request_id,sdp_hash,status,created,expires,heartbeat,closed) VALUES (?,?,?,?,?,?,?,?)",
+                             ('ivan', str(uuid4()), 'h', 'closed_unconfirmed', now - 3600 - i, now, now, now))
+        await db.commit()
+    with pytest.raises(HTTPException) as error:
+        await s.create('ivan', str(uuid4()), 'v=0\r\noffer')
+    assert error.value.status_code == 429
+
+
+def test_owner_block_seconds_rules():
+    now = 10_000.0
+    assert s.owner_block_seconds({'status': 'active', 'provider_id': 'x', 'created': now}, now) == float('inf')
+    assert s.owner_block_seconds({'status': 'creating', 'provider_id': None, 'created': now}, now) == float('inf')
+    assert s.owner_block_seconds({'status': 'uncertain', 'provider_id': None, 'created': now - 30}, now) == 60
+    assert s.owner_block_seconds({'status': 'uncertain', 'provider_id': None, 'created': now - 91}, now) == 0
+    assert s.owner_block_seconds({'status': 'closing', 'provider_id': 'x', 'created': now - 60}, now) == 600
+
+
+def test_navigate_does_not_offer_the_admin_only_agents_page():
+    """Wave 3b: the Agents page is admin-only, so the guide never proposes it (the
+    browser adapter still refuses it for non-admins). submit_feedback (Lane H) stays."""
+    tools = session_config()['delegation']['responses']['tools']
+    navigate = next(t for t in tools if t['name'] == 'navigate')
+    assert navigate['parameters']['properties']['page']['enum'] == ['dashboard', 'chat', 'settings']
+    assert 'submit_feedback' in [t['name'] for t in tools]
+    assert 'navigate Dashboard, Chat, Agents' not in session_config()['instructions']

@@ -1,79 +1,50 @@
 """
-Synapsis MCP tools — memory persistence, agent management, image generation,
-and Slack notifications.
-Computer use tools live in a separate 'computer-use' MCP server.
+Innovation Analytics MCP tools — the in-process ``synapsis`` MCP server.
+
+IA-only tool set (sandbox 2026-09-26, review P0-2 / L1-04 / L3-09 / L6-07):
+PRMS data (query, search, scenarios, partners), charts, dashboards, documents
+(``create_document`` — the only way to produce a downloadable file) and the
+caller's own chat history.
+
+Removed from the server (modules kept for their unit tests / later deletion):
+memory_* (global across users), agent_* (custom agents injected into every
+user's chat), slack_notify, fleet_* (spawned a ``claude`` shell agent),
+image_generate / image_edit (unmetered OpenAI calls, arbitrary server paths),
+tts_set_voice / tts_get_voices (process-global voice settings), and the
+macOS-only computer-use server.
 """
 
 from claude_agent_sdk import create_sdk_mcp_server
 
-from synapsis.tools.memory import memory_store, memory_recall, memory_list, memory_forget
-from synapsis.tools.agents import agent_create, agent_list, agent_update
-from synapsis.tools.slack import slack_notify
-from synapsis.tools.fleet import fleet_create, fleet_spawn, fleet_resume, fleet_mediate, fleet_status, fleet_inspect, fleet_initialize
-from synapsis.tools.tts import tts_set_voice, tts_get_voices
 from synapsis.tools.history import history_search, history_retrieve, history_index, history_list
 from synapsis.tools.prms_query import prms_query
 from synapsis.tools.prms_search import prms_search
 from synapsis.tools.create_chart import create_chart
 from synapsis.tools.scenario_analysis import scenario_analysis
 from synapsis.tools.partner_identification import partner_identification
-from synapsis.tools.images import image_generate, image_edit
 from synapsis.tools.html_dashboard import html_dashboard
+from synapsis.tools.create_document import create_document
+from synapsis.tools.read_uploaded_file import read_uploaded_file  # Lane C 3b: xlsx/docx/pdf uploads
 
-# ---------------------------------------------------------------------------
-# Memory + agent management + Slack MCP server
-# ---------------------------------------------------------------------------
+#: The tools exposed to the agent. agent_options.IA_MCP_TOOLS must match
+#: (tests/test_agent_sandbox.py pins both).
+IA_TOOLS = [
+    history_search,
+    history_retrieve,
+    history_index,
+    history_list,
+    prms_query,
+    prms_search,
+    create_chart,
+    scenario_analysis,
+    partner_identification,
+    html_dashboard,
+    create_document,
+    read_uploaded_file,
+]
 
 synapsis_mcp = create_sdk_mcp_server(
     name="synapsis",
     version="1.0.0",
-    tools=[
-        memory_store,
-        memory_recall,
-        memory_list,
-        memory_forget,
-        agent_create,
-        agent_list,
-        agent_update,
-        slack_notify,
-        fleet_create,
-        fleet_spawn,
-        fleet_resume,
-        fleet_mediate,
-        fleet_status,
-        fleet_inspect,
-        fleet_initialize,
-        tts_set_voice,
-        tts_get_voices,
-        history_search,
-        history_retrieve,
-        history_index,
-        history_list,
-        prms_query,
-        prms_search,
-        create_chart,
-        scenario_analysis,
-        partner_identification,
-        image_generate,
-        image_edit,
-        html_dashboard,
-    ],
+    tools=IA_TOOLS,
 )
-
-# ---------------------------------------------------------------------------
-# Computer use MCP server (separate — API backend detects mcp__computer-use__* names)
-# macOS only — Quartz/CGEvent are not available on Linux.
-# ---------------------------------------------------------------------------
-
-from synapsis.config import IS_MACOS
-
-if IS_MACOS:
-    from synapsis.tools.computer_use_server import computer_use_tools
-
-    computer_use_mcp = create_sdk_mcp_server(
-        name="computer-use",
-        version="1.0.0",
-        tools=computer_use_tools,
-    )
-else:
-    computer_use_mcp = None

@@ -49,9 +49,11 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     return (
       <>
         {/* Render children behind the modal so the transition into the app is
-            seamless once "I understand" is clicked, but the modal blocks all
-            interaction until then. */}
-        <div aria-hidden="true" className="pointer-events-none select-none opacity-40">
+            seamless once "I understand" is clicked. `inert` (L4-07) removes the
+            whole background from the tab order, pointer and assistive tech, so
+            it cannot be reached with the keyboard before acknowledging. */}
+        <div inert aria-hidden="true" data-testid="disclaimer-background"
+          className="pointer-events-none select-none opacity-40">
           {children}
         </div>
         <DisclaimerModal />

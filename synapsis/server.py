@@ -12,11 +12,13 @@ This is the central module that:
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 
 from synapsis.config import logger
+from synapsis.security_headers import SecurityHeadersMiddleware, cors_settings
 from synapsis.database import init_db, close_db
 from synapsis.workflow_db import init_workflow_db, close_workflow_db
 from synapsis.database.fleet_schema import init_fleet_db
@@ -25,22 +27,13 @@ from synapsis.routes import (
     health_router,
     files_router,
     sessions_router,
-    memories_router,
     query_router,
     export_router,
     search_router,
     agents_router,
-    dashboard_router,
-    workflows_router,
-    workflow_runs_router,
     transcribe_router,
     tts_router,
-    git_router,
-    agent_query_router,
-    skills_router,
-    fleet_router,
     prms_dashboard_router,
-    images_router,
     scope_router,
 )
 from synapsis.auth.routes import router as auth_router
@@ -51,27 +44,26 @@ from synapsis.auth.sso_provider import validate_settings as validate_sso_setting
 from synapsis.routes.voice import router as voice_router
 from synapsis.voice import sessions as voice_sessions
 from synapsis.websocket import ws_chat, get_activity_stats, cleanup_session_client
-from synapsis.workflow_ws import ws_workflow
-from synapsis.agent_ws import ws_agent
-from synapsis.fleet_ws import ws_fleet
 
 
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="CGIAR Innovation Analytics Platform", version="0.1.0")
+# FastAPI's default /docs, /redoc and /openapi.json are disabled; guarded
+# versions are registered below (QA-4 D15).
+app = FastAPI(title="CGIAR Innovation Analytics Platform", version="0.1.0",
+              docs_url=None, redoc_url=None, openapi_url=None)
 
-# -- CORS middleware for external mini-app integration --
-import os as _os
-_cors_origins = _os.getenv("CORS_ORIGINS", "*").split(",")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# -- HTTP hardening (review 2026-09-23 L1-07/L1-08/L4-12) --
+# Order: the last middleware added is the outermost. CORS is outermost so
+# preflights are answered first; security headers wrap every HTTP response
+# (including errors and the SPA); GZip compresses the ~2 MB of JS/CSS.
+# CORS used to be "*" + credentials in every env; it is now the env's own
+# origin (CORS_ORIGINS, else IA_SSO_ORIGIN) — see synapsis/security_headers.py.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(CORSMiddleware, **cors_settings())
 
 # -- Register route routers --
 app.include_router(auth_router)
@@ -81,31 +73,88 @@ app.include_router(sso_router)
 app.include_router(invited_router)
 app.include_router(voice_router)
 app.include_router(health_router)
+from synapsis.routes.usage import router as usage_router  # noqa: E402  (Lane D: admin usage summary)
+app.include_router(usage_router)
+from synapsis.routes.feedback import router as feedback_router  # noqa: E402  (Lane H: answer/voice feedback)
+app.include_router(feedback_router)
 app.include_router(files_router)
 app.include_router(sessions_router)
-app.include_router(memories_router)
 app.include_router(query_router)
 app.include_router(export_router)
 app.include_router(search_router)
 app.include_router(agents_router)
-app.include_router(dashboard_router)
-app.include_router(workflows_router)
-app.include_router(workflow_runs_router)
 app.include_router(transcribe_router)
 app.include_router(tts_router)
-app.include_router(git_router)
-app.include_router(agent_query_router)
-app.include_router(skills_router)
-app.include_router(fleet_router)
 app.include_router(prms_dashboard_router)
-app.include_router(images_router)
 app.include_router(scope_router)
+# Deliberately NOT registered (Synapsis-agent leftovers, review 2026-09-23
+# L7-05/L1-04/L1-06/L6-07): memories, workflows, workflow_runs, workflow_logs,
+# git, agent_query, skills, fleet, images, dashboard (/api/dashboard/stats).
+# They were global across users and, for agent_query/workflows, replaced the
+# IA system prompt. tests/test_leftover_routes.py pins their absence.
+
+# -- API documentation (QA-4 D15) --
+# The schema and the Swagger/ReDoc pages are API-surface disclosure: every
+# operation is still gated, but an anonymous visitor on a deployed stage has
+# no business listing them. They stay available:
+#   * in local development (IA_AUTH_DISABLED=true);
+#   * to in-container callers talking to the app directly on the loopback
+#     interface WITHOUT an X-Forwarded-For header (release-smoke.py and the
+#     DEV QA smoke walk /openapi.json from inside the container; every request
+#     through the load balancer carries X-Forwarded-For);
+#   * /openapi.json to administrators (Bearer token).
+# Anyone else gets a plain 404 (the SPA catch-all must not answer these).
+from fastapi import Depends  # noqa: E402
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html  # noqa: E402
+
+from synapsis.auth import middleware as _auth_mw  # noqa: E402
+
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+def api_docs_allowed(request: Request, user: dict | None, *, admin_ok: bool = True) -> bool:
+    """Whether this caller may read the API schema/docs (see above)."""
+    if _auth_mw.AUTH_DISABLED:
+        return True
+    host = request.client.host if request.client else ""
+    if host in _LOOPBACK and "x-forwarded-for" not in request.headers:
+        return True
+    return admin_ok and bool(user) and _auth_mw.resolve_role(user) == "admin"
+
+
+def _not_found() -> JSONResponse:
+    return JSONResponse({"detail": "Not Found"}, status_code=404)
+
+
+@app.get("/openapi.json", include_in_schema=False)
+async def openapi_schema(request: Request, user=Depends(_auth_mw.get_optional_user)):
+    if not api_docs_allowed(request, user):
+        return _not_found()
+    return JSONResponse(app.openapi())
+
+
+@app.get("/docs", include_in_schema=False)
+async def swagger_docs(request: Request, user=Depends(_auth_mw.get_optional_user)):
+    # The page fetches /openapi.json without a token, so it only works where
+    # the schema is open without one (local / in-container).
+    if not api_docs_allowed(request, user, admin_ok=False):
+        return _not_found()
+    return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{app.title} - API")
+
+
+@app.get("/redoc", include_in_schema=False)
+async def redoc_docs(request: Request, user=Depends(_auth_mw.get_optional_user)):
+    if not api_docs_allowed(request, user, admin_ok=False):
+        return _not_found()
+    return get_redoc_html(openapi_url="/openapi.json", title=f"{app.title} - API")
+
 
 # -- Register WebSocket endpoints --
+# /ws/chat is the ONLY WebSocket. The Synapsis-era /ws/agent, /ws/workflow and
+# /ws/fleet sockets accepted anonymous handshakes and drove a shell-capable
+# agent (review 2026-09-23, P0-1); they were removed, not just guarded.
+# tests/test_ws_auth.py pins this set.
 app.websocket("/ws/chat")(ws_chat)
-app.add_api_websocket_route("/ws/workflow/{workflow_id}", ws_workflow)
-app.add_api_websocket_route("/ws/agent/{agent_id}", ws_agent)
-app.add_api_websocket_route("/ws/fleet/{fleet_id}", ws_fleet)
 
 
 # -- Startup event: initialize database --
@@ -171,13 +220,29 @@ if _static_dir.is_dir():
 _index_html = _static_dir / "index.html"
 
 
+#: Prefixes that belong to the backend, never to the SPA. An unknown path
+#: under them is a clean JSON 404 (removed Synapsis routes must not "succeed"
+#: with index.html, and API clients must not parse HTML).
+_BACKEND_PREFIXES = ("api", "ws")
+
+
 @app.get("/{full_path:path}")
 async def spa_catch_all(request: Request, full_path: str):
     """Serve index.html for all frontend routes (SPA catch-all)."""
-    # If the path points to an actual file in static/, serve it directly
-    candidate = _static_dir / full_path
-    if candidate.is_file():
+    first = full_path.split("/", 1)[0]
+    if first in _BACKEND_PREFIXES:
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    # If the path points to an actual file INSIDE static/, serve it directly.
+    # Resolve first: uvicorn does not normalise ``..`` segments, so a raw
+    # request for ``/../<file>`` would otherwise escape static/ (found
+    # 2026-09-26; the DEV nginx front rejects such paths, this is the app-side
+    # guard).
+    static_root = _static_dir.resolve()
+    candidate = (_static_dir / full_path).resolve()
+    if candidate.is_relative_to(static_root) and candidate.is_file():
         return FileResponse(str(candidate))
+    if not _index_html.is_file():
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
     # Otherwise serve the SPA entry point — with no-cache so proxies always
     # fetch the latest index.html (asset filenames are content-hashed, so
     # they can be cached indefinitely, but index.html must stay fresh)

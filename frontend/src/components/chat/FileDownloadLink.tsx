@@ -17,7 +17,7 @@ import {
   containsFilePaths,
   parseFilePathsInText,
 } from '../../lib/filePathUtils'
-import { getAuthToken } from '../../stores/auth'
+import { withFreshToken } from '../../lib/downloads'
 
 // ---------------------------------------------------------------------------
 // FileDownloadLink — the core button component
@@ -39,10 +39,10 @@ interface FileDownloadLinkProps {
  * save dialog rather than navigating away.
  */
 export function FileDownloadLink({ relativePath, filename, fullPath }: FileDownloadLinkProps) {
-  // `GET /api/files/{path}` requires auth (2026-07-20); this button renders
-  // a plain <a> (no Authorization header), so attach the JWT as ?token=
-  // (same pattern the export links and MarkdownAnchor use).
-  const url = buildDownloadUrl(relativePath, getAuthToken())
+  // `GET /api/files/{path}` requires auth. The href carries NO token: the
+  // current one is added at click time (L4-06), so links in answers older
+  // than the 5-minute SSO token lifetime keep working.
+  const url = buildDownloadUrl(relativePath)
 
   return (
     <a
@@ -55,7 +55,8 @@ export function FileDownloadLink({ relativePath, filename, fullPath }: FileDownl
         bg-accent/10 hover:bg-accent/20 text-accent text-[11px] font-medium
         transition-colors border border-accent/20 hover:border-accent/40
         no-underline cursor-pointer align-middle whitespace-nowrap"
-      onClick={(e) => e.stopPropagation()}
+      onClick={withFreshToken}
+      onAuxClick={withFreshToken}
     >
       <Download size={11} className="flex-shrink-0" />
       <span className="truncate max-w-[200px]">{filename}</span>

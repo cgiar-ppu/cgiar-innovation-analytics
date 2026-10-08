@@ -70,7 +70,32 @@ MAX_SESSIONS: int = _get_int_env("SYNAPSIS_MAX_SESSIONS", 10)
 
 MODEL: str = os.getenv("SYNAPSIS_MODEL", DEFAULT_MODEL)
 FALLBACK_MODEL: str = os.getenv("SYNAPSIS_FALLBACK_MODEL", DEFAULT_FALLBACK_MODEL)
-MAX_TURNS: int = _get_int_env("SYNAPSIS_MAX_TURNS", 200)
+# Agent turns per question. 60 is the IA cost-policy default (was 200).
+# The legacy SYNAPSIS_MAX_TURNS can only LOWER it (deploy.yml still passes
+# SYNAPSIS_MAX_TURNS=200); an explicit IA_MAX_TURNS sets any value.
+MAX_TURNS_DEFAULT: int = 60
+MAX_TURNS: int = (
+    _get_int_env("IA_MAX_TURNS", MAX_TURNS_DEFAULT)
+    if os.getenv("IA_MAX_TURNS")
+    else min(_get_int_env("SYNAPSIS_MAX_TURNS", MAX_TURNS_DEFAULT), MAX_TURNS_DEFAULT)
+)
+
+
+def _get_float_env(name: str, default: float) -> float:
+    """Return a non-negative float env var, falling back to *default*."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logging.getLogger("synapsis_agent").warning(
+            "Invalid number for %s=%r — using default %s", name, raw, default
+        )
+        return default
+    if value < 0:
+        return default
+    return value
 
 # ---------------------------------------------------------------------------
 # Available models — env-var-overridable allow-list for the model selector
@@ -108,6 +133,72 @@ if not SELECTABLE_MODELS_FILTERED:
     )
     SELECTABLE_MODELS_FILTERED = list(SELECTABLE_MODELS)
     AVAILABLE_MODELS = [m["id"] for m in SELECTABLE_MODELS]
+
+# ---------------------------------------------------------------------------
+# Role-aware model policy + cost ceilings (IA finalisation 2026-09-26)
+# ---------------------------------------------------------------------------
+#
+# AVAILABLE_MODELS above is what the *deployment* allows. On top of that each
+# role gets its own subset, so invited testers and CGIAR researchers can only
+# pick the cheaper default model while admins keep the full stage list:
+#
+#   IA_RESEARCHER_MODELS  comma list, default "claude-sonnet-5"
+#   IA_ADMIN_MODELS       comma list, default = every AVAILABLE_MODELS entry
+#
+# Both are intersected with AVAILABLE_MODELS (a role can never get a model the
+# deployment does not expose). Every non-admin role (researcher, user,
+# invited, ...) uses the researcher list. See synapsis/runtime_policy.py.
+
+
+def _parse_model_list(raw: str | None, default: list[str]) -> list[str]:
+    if raw is None or not raw.strip():
+        return list(default)
+    return [m.strip() for m in raw.split(",") if m.strip()]
+
+
+RESEARCHER_MODELS: list[str] = [
+    m for m in _parse_model_list(os.getenv("IA_RESEARCHER_MODELS"), [MODEL])
+    if m in AVAILABLE_MODELS
+] or [m for m in [MODEL] if m in AVAILABLE_MODELS] or AVAILABLE_MODELS[:1]
+
+ADMIN_MODELS: list[str] = [
+    m for m in _parse_model_list(os.getenv("IA_ADMIN_MODELS"), AVAILABLE_MODELS)
+    if m in AVAILABLE_MODELS
+] or list(AVAILABLE_MODELS)
+
+# Per-question (per agent turn) spend ceiling, passed to the SDK as
+# ``max_budget_usd``. 0 disables the ceiling for that role.
+MAX_BUDGET_USD_RESEARCHER: float = _get_float_env("IA_MAX_BUDGET_USD_RESEARCHER", 1.00)
+MAX_BUDGET_USD_ADMIN: float = _get_float_env("IA_MAX_BUDGET_USD_ADMIN", 5.00)
+
+# The SDK/CLI counts the budget per live CLI process (cumulative over the
+# questions it served), so a chat's process is recycled (resumed fresh on the
+# next question, conversation kept) once it has spent more than this fraction
+# of the per-question ceiling. Guarantees every question at least
+# (1 - fraction) x ceiling of headroom and never more than the ceiling.
+BUDGET_RECYCLE_FRACTION: float = min(
+    max(_get_float_env("IA_BUDGET_RECYCLE_FRACTION", 0.5), 0.0), 1.0
+)
+
+# Soft daily cap per user (UTC day). Admins are exempt. 0 disables it.
+DAILY_USER_BUDGET_USD: float = _get_float_env("IA_DAILY_USER_BUDGET_USD", 5.00)
+
+# Who users are told to contact when they hit the daily cap (free text; empty
+# = generic wording). Deliberately not hard-coded: set per deployment.
+SUPPORT_CONTACT: str = os.getenv("IA_SUPPORT_CONTACT", "").strip()
+
+# Stall watchdog: a streaming answer that produces no event for this many
+# seconds is stopped with a friendly message (was an unused constant).
+STALL_TIMEOUT_SECONDS: int = _get_int_env("IA_STALL_TIMEOUT_SECONDS", 300)
+
+# New-chat rate limits: per user (sliding window) plus a deployment-wide
+# safety net against reconnect storms.
+NEW_CHATS_PER_USER: int = _get_int_env("IA_NEW_CHATS_PER_USER", 5)
+NEW_CHATS_GLOBAL: int = _get_int_env("IA_NEW_CHATS_GLOBAL", 30)
+NEW_CHATS_WINDOW_SECONDS: int = _get_int_env("IA_NEW_CHATS_WINDOW_SECONDS", 60)
+
+# Label reported by the admin usage endpoint (each env has its own DB).
+ENVIRONMENT_LABEL: str = os.getenv("IA_ENVIRONMENT", "").strip()
 
 # ---------------------------------------------------------------------------
 # Application version

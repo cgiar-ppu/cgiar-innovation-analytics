@@ -11,8 +11,13 @@
  */
 
 import type { ServerMessage } from '../lib/types'
+import { toast } from 'sonner'
 import { useChatStore } from '../stores/chat'
 import { useSessionsStore } from '../stores/sessions'
+import { takePendingNewChat, clearPendingNewChat } from '../lib/chatCommands'
+
+/** Error codes that mean the server refused to open a new chat (Lane D). */
+const NEW_CHAT_REFUSALS = new Set(['rate_limited', 'capacity', 'daily_limit'])
 
 /**
  * Context passed to the router so it can access connection-scoped state
@@ -41,8 +46,32 @@ export function routeWebSocketMessage(
   // ---- Session management: always process regardless of session_id ----
 
   if (msg.type === 'session') {
+    clearPendingNewChat()
     handleSessionMessage(msg)
     return true
+  }
+
+  // L4-10: the server refused an optimistic action - roll the UI back.
+  if (msg.type === 'error' && msg.code) {
+    if (msg.code === 'model_not_allowed' && useSessionsStore.getState().pendingModelSwitch) {
+      useSessionsStore.getState().rollbackModelSwitch()
+      toast.error(msg.message || 'That model is not available for your account.')
+      return true
+    }
+    if (NEW_CHAT_REFUSALS.has(msg.code)) {
+      const pending = takePendingNewChat()
+      if (pending) {
+        // Do not leave the user in an empty chat the server never created.
+        if (pending.previous) {
+          useSessionsStore.getState().setActiveSession(pending.previous)
+          if (!useChatStore.getState().restoreSession(pending.previous)) {
+            void useChatStore.getState().loadHistory(pending.previous)
+          }
+        }
+        toast.error(msg.message || 'A new chat could not be started. Please try again shortly.')
+        return true
+      }
+    }
   }
 
   if (msg.type === 'sessions_changed') {
@@ -52,7 +81,7 @@ export function routeWebSocketMessage(
 
   if (msg.type === 'model_switched') {
     // Backend confirmed the active session's model change.
-    useSessionsStore.getState().setSessionModel(msg.session_id, msg.model)
+    useSessionsStore.getState().confirmModelSwitch(msg.session_id, msg.model)
     return true
   }
 

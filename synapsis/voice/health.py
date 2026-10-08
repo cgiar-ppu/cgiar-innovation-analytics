@@ -5,7 +5,11 @@ key produced a clickable voice button that could only 503. ``provider_ok``
 asks the provider whether the configured key can see the configured model.
 
 - Never raises; a failed probe (HTTP error, timeout, network) is cached too,
-  so a broken provider cannot turn every status call into a 5 s stall.
+  so a broken provider cannot turn every status call into a 5 s stall — but
+  only for FAILURE_CACHE_SECONDS (review L6-08: one blip used to show "Voice
+  unavailable" for 10 minutes; the frontend re-checks every 60 s, so voice now
+  comes back about a minute after the provider does). A success is cached for
+  CACHE_SECONDS and a later successful probe clears any failure.
 - One in-flight probe at a time; concurrent status calls share the result.
 - Logs a structured warning on failure with the HTTP status, never the key.
 """
@@ -14,10 +18,12 @@ import os
 import time
 
 import httpx
+from synapsis import ai_endpoint
 from synapsis.config import logger
-from .config import model
+from .config import backend_model, model, protocol
 
 CACHE_SECONDS = 600
+FAILURE_CACHE_SECONDS = 60
 TIMEOUT_SECONDS = 5
 _cache: dict = {'ok': None, 'checked': 0.0, 'status': None}
 _lock: asyncio.Lock | None = None
@@ -37,22 +43,37 @@ def snapshot() -> dict:
     return {'provider_ok': _cache['ok'], 'provider_status': _cache['status'], 'checked_at': _cache['checked'] or None}
 
 
+def _probe_urls() -> list[str]:
+    """Azure: the deployment itself must exist (GET /openai/models answers 200 for any catalogue model, deployed
+    or not). The Live protocol also needs its delegated backend deployment. OpenAI: model visibility."""
+    if ai_endpoint.is_azure():
+        names = [model()] + ([backend_model()] if protocol() == 'live' else [])
+        return [ai_endpoint.azure_deployment_url(name) for name in names]
+    return [ai_endpoint.v1('models/' + model())]
+
+
 async def _probe() -> tuple[bool, int | None]:
-    key = os.getenv('OPENAI_API_KEY', '')
     async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS, transport=_transport) as client:
-        response = await client.get('https://api.openai.com/v1/models/' + model(), headers={'Authorization': 'Bearer ' + key})
-    return response.is_success, response.status_code
+        for url in _probe_urls():
+            response = await client.get(url, headers=ai_endpoint.auth_headers())
+            if not response.is_success:
+                return False, response.status_code
+    return True, response.status_code
 
 
 async def provider_ok() -> bool | None:
-    """True/False from a probe at most CACHE_SECONDS old; None when no key is configured."""
+    """True/False from a recent probe; None when no key is configured.
+
+    A success is reused for CACHE_SECONDS, a failure only for FAILURE_CACHE_SECONDS.
+    """
     global _lock
     if not configured():
         return None
     if _lock is None:
         _lock = asyncio.Lock()
     async with _lock:
-        if _cache['ok'] is not None and time.time() - _cache['checked'] < CACHE_SECONDS:
+        ttl = CACHE_SECONDS if _cache['ok'] else FAILURE_CACHE_SECONDS
+        if _cache['ok'] is not None and time.time() - _cache['checked'] < ttl:
             return _cache['ok']
         status = None
         try:

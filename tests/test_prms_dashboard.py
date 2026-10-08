@@ -313,3 +313,143 @@ class TestTopCountriesChart:
         charts = _fetch_prms_data(years=[2025])["charts"]
         assert "irl_distribution" in charts
         assert charts["irl_distribution"]["chartType"] == "bar"
+
+
+# ---------------------------------------------------------------------------
+# L2-02 — one quality gate for every all-years KPI; L2-03 — IRL de-dup;
+# L2-12 — failed KPIs are null, never 0; data notes for the UI
+# ---------------------------------------------------------------------------
+_ALL_FOUR_YEARS = [2022, 2023, 2024, 2025]
+
+
+@requires_prms_db
+class TestOneQualityGate:
+
+    def test_all_years_cards_equal_the_union_of_the_closed_years(self):
+        """Every non-innovation card is the same KPI in both views now."""
+        all_years = _fetch_prms_data(years=None)["kpis"]
+        union = _fetch_prms_data(years=_ALL_FOUR_YEARS)["kpis"]
+        for key in ("total_results", "innovation_uses", "innovation_packages",
+                    "countries_covered", "active_initiatives"):
+            assert all_years[key] == union[key], key
+
+    def test_all_years_innovations_stay_canonical_and_within_the_union(self):
+        all_years = _fetch_prms_data(years=None)["kpis"]
+        union = _fetch_prms_data(years=_ALL_FOUR_YEARS)["kpis"]
+        assert all_years["total_innovations"] == 1852           # canonical, unchanged
+        assert all_years["total_innovations_w1w2"] + all_years["total_innovations_bilateral"] == 1852
+        assert all_years["total_innovations"] <= union["total_innovations"]
+
+    def test_all_years_pie_never_exceeds_the_total_results_card(self):
+        data = _fetch_prms_data(years=None)
+        pie = sum(r["count"] for r in data["charts"]["results_by_type"]["data"])
+        assert pie <= data["kpis"]["total_results"]
+
+    def test_pie_buckets_equal_their_kpi_cards(self):
+        """Single years and all years: every slice equals its card. Multi-year
+        (QA-4 D10): the development slice still equals the headline card, and
+        the use/package slices can only be smaller (re-typed codes count once)."""
+        for selection in (None, [2022], [2023], [2024], [2025]):
+            data = _fetch_prms_data(years=selection)
+            buckets = {r["type"]: r["count"] for r in data["charts"]["results_by_type"]["data"]}
+            kpis = data["kpis"]
+            assert buckets["Innovation Development"] == kpis["total_innovations"], selection
+            assert buckets["Innovations in use"] == kpis["innovation_uses"], selection
+            assert buckets["Innovation Package"] == kpis["innovation_packages"], selection
+        for selection in ([2024, 2025], [2023, 2024], _ALL_FOUR_YEARS):
+            data = _fetch_prms_data(years=selection)
+            buckets = {r["type"]: r["count"] for r in data["charts"]["results_by_type"]["data"]}
+            kpis = data["kpis"]
+            assert buckets["Innovation Development"] == kpis["total_innovations"], selection
+            assert buckets["Innovations in use"] <= kpis["innovation_uses"], selection
+            assert buckets["Innovation Package"] <= kpis["innovation_packages"], selection
+
+    @pytest.mark.parametrize("selection", [[2022], [2025], [2024, 2025], [2023, 2024],
+                                           [2022, 2023], _ALL_FOUR_YEARS])
+    def test_year_pie_slices_add_up_to_the_results_card(self, selection):
+        """QA-4 D10: 2022–2025 pie centre was 2,568 vs the 2,553 card (2024–25: 2,167 vs 2,166)."""
+        data = _fetch_prms_data(years=selection)
+        pie = sum(r["count"] for r in data["charts"]["results_by_type"]["data"])
+        assert pie == data["kpis"]["total_results"], (selection, pie)
+
+    def test_multi_year_pie_explains_the_count_once_rule(self):
+        multi = _fetch_prms_data(years=[2024, 2025])["charts"]["results_by_type"]["description"]
+        single = _fetch_prms_data(years=[2025])["charts"]["results_by_type"]["description"]
+        assert "counted once" in multi and "counted once" not in single
+
+    def test_2025_default_view_is_unchanged(self):
+        kpis = _fetch_prms_data(years=[2025])["kpis"]
+        assert kpis["total_innovations"] == 1185
+        assert kpis["total_results"] >= kpis["total_innovations"]
+
+
+@requires_prms_db
+class TestIRLCountsEachInnovationOnce:
+
+    @pytest.mark.parametrize("selection", [None, [2025], [2024, 2025], _ALL_FOUR_YEARS])
+    def test_irl_bars_never_sum_to_more_than_the_innovations(self, selection):
+        data = _fetch_prms_data(years=selection)
+        bars = sum(r["count"] for r in data["charts"]["irl_distribution"]["data"])
+        assert 0 < bars <= data["kpis"]["total_innovations"], (selection, bars)
+
+
+class TestFailedKpiIsNullNotZero:
+
+    def test_a_broken_kpi_query_yields_null_and_is_reported(self, monkeypatch, tmp_path):
+        import sqlite3
+
+        import synapsis.routes.prms_dashboard as mod
+
+        db = tmp_path / "empty.sqlite"
+        sqlite3.connect(db).close()  # no tables -> every query fails
+        monkeypatch.setattr(mod, "_PRMS_DB_PATH", str(db))
+        data = mod._fetch_prms_data(years=[2025])
+        assert data["kpis"]["total_results"] is None
+        assert data["kpis"]["total_innovations"] is None
+        assert "total_results" in data["kpi_errors"]
+        assert 0 not in [v for v in data["kpis"].values()]
+
+
+class TestMethodNotes:
+
+    def test_notes_name_the_source_and_the_bilateral_qa_caveat(self):
+        import synapsis.routes.prms_dashboard as mod
+
+        assert "PRMS Reporting" in mod.DATA_SOURCE_NOTE
+        assert "Performance and Results Management System" in mod.DATA_SOURCE_NOTE
+        assert "not QA'd in PRMS" in mod.BILATERAL_QA_NOTE
+        assert "Center level" in mod.BILATERAL_QA_NOTE
+        # Dates are data, never typed into the prose.
+        import re
+        for note in (mod.DATA_SOURCE_NOTE, mod.QUALITY_GATE_NOTE, mod.BILATERAL_QA_NOTE,
+                     mod.ALL_YEARS_NOTE, mod.YEAR_SCOPE_NOTE):
+            assert not re.search(r"20\d\d-\d\d-\d\d", note)
+
+    @requires_prms_db
+    def test_payload_carries_method_and_snapshot(self):
+        data = _fetch_prms_data(years=None)
+        assert set(data["method"]) == {"data_source", "quality_gate", "bilateral_qa", "scope", "filters"}
+        assert data["method"]["scope"].startswith("'All years'")
+        assert data["snapshot"]["extracted_on"] and data["snapshot"]["data_as_of"]
+        assert data["kpi_errors"] == []
+
+
+class TestEndpointDoesNotBlockTheLoop:
+
+    def test_endpoint_runs_the_fetch_in_a_worker_thread(self, monkeypatch):
+        import asyncio
+        import threading
+
+        import synapsis.routes.prms_dashboard as mod
+
+        seen = {}
+
+        def fake_fetch(years=None):
+            seen["thread"] = threading.current_thread() is threading.main_thread()
+            return {"kpis": {}, "charts": {}}
+
+        monkeypatch.setattr(mod, "_fetch_prms_data", fake_fetch)
+        monkeypatch.setattr(mod, "_cache", {})
+        monkeypatch.setattr(mod, "_cache_ts", {})
+        asyncio.run(mod.prms_dashboard_stats(years=["2024"], year=None))
+        assert seen["thread"] is False

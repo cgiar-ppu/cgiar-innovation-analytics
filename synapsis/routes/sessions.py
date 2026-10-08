@@ -10,11 +10,13 @@ Session management and chat history endpoints.
 """
 
 import json
+import re
 import time
 from datetime import datetime
+from typing import Optional
 
 import aiosqlite
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from synapsis.database import get_db
 from synapsis.models import SessionUpdate
@@ -24,6 +26,27 @@ from synapsis.auth.scoping import allowed_user_ids, is_visible_to
 from synapsis.config import LEGACY_USER_ID
 
 router = APIRouter(prefix="/api", tags=["sessions"])
+
+
+# The chat input prepends uploaded files as
+#   [Attached files]\n  name.xlsx -> /workspace/uploads/u/<owner>/…\n[End attached files]\n\n<question>
+# (frontend/src/lib/chatCommands.ts). A title must never show that preamble or
+# the server path (QA-4 D11).
+_ATTACHED_BLOCK_RE = re.compile(r"\[Attached files\](?P<body>.*?)(?:\[End attached files\]|\Z)", re.DOTALL)
+_ATTACHED_LINE_RE = re.compile(r"^\s*(?P<name>.+?)\s+->\s+\S", re.MULTILINE)
+
+
+def title_text(content: str) -> str:
+    """The first user message as title text: the attached-files preamble is
+    removed; a message that is ONLY attachments becomes "Attached: <names>"."""
+    content = content or ""
+    names: list[str] = []
+    for m in _ATTACHED_BLOCK_RE.finditer(content):
+        names += [n.group("name").strip() for n in _ATTACHED_LINE_RE.finditer(m.group("body"))]
+    text = _ATTACHED_BLOCK_RE.sub("", content).strip()
+    if text:
+        return text
+    return ("Attached: " + ", ".join(names)) if names else ""
 
 
 async def _require_session_owner(db, session_id: str, user: dict) -> None:
@@ -58,8 +81,16 @@ async def _fetch_messages(db: aiosqlite.Connection, session_id: str) -> list[dic
 
 
 @router.get("/sessions")
-async def list_sessions(user: dict = Depends(get_current_user)):
+async def list_sessions(
+    user: dict = Depends(get_current_user),
+    keep: Optional[str] = Query(default=None, max_length=100),
+):
     """List the current user's sessions, ordered by most recently updated.
+
+    Never-used chats (0 messages) are hidden from the list — not deleted — so
+    every "New chat" click does not leave an empty entry behind (QA-4 D12).
+    ``keep`` = the client's active session id keeps that one visible while it
+    is still empty (the model picker reads the active chat from this list).
 
     Scoped to the authenticated identity (July-7 Step 4): each user only ever
     sees their own conversations. Admins ALSO see sentinel-owned ("legacy" /
@@ -92,14 +123,19 @@ async def list_sessions(user: dict = Depends(get_current_user)):
                 ) AS first_user_data
             FROM sessions s
             WHERE s.user_id IN ({placeholders})
+              AND (COALESCE(s.message_count, 0) > 0
+                   OR EXISTS (SELECT 1 FROM messages m0 WHERE m0.session_id = s.session_id)
+                   OR COALESCE(s.pinned, 0) = 1
+                   OR COALESCE(s.title, '') != ''
+                   OR s.session_id = ?)
             ORDER BY COALESCE(s.pinned, 0) DESC, s.updated_at DESC
-        """, tuple(ids))
+        """, (*ids, keep or ""))
         results = []
         for row in await cursor.fetchall():
             title = row["title"]
             if not title and row["first_user_data"]:
                 d = json.loads(row["first_user_data"])
-                title = d.get("content", "")[:80]
+                title = title_text(d.get("content", ""))[:80]
 
             results.append({
                 "session_id": row["session_id"],
@@ -203,7 +239,7 @@ async def auto_title_session(session_id: str, user: dict = Depends(get_current_u
         if not msg_row:
             return {"title": "New Chat", "session_id": session_id}
 
-        content = json.loads(msg_row["data"]).get("content", "").strip()
+        content = title_text(json.loads(msg_row["data"]).get("content", "")).strip()
         title = content
 
         # Strip common prefixes

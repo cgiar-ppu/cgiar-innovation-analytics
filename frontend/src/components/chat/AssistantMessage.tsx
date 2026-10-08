@@ -1,11 +1,13 @@
-import { memo } from 'react'
+import { memo, useMemo } from 'react'
 import { Copy, Check, Sparkles } from 'lucide-react'
 import { TTSSpeakButton } from './TTSSpeakButton'
 import ReactMarkdown from 'react-markdown'
 import type { ChatMessage } from '../../lib/types'
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard'
 import { InteractiveContent } from './InteractiveContent'
+import { stripRenderedChartBlocks } from './chartDetector'
 import { REMARK_PLUGINS, ASSISTANT_MD_COMPONENTS } from './markdownComponents'
+import AnswerFeedback from '../feedback/AnswerFeedback'
 
 interface Props {
   message: ChatMessage
@@ -13,6 +15,9 @@ interface Props {
 
 export const AssistantMessage = memo(function AssistantMessage({ message }: Props) {
   const { copied, copyToClipboard } = useCopyToClipboard()
+  // The <chart> blocks render above as charts; keep their spec JSON out of
+  // the text (QA-4 D2).
+  const body = useMemo(() => stripRenderedChartBlocks(message.content), [message.content])
 
   return (
     <div className="flex gap-3 animate-fade-in-up group">
@@ -32,9 +37,10 @@ export const AssistantMessage = memo(function AssistantMessage({ message }: Prop
             remarkPlugins={REMARK_PLUGINS}
             components={ASSISTANT_MD_COMPONENTS}
           >
-            {message.content}
+            {body}
           </ReactMarkdown>
         </div>
+        <AnswerFeedback messageId={message.id} />
         <div className="absolute top-0 right-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
           <TTSSpeakButton messageId={message.id} text={message.content} />
           <button

@@ -171,9 +171,24 @@ def _build_chart_js(sections: list[dict]) -> str:
         }
         blocks.append(
             f"new Chart(document.getElementById('chart_{idx}'), "
-            f"{json.dumps(config, ensure_ascii=False)});"
+            f"{_script_json(config)});"
         )
     return "\n".join(blocks)
+
+
+def _script_json(value) -> str:
+    """JSON that is safe inside ``<script>`` (review L6-13).
+
+    ``json.dumps`` leaves ``</script>`` and ``<!--`` intact, so a chart label
+    taken from PRMS text could close the script element and inject markup into
+    the downloaded dashboard. ``<``, ``>`` and ``&`` are emitted as ``\\uXXXX``
+    escapes (identical values for the JavaScript parser); U+2028/2029 too.
+    """
+    return (
+        json.dumps(value, ensure_ascii=False)
+        .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+        .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    )
 
 
 # ---------------------------------------------------------------------------
