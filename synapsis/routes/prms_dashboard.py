@@ -104,6 +104,302 @@ def _apply_phase_scope(conn: sqlite3.Connection) -> None:
 
 
 # ---------------------------------------------------------------------------
+# CGIAR Centre + Program/Accelerator filters (Marc Schut, 2026-10-08)
+# ---------------------------------------------------------------------------
+# Next to the Years filter the dashboard can be RESTRICTED to the results that
+# one or more CGIAR Centres and/or Programs/Accelerators (or 2022–2024
+# Initiatives) LEAD OR CONTRIBUTE TO. The counting method is untouched — the
+# filters only shrink the population every existing query reads:
+#
+# * Centre link  = `results_center` row with is_active = 1, ANY role (lead
+#   `is_leading_result`/`is_primary` = 1 AND contributing = 0 both count);
+#   `results_center.center_id` holds `clarisa_center.code` ("CENTER-05").
+# * Program link = `results_by_inititiative` (PRMS spelling) row with
+#   is_active = 1 and initiative_role_id IN (1 'Primary submitter' = lead,
+#   2 'Contributor'), matched on `clarisa_initiatives.official_code` (a few
+#   codes, e.g. INIT-11/12, have two `clarisa_initiatives` rows — both count).
+# * Links are per `result.id`, i.e. per result-PHASE row: a row is in scope if
+#   THAT row carries the link. Several values in one dropdown = union (OR);
+#   Centres AND Programs AND Years = intersection.
+#
+# Mechanics: the in-scope `result.id`s are materialised ONCE per request into
+# `temp.dash_scope_ids` (INTEGER PRIMARY KEY), and the per-connection TEMP VIEW
+# `result` (which already hides open reporting phases) additionally keeps only
+# those ids. Every query in this module therefore respects the filters without
+# being rewritten, exactly like the closed-phase rule.
+#
+# The one place a row-level pre-filter would CHANGE the method is the all-years
+# "latest quality-assured phase per code" canon: pre-filtering would pick a
+# different (older) phase as "latest" when the newest phase is not linked to
+# the entity, and could even count a code that is no longer an innovation
+# development. So the canon CTEs read the UNFILTERED closed-phase rows
+# (`__CAND_SRC__` → `result_unscoped`) to pick each code's canonical row, and
+# only then keep the codes whose canonical row is in scope (`__CANON_SCOPE__`).
+# A filtered number is therefore always a subset of the unfiltered one.
+#
+# With no centre/program selected both tokens bind to the original text
+# ("result" / ""), no temp table is created, and the SQL that runs is the
+# signed-off SQL, byte for byte.
+
+#: Defensive cap per dropdown — a filter, not a bulk query channel.
+_MAX_FILTER_VALUES = 40
+
+_SQL_FILTER_CATALOG_CENTERS = """
+SELECT cc.code, ci.acronym, ci.name
+FROM clarisa_center cc
+LEFT JOIN clarisa_institutions ci ON ci.id = cc.institutionId
+"""
+
+_SQL_FILTER_CATALOG_PROGRAMS = """
+SELECT official_code, MIN(short_name), MIN(name), MIN(portfolio_id)
+FROM clarisa_initiatives
+WHERE official_code IS NOT NULL
+GROUP BY official_code
+"""
+
+# Result codes per centre / per program among the quality-assured innovation
+# results of closed phases (runs on a phase-scoped connection). Used to list
+# only entities that actually have linked results (no dead options).
+_SQL_CENTER_RESULT_COUNTS = """
+SELECT rc.center_id AS code, COUNT(DISTINCT r.result_code) AS n
+FROM results_center rc
+JOIN result r ON r.id = rc.result_id
+WHERE rc.is_active = 1 AND r.is_active = 1 AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
+  AND r.result_type_id IN (2, 7, 10)
+GROUP BY rc.center_id
+"""
+
+_SQL_PROGRAM_RESULT_COUNTS = """
+SELECT i.official_code AS code, COUNT(DISTINCT r.result_code) AS n
+FROM results_by_inititiative rbi
+JOIN clarisa_initiatives i ON i.id = rbi.inititiative_id
+JOIN result r ON r.id = rbi.result_id
+WHERE rbi.is_active = 1 AND rbi.initiative_role_id IN (1, 2)
+  AND r.is_active = 1 AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
+  AND r.result_type_id IN (2, 7, 10)
+GROUP BY i.official_code
+"""
+
+_catalog_cache: dict[str, Any] = {}
+
+
+def _clean(text: Optional[str]) -> str:
+    return (text or "").replace("\xa0", " ").strip()
+
+
+def _filter_catalog() -> dict[str, dict[str, dict[str, Any]]]:
+    """Every centre / program code the filters accept, with display names.
+
+    ``{"centers": {code: {acronym, name}}, "programs": {code: {short_name,
+    name, portfolio_id}}}``. Read from the snapshot (static), cached per DB
+    path. Raises sqlite3.Error / FileNotFoundError like the dashboard query.
+    """
+    cached = _catalog_cache.get(_PRMS_DB_PATH)
+    if cached is not None:
+        return cached
+    if not os.path.isfile(_PRMS_DB_PATH):
+        raise FileNotFoundError(f"PRMS database not found at: {_PRMS_DB_PATH}")
+    conn = sqlite3.connect(f"file:{_PRMS_DB_PATH}?mode=ro", uri=True)
+    try:
+        centers = {
+            str(code).strip().upper(): {"acronym": _clean(acr), "name": _clean(name)}
+            for code, acr, name in conn.execute(_SQL_FILTER_CATALOG_CENTERS).fetchall()
+            if code
+        }
+        programs = {
+            str(code).strip().upper(): {
+                "short_name": _clean(short),
+                "name": _clean(name),
+                "portfolio_id": pid,
+            }
+            for code, short, name, pid in conn.execute(_SQL_FILTER_CATALOG_PROGRAMS).fetchall()
+            if code and str(code).strip()
+        }
+    finally:
+        conn.close()
+    catalog = {"centers": centers, "programs": programs}
+    _catalog_cache[_PRMS_DB_PATH] = catalog
+    return catalog
+
+
+def normalize_codes(
+    raw: Optional[Sequence[str]], valid: Optional[set[str]] = None
+) -> tuple[list[str], list[str]]:
+    """Parse a ``centers`` / ``programs`` query value into a sorted code list.
+
+    Same contract as :func:`normalize_years`: repeated params and/or comma
+    lists, whitespace and case tolerated, duplicates collapse; returns
+    ``(codes, invalid_tokens)``. An empty list means "no filter". When
+    ``valid`` is given, unknown codes are reported as invalid; tokens with
+    characters a PRMS code never has are always invalid.
+    """
+    if not raw:
+        return [], []
+    codes: set[str] = set()
+    invalid: list[str] = []
+    for item in raw:
+        for token in str(item).split(","):
+            token = token.strip()
+            if not token:
+                continue
+            code = token.upper()
+            if len(code) > 20 or not all(ch.isalnum() or ch == "-" for ch in code):
+                invalid.append(token)
+            elif valid is not None and code not in valid:
+                invalid.append(token)
+            else:
+                codes.add(code)
+    if len(codes) > _MAX_FILTER_VALUES:
+        invalid.append(f"more than {_MAX_FILTER_VALUES} values")
+    return sorted(codes), invalid
+
+
+def _apply_entity_scope(
+    conn: sqlite3.Connection, centers: Sequence[str], programs: Sequence[str]
+) -> None:
+    """Restrict this connection's `result` to rows linked to the selection.
+
+    Must run on a fresh connection INSTEAD of :func:`_apply_phase_scope` (it
+    applies the same closed-phase rule itself). Creates:
+
+    * ``temp.dash_scope_ids`` — in-scope ``result.id``s (PRIMARY KEY);
+    * ``temp.result_unscoped`` — closed-phase rows, unfiltered (canon source);
+    * ``temp.result`` — closed-phase rows whose id is in scope.
+
+    Codes are bound parameters — never interpolated.
+    """
+    phase = ""
+    if not _INCLUDE_OPEN_PHASES:
+        ids = get_snapshot_info(_PRMS_DB_PATH).open_phase_ids
+        if ids:
+            phase = "version_id NOT IN (" + ", ".join(str(int(i)) for i in ids) + ")"
+
+    conds: list[str] = []
+    params: dict[str, str] = {}
+    if centers:
+        names = []
+        for i, code in enumerate(centers):
+            params[f"c{i}"] = code
+            names.append(f":c{i}")
+        conds.append(
+            "id IN (SELECT result_id FROM main.results_center "
+            f"WHERE is_active = 1 AND center_id IN ({', '.join(names)}))"
+        )
+    if programs:
+        names = []
+        for i, code in enumerate(programs):
+            params[f"p{i}"] = code
+            names.append(f":p{i}")
+        conds.append(
+            "id IN (SELECT rbi.result_id FROM main.results_by_inititiative rbi "
+            "JOIN main.clarisa_initiatives i ON i.id = rbi.inititiative_id "
+            "WHERE rbi.is_active = 1 AND rbi.initiative_role_id IN (1, 2) "
+            f"AND i.official_code IN ({', '.join(names)}))"
+        )
+    conn.execute("CREATE TEMP TABLE dash_scope_ids (id INTEGER PRIMARY KEY)")
+    conn.execute(
+        "INSERT INTO temp.dash_scope_ids SELECT id FROM main.result WHERE "
+        + " AND ".join(conds or ["0"]),
+        params,
+    )
+    where_phase = f" WHERE {phase}" if phase else ""
+    conn.execute(f"CREATE TEMP VIEW result_unscoped AS SELECT * FROM main.result{where_phase}")
+    conn.execute(
+        "CREATE TEMP VIEW result AS SELECT * FROM main.result WHERE "
+        + (f"{phase} AND " if phase else "")
+        + "id IN (SELECT id FROM temp.dash_scope_ids)"
+    )
+
+
+def _safe_catalog() -> dict[str, dict[str, dict[str, Any]]]:
+    try:
+        return _filter_catalog()
+    except (sqlite3.Error, FileNotFoundError):
+        return {"centers": {}, "programs": {}}
+
+
+def _bind_scope(sql: str, filtered: bool) -> str:
+    """Bind the canon tokens (see the section comment above)."""
+    if not filtered:
+        return sql.replace("__CAND_SRC__", "result").replace("__CANON_SCOPE__", "")
+    return sql.replace("__CAND_SRC__", "result_unscoped").replace(
+        "__CANON_SCOPE__", "AND l.id IN (SELECT id FROM temp.dash_scope_ids)"
+    )
+
+
+def _entity_list_words(codes: Sequence[str], names: dict[str, str], noun: tuple[str, str]) -> str:
+    """"CIMMYT", "CIMMYT + IITA", "CIMMYT, IITA + ILRI", "5 centres"."""
+    shown = [names.get(c, c) for c in codes]
+    if len(shown) <= 3:
+        return shown[0] if len(shown) == 1 else ", ".join(shown[:-1]) + " + " + shown[-1]
+    return f"{len(shown)} {noun[1]}"
+
+
+def filters_label(centers: Sequence[str], programs: Sequence[str]) -> str:
+    """"Centre: CIMMYT · Program: SP01" — '' when no centre/program filter."""
+    if not centers and not programs:
+        return ""
+    try:
+        catalog = _filter_catalog()
+    except (sqlite3.Error, FileNotFoundError):
+        catalog = {"centers": {}, "programs": {}}
+    parts = []
+    if centers:
+        names = {c: (v.get("acronym") or c) for c, v in catalog["centers"].items()}
+        word = "Centre" if len(centers) == 1 else "Centres"
+        parts.append(f"{word}: {_entity_list_words(centers, names, ('centre', 'centres'))}")
+    if programs:
+        word = "Program" if len(programs) == 1 else "Programs"
+        parts.append(f"{word}: {_entity_list_words(programs, {}, ('program', 'programs'))}")
+    return " · ".join(parts)
+
+
+def _era_hint(years: Sequence[int], programs: Sequence[str]) -> str:
+    """Friendly note when the program selection and the years are from different eras.
+
+    2025+ Science Programs/Accelerators (portfolio 3) only report from 2025;
+    2022–2024 Initiatives (portfolio 2) only report 2022–2024. Picking one era's
+    entity with only the other era's years legitimately gives (near) zero.
+    """
+    if not programs or not years:
+        return ""
+    try:
+        catalog = _filter_catalog()["programs"]
+    except (sqlite3.Error, FileNotFoundError):
+        return ""
+    eras = {catalog.get(p, {}).get("portfolio_id") for p in programs}
+    new_era_years = [y for y in years if y >= 2025]
+    old_era_years = [y for y in years if y <= 2024]
+    if 3 in eras and 2 not in eras and not new_era_years:
+        return (
+            "The selected Programs/Accelerators started in 2025, so the 2022–2024 "
+            "years selected have (almost) no results for them. Select 2025, or pick "
+            "the 2022–2024 Initiatives instead."
+        )
+    if 2 in eras and 3 not in eras and not old_era_years:
+        return (
+            "The selected Initiatives reported in 2022–2024; 2025 results belong to the "
+            "Programs & Accelerators. Select 2022–2024 years, or pick a 2025+ Program."
+        )
+    if 2 in eras and 3 in eras:
+        return (
+            "The selection mixes 2025+ Programs/Accelerators and 2022–2024 Initiatives; "
+            "each only has results in its own years."
+        )
+    return ""
+
+
+FILTER_SCOPE_NOTE = (
+    "Centre and Program/Accelerator filters keep the results the selected centres or "
+    "programs LEAD OR CONTRIBUTE TO (any active link in PRMS). A result linked to "
+    "several selected entities is counted once, so the per-centre or per-program "
+    "numbers do not add up to the portfolio total. Within one filter several "
+    "selections are combined (either/or); Years, Centres and Programs are combined "
+    "with AND. The counting method itself does not change."
+)
+
+
+# ---------------------------------------------------------------------------
 # Method notes (client asks: Allison Poulos 18-Sep, Nicoleta Trifa 14-Sep)
 # ---------------------------------------------------------------------------
 # Returned with every payload under ``method`` and shown in the dashboard's info
@@ -188,7 +484,7 @@ _SQL_TOTAL_INNOVATIONS = """
 WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
 cand AS (
     SELECT r.result_code, r.id, r.result_type_id, o.o AS phord
-    FROM result r JOIN ord o ON o.v = r.version_id
+    FROM __CAND_SRC__ r JOIN ord o ON o.v = r.version_id
     WHERE r.source = 'Result'
       AND r.is_active = 1 AND r.status_id = 2
 ),
@@ -200,6 +496,7 @@ latest AS (
 canon AS (
     SELECT l.* FROM latest l
     WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
+      __CANON_SCOPE__
 )
 SELECT COUNT(*) FROM canon WHERE result_type_id = 7;
 """
@@ -291,7 +588,7 @@ _SQL_RESULTS_BY_TYPE = f"""
 WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
 cand AS (
     SELECT r.result_code, r.id, r.result_type_id, o.o AS phord
-    FROM result r JOIN ord o ON o.v = r.version_id
+    FROM __CAND_SRC__ r JOIN ord o ON o.v = r.version_id
     WHERE r.source = 'Result'
       AND r.is_active = 1 AND r.status_id = 2
 ),
@@ -303,6 +600,7 @@ latest AS (
 canon AS (
     SELECT l.* FROM latest l
     WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
+      __CANON_SCOPE__
 )
 SELECT 'Innovation Development' AS type,
     (SELECT COUNT(*) FROM canon WHERE result_type_id = 7) +
@@ -352,7 +650,7 @@ _SQL_TOP_COUNTRIES = """
 WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
 cand AS (
     SELECT r.result_code, r.id, r.result_type_id, o.o AS phord
-    FROM result r JOIN ord o ON o.v = r.version_id
+    FROM __CAND_SRC__ r JOIN ord o ON o.v = r.version_id
     WHERE r.source = 'Result' AND r.is_active = 1 AND r.status_id = 2
 ),
 pick AS (SELECT result_code, MAX(phord) AS m FROM cand GROUP BY result_code),
@@ -363,6 +661,7 @@ latest AS (
 canon_w12 AS (
     SELECT l.result_code, l.id, l.result_type_id FROM latest l
     WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
+      __CANON_SCOPE__
 ),
 canon_bilateral AS (
     SELECT r.result_code, MAX(r.id) AS id, 7 AS result_type_id
@@ -426,7 +725,7 @@ _SQL_IRL_DISTRIBUTION = """
 WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
 cand AS (
     SELECT r.result_code, r.id, r.result_type_id, o.o AS phord
-    FROM result r JOIN ord o ON o.v = r.version_id
+    FROM __CAND_SRC__ r JOIN ord o ON o.v = r.version_id
     WHERE r.source = 'Result' AND r.is_active = 1 AND r.status_id = 2
 ),
 pick AS (SELECT result_code, MAX(phord) AS m FROM cand GROUP BY result_code),
@@ -437,6 +736,7 @@ latest AS (
 canon_w12 AS (
     SELECT l.result_code, l.id, l.result_type_id FROM latest l
     WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
+      __CANON_SCOPE__
 ),
 canon_bilateral AS (
     SELECT r.result_code, MAX(r.id) AS id, 7 AS result_type_id
@@ -494,7 +794,7 @@ _SQL_TOP_INITIATIVES = """
 WITH ord(v, o) AS (VALUES (1, 0), (3, 1), (4, 2), (6, 3)),
 cand AS (
     SELECT r.result_code, r.id, r.result_type_id, o.o AS phord
-    FROM result r JOIN ord o ON o.v = r.version_id
+    FROM __CAND_SRC__ r JOIN ord o ON o.v = r.version_id
     WHERE r.source = 'Result' AND r.is_active = 1 AND r.status_id = 2
 ),
 pick AS (SELECT result_code, MAX(phord) AS m FROM cand GROUP BY result_code),
@@ -505,6 +805,7 @@ latest AS (
 canon_w12 AS (
     SELECT l.result_code, l.id, l.result_type_id FROM latest l
     WHERE l.id = (SELECT MAX(l2.id) FROM latest l2 WHERE l2.result_code = l.result_code)
+      __CANON_SCOPE__
 ),
 canon_bilateral AS (
     SELECT r.result_code, MAX(r.id) AS id, 7 AS result_type_id
@@ -979,7 +1280,11 @@ def years_label(years: Sequence[int]) -> str:
 # ---------------------------------------------------------------------------
 # Core: fetch all dashboard data from the PRMS database
 # ---------------------------------------------------------------------------
-def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
+def _fetch_prms_data(
+    years: Optional[Sequence[int]] = None,
+    centers: Optional[Sequence[str]] = None,
+    programs: Optional[Sequence[str]] = None,
+) -> dict[str, Any]:
     """Connect to the PRMS SQLite database and run all dashboard queries.
 
     Args:
@@ -994,6 +1299,13 @@ def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
             (countries, IRL, programmes, type) use the same scope.
             An empty/None selection returns the all-years portfolio view
             (headline = 1,852).
+        centers: CGIAR centre codes (``clarisa_center.code``, e.g.
+            "CENTER-05"); keeps results any selected centre leads OR
+            contributes to. Empty/None = no centre filter.
+        programs: Program/Accelerator/Initiative official codes ("SP01",
+            "INIT-11"); keeps results any selected entity leads OR contributes
+            to. Empty/None = no program filter. See the "CGIAR Centre +
+            Program/Accelerator filters" section for the exact semantics.
 
     Returns the full API response dict. Raises FileNotFoundError if the
     database file does not exist, and sqlite3.Error on query failures.
@@ -1004,15 +1316,29 @@ def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
     selected = sorted(years or ())
     is_year = bool(selected)
     params: Optional[dict[str, int]] = _year_params(selected) if is_year else None
-    label_suffix = f" ({years_label(selected)})" if is_year else ""
+    sel_centers = sorted(centers or ())
+    sel_programs = sorted(programs or ())
+    filtered = bool(sel_centers or sel_programs)
+    entity_label = filters_label(sel_centers, sel_programs)
+    # Chart titles state the whole active scope; with no centre/program filter
+    # this is exactly the old year-only suffix.
+    suffix_parts = ([years_label(selected)] if is_year else []) + (
+        [entity_label] if filtered else []
+    )
+    label_suffix = f" ({' · '.join(suffix_parts)})" if suffix_parts else ""
 
     def sql(text: str) -> str:
         """Bind the __YEARS__ token for year-scoped SQL; pass others through."""
+        text = _bind_scope(text, filtered)
         return _bind_years(text, selected) if is_year else text
 
     conn = sqlite3.connect(f"file:{_PRMS_DB_PATH}?mode=ro", uri=True)
     try:
-        _apply_phase_scope(conn)  # closed reporting phases only (see top of file)
+        if filtered:
+            # closed phases + rows linked to the selected centres/programs
+            _apply_entity_scope(conn, sel_centers, sel_programs)
+        else:
+            _apply_phase_scope(conn)  # closed reporting phases only (see top of file)
         cur = conn.cursor()
 
         # -- KPIs (each wrapped individually so partial results are possible) --
@@ -1156,6 +1482,11 @@ def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
             )
             if era_note:
                 description += f" · {era_note}"
+            if filtered:
+                description += (
+                    " · bars rank the LEAD program of the results in the current "
+                    "Centre/Program filter"
+                )
             charts["top_initiatives"] = {
                 "chartType": "horizontalBar",
                 "title": f"Top 10 {noun} by Innovations{label_suffix}",
@@ -1176,6 +1507,21 @@ def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
             "year": selected[0] if len(selected) == 1 else None,
             "years": selected,
             "years_label": years_label(selected),
+            # Centre / Program filters (Marc Schut, 2026-10-08). `scope_label`
+            # is the whole active scope in words for the page header, e.g.
+            # "2025 · Centre: CIMMYT · Program: SP01".
+            "filters": {
+                "centers": [
+                    {"code": c, "label": (_safe_catalog()["centers"].get(c, {}).get("acronym") or c)}
+                    for c in sel_centers
+                ],
+                "programs": [{"code": p, "label": p} for p in sel_programs],
+                "label": entity_label,
+                "era_hint": _era_hint(selected, sel_programs),
+            },
+            "scope_label": " · ".join(
+                [years_label(selected)] + ([entity_label] if filtered else [])
+            ),
             "last_updated": datetime.now(tz=timezone.utc).isoformat(),
             # Which PRMS snapshot produced these numbers (date is data, not prose).
             "snapshot": get_snapshot_info(_PRMS_DB_PATH).to_dict(),
@@ -1190,6 +1536,7 @@ def _fetch_prms_data(years: Optional[Sequence[int]] = None) -> dict[str, Any]:
                 "quality_gate": QUALITY_GATE_NOTE,
                 "bilateral_qa": BILATERAL_QA_NOTE,
                 "scope": ALL_YEARS_NOTE if not is_year else YEAR_SCOPE_NOTE,
+                "filters": FILTER_SCOPE_NOTE,
             },
         }
     finally:
@@ -1239,6 +1586,18 @@ async def prms_dashboard_stats(
         description="Deprecated single-year alias, kept for backward "
         "compatibility. Ignored when `years` is supplied.",
     ),
+    centers: Optional[list[str]] = Query(
+        None,
+        description="CGIAR centre codes (clarisa_center.code, e.g. CENTER-05; "
+        "repeat and/or comma list). Keeps results any selected centre LEADS OR "
+        "CONTRIBUTES TO. Omit for no centre filter.",
+    ),
+    programs: Optional[list[str]] = Query(
+        None,
+        description="Program/Accelerator/Initiative official codes (SP01, "
+        "INIT-11; repeat and/or comma list). Keeps results any selected entity "
+        "LEADS OR CONTRIBUTES TO. Omit for no program filter.",
+    ),
 ):
     """Return PRMS dashboard KPIs and chart data.
 
@@ -1277,7 +1636,42 @@ async def prms_dashboard_stats(
             )
         selected = [year]
 
-    cache_key: Any = tuple(selected)  # () for all-years, else the sorted years
+    # Centre / Program filters — validated against the snapshot's own codes.
+    # (A direct Python call leaves the Query(...) defaults in place: ignore them.)
+    centers = centers if isinstance(centers, (list, tuple)) else None
+    programs = programs if isinstance(programs, (list, tuple)) else None
+    sel_centers: list[str] = []
+    sel_programs: list[str] = []
+    if centers or programs:
+        try:
+            catalog = _filter_catalog()
+        except (sqlite3.Error, FileNotFoundError) as exc:
+            logger.error("PRMS filter catalog unavailable: %s", exc)
+            return JSONResponse(
+                status_code=503,
+                content={"error": "PRMS database unavailable", "detail": str(exc)},
+            )
+        sel_centers, bad_centers = normalize_codes(centers, set(catalog["centers"]))
+        sel_programs, bad_programs = normalize_codes(programs, set(catalog["programs"]))
+        if bad_centers or bad_programs:
+            rejected = (
+                [f"centers: {bad_centers}"] if bad_centers else []
+            ) + ([f"programs: {bad_programs}"] if bad_programs else [])
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Invalid filter",
+                    "detail": "Unknown centre/program code(s) — use the values from "
+                    "/api/dashboard/filter-options; rejected " + "; ".join(rejected) + ".",
+                },
+            )
+
+    # () for all-years without filters (unchanged); filters extend the key.
+    cache_key: Any = (
+        tuple(selected)
+        if not (sel_centers or sel_programs)
+        else (tuple(selected), tuple(sel_centers), tuple(sel_programs))
+    )
 
     # Return cached data if still fresh
     now = time.monotonic()
@@ -1288,7 +1682,10 @@ async def prms_dashboard_stats(
     # thread: a slow all-years query must never freeze every chat stream and
     # health check on the event loop (L2-12).
     try:
-        data = await asyncio.to_thread(_fetch_prms_data, selected)
+        if sel_centers or sel_programs:
+            data = await asyncio.to_thread(_fetch_prms_data, selected, sel_centers, sel_programs)
+        else:
+            data = await asyncio.to_thread(_fetch_prms_data, selected)
     except FileNotFoundError as exc:
         logger.error("PRMS database unavailable: %s", exc)
         return JSONResponse(
@@ -1312,4 +1709,93 @@ async def prms_dashboard_stats(
     _cache[cache_key] = data
     _cache_ts[cache_key] = now
 
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Filter options for the Centre / Program dropdowns
+# ---------------------------------------------------------------------------
+_options_cache: dict[str, Any] = {}
+_OPTIONS_TTL = 900.0  # 15 minutes, like /api/scope/options
+
+
+def _load_filter_options() -> dict[str, Any]:
+    """Centres + programs that have at least one linked quality-assured result.
+
+    Programs reuse the chat scope loader (``synapsis.routes.scope._load_programs``)
+    so the dashboard and the chat filter bar list the same entities, labels and
+    era groups. Only entities with linked results (any role, closed phases,
+    quality-assured innovation types) are offered, so no option is dead.
+    """
+    from synapsis.routes.scope import _load_programs
+
+    programs, source = _load_programs()
+    catalog = _filter_catalog()
+    conn = sqlite3.connect(f"file:{_PRMS_DB_PATH}?mode=ro", uri=True)
+    try:
+        _apply_phase_scope(conn)
+        center_counts = {str(c).upper(): int(n) for c, n in conn.execute(_SQL_CENTER_RESULT_COUNTS)}
+        program_counts = {str(c).upper(): int(n) for c, n in conn.execute(_SQL_PROGRAM_RESULT_COUNTS)}
+    finally:
+        conn.close()
+
+    centers = []
+    for code, info in catalog["centers"].items():
+        n = center_counts.get(code, 0)
+        if n <= 0:
+            continue
+        acronym = info.get("acronym") or code
+        name = info.get("name") or ""
+        centers.append(
+            {"code": code, "acronym": acronym, "name": name,
+             "label": f"{acronym} — {name}" if name and name != acronym else acronym,
+             "results": n}
+        )
+    centers.sort(key=lambda c: (c["acronym"].lower(), c["code"]))
+
+    era_order = {_ERA_LABELS[3]: 0, _ERA_LABELS[2]: 1}
+    program_opts = [
+        {**p, "results": program_counts.get(p["code"].upper(), 0)}
+        for p in programs
+        if program_counts.get(p["code"].upper(), 0) > 0 or source == "fallback"
+    ]
+    prefix_order = {"SP": 0, "INIT-": 1, "PLAT-": 2, "SGP-": 3}
+
+    def _prefix_rank(code: str) -> int:
+        return next((v for k, v in prefix_order.items() if code.startswith(k)), 9)
+
+    program_opts.sort(
+        key=lambda p: (era_order.get(p.get("era"), 2), _prefix_rank(p["code"]), p["code"])
+    )
+    return {"centers": centers, "programs": program_opts, "source": source}
+
+
+@router.get("/dashboard/filter-options")
+async def dashboard_filter_options():
+    """Values for the dashboard's Centre and Program/Accelerator dropdowns.
+
+    Response::
+
+        {"centers": [{"code": "CENTER-05", "acronym": "CIMMYT", "name": "...",
+                      "label": "CIMMYT — ...", "results": 438}, ...],
+         "programs": [{"code": "SP01", "label": "SP01 — Breeding for Tomorrow",
+                       "era": "Programs & Accelerators (2025+)", "results": 233}, ...],
+         "source": "prms" | "fallback"}
+
+    ``results`` = distinct quality-assured innovation result codes linked to the
+    entity in any closed phase (all years) — for ordering/context only.
+    """
+    now = time.monotonic()
+    cached = _options_cache.get(_PRMS_DB_PATH)
+    if cached and (now - cached["ts"]) < _OPTIONS_TTL:
+        return cached["data"]
+    try:
+        data = await asyncio.to_thread(_load_filter_options)
+    except (sqlite3.Error, FileNotFoundError) as exc:
+        logger.error("Dashboard filter options unavailable: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={"error": "PRMS database unavailable", "detail": str(exc)},
+        )
+    _options_cache[_PRMS_DB_PATH] = {"ts": now, "data": data}
     return data

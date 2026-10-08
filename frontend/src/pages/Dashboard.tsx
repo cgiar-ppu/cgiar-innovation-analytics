@@ -1,15 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
-import { Sprout, TrendingUp, Lightbulb, BookOpen, MessageSquare, Database, Bot, AlertTriangle, RefreshCw } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Sprout, TrendingUp, Lightbulb, BookOpen, MessageSquare, Database, Bot, AlertTriangle, RefreshCw, Info } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
 import { dashboardService } from '../services/dashboard';
 import StatsCard from '../components/dashboard/StatsCard';
 import YearMultiSelect, { yearsLabel } from '../components/dashboard/YearMultiSelect';
+import FilterMultiSelect, { type FilterOption } from '../components/dashboard/FilterMultiSelect';
 import { aboutFiguresTopic, bilateralTopic, scopeTopic } from '../components/dashboard/dashboardInfo';
 import Badge from '../components/common/Badge';
 import { InfoPopover } from '../components/common/InfoPopover';
 import { InteractiveChart } from '../components/chat/InteractiveChart';
-import type { PRMSDashboardData } from '../lib/types-extended';
+import type { PRMSDashboardData, PRMSDashboardFilterOptions } from '../lib/types-extended';
 import { useIsAdmin } from '../stores/appConfig';
 
 // Reporting-year selection (F7). An empty array means the all-years portfolio
@@ -29,20 +30,54 @@ export default function Dashboard() {
   const isAdmin = useIsAdmin();
 
   const [selectedYears, setSelectedYears] = useState<number[]>(DEFAULT_YEARS);
-  // Keep the latest selection available to the (memoized) fetcher.
+  // CGIAR Centre + Program/Accelerator filters (Marc Schut, 2026-10-08). Empty =
+  // no filter. A result is in scope when a selected centre/program LEADS OR
+  // CONTRIBUTES TO it; union within a filter, AND with the years.
+  const [selectedCentres, setSelectedCentres] = useState<string[]>([]);
+  const [selectedPrograms, setSelectedPrograms] = useState<string[]>([]);
+  // Keep the latest selection available to the (memoized) fetcher, so the
+  // 60-second "Live" refresh and the Refresh button use the same filters.
   const yearsRef = useRef<number[]>(selectedYears);
   yearsRef.current = selectedYears;
+  const entityRef = useRef({ centers: selectedCentres, programs: selectedPrograms });
+  entityRef.current = { centers: selectedCentres, programs: selectedPrograms };
+
+  // Dropdown options (centres; programs grouped by portfolio era). Loaded once.
+  const [filterOptions, setFilterOptions] = useState<PRMSDashboardFilterOptions | null>(null);
+  useEffect(() => {
+    let alive = true;
+    dashboardService
+      .getFilterOptions()
+      .then((o) => {
+        if (alive) setFilterOptions(o);
+      })
+      .catch(() => {
+        /* dropdowns stay disabled; the year filter keeps working */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const centreOptions = useMemo<FilterOption[]>(
+    () => (filterOptions?.centers ?? []).map((c) => ({ value: c.code, short: c.acronym, label: c.label })),
+    [filterOptions]
+  );
+  const programOptions = useMemo<FilterOption[]>(
+    () =>
+      (filterOptions?.programs ?? []).map((p) => ({ value: p.code, short: p.code, label: p.label, group: p.era })),
+    [filterOptions]
+  );
 
   // No fallback data (L2-13 / L4-02): until the backend answers, the page shows
   // a skeleton; if it cannot answer, a "data unavailable" state. The dashboard
   // never shows numbers the backend did not produce.
   const { data: prmsData, isLive, refetch, loading, lastSuccessAt } = useApi<PRMSDashboardData | null>(
-    () => dashboardService.getPRMSStats(yearsRef.current),
+    () => dashboardService.getPRMSStats(yearsRef.current, entityRef.current),
     null,
     { interval: 60000 }
   );
 
-  // Re-fetch whenever the user changes the year filter.
+  // Re-fetch whenever the user changes the year, centre or program filter.
   const didMount = useRef(false);
   useEffect(() => {
     if (!didMount.current) {
@@ -50,12 +85,35 @@ export default function Dashboard() {
       return;
     }
     refetch();
-  }, [selectedYears, refetch]);
+  }, [selectedYears, selectedCentres, selectedPrograms, refetch]);
 
   const controls = (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-wrap items-center justify-end gap-2">
       {/* Year filter — "All years" + multiselect (F7) */}
       <YearMultiSelect value={selectedYears} onChange={setSelectedYears} disabled={loading} />
+      {/* Centre + Program/Accelerator filters — lead OR contribute */}
+      <FilterMultiSelect
+        name="Centres"
+        allLabel="All centres"
+        plural="centres"
+        options={centreOptions}
+        value={selectedCentres}
+        onChange={setSelectedCentres}
+        disabled={loading}
+        testId="dashboard-centre"
+        menuWidth="w-96"
+      />
+      <FilterMultiSelect
+        name="Programs"
+        allLabel="All programs"
+        plural="programs"
+        options={programOptions}
+        value={selectedPrograms}
+        onChange={setSelectedPrograms}
+        disabled={loading}
+        testId="dashboard-program"
+        menuWidth="w-96"
+      />
       <InfoPopover topic={scopeTopic(prmsData)} align="right" />
       <button
         onClick={refetch}
@@ -122,6 +180,19 @@ export default function Dashboard() {
   // The active selection, stated in words. Prefer the server's own label so the
   // header can never disagree with the numbers underneath it.
   const scopeLabel = prmsData.years_label ?? yearsLabel(selectedYears);
+  // Whole scope (years + centre/program filters) for the page header.
+  const fullScopeLabel = prmsData.scope_label ?? scopeLabel;
+  const entityFilterLabel = prmsData.filters?.label ?? '';
+  const eraHint = prmsData.filters?.era_hint ?? '';
+  // "CIMMYT or IITA and by SP01" — OR within a filter, AND across filters.
+  const anyOf = (names: string[], noun: string) =>
+    names.length > 3 ? `any of ${names.length} selected ${noun}` : names.join(' or ');
+  const entityWords = [
+    anyOf((prmsData.filters?.centers ?? []).map((c) => c.label), 'centres'),
+    anyOf((prmsData.filters?.programs ?? []).map((p) => p.label), 'programs'),
+  ]
+    .filter(Boolean)
+    .join(' and by ');
   const shownYears = prmsData.years ?? selectedYears;
   const isAllYears = shownYears.length === 0;
 
@@ -175,7 +246,7 @@ export default function Dashboard() {
               Developments (the card below); total_results also counts use and
               packages, so it is labelled as such rather than as innovations. */}
           <p className="text-sm text-[var(--text-muted)] mt-1" data-testid="dashboard-headline">
-            CGIAR innovation portfolio · {scopeLabel} — {fmt(kpis.total_innovations)} innovations ·{' '}
+            CGIAR innovation portfolio · {fullScopeLabel} — {fmt(kpis.total_innovations)} innovations ·{' '}
             {fmt(kpis.total_results)} innovation results (development, use and packages) across{' '}
             {fmt(kpis.countries_covered)} countries
           </p>
@@ -191,6 +262,33 @@ export default function Dashboard() {
         </div>
         {controls}
       </div>
+
+      {/* Centre / Program filter context: what the filter means, and a friendly
+          hint when the program era and the years do not overlap. */}
+      {entityFilterLabel && (
+        <div
+          className="flex items-start gap-2 px-4 py-2.5 rounded-xl border border-[#427730]/30 bg-[#427730]/5 text-xs text-[var(--text)]"
+          data-testid="dashboard-filter-note"
+        >
+          <Info className="w-4 h-4 text-[#427730] shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p>
+              Showing results <strong>led or contributed to</strong> by {entityWords}. A result linked to several selected
+              centres or programs is counted once, so these numbers do not add up across centres or programs.
+            </p>
+            {eraHint && (
+              <p className="text-amber-600 dark:text-amber-400" data-testid="dashboard-era-hint">
+                {eraHint}
+              </p>
+            )}
+            {!eraHint && kpis.total_results === 0 && (
+              <p className="text-amber-600 dark:text-amber-400" data-testid="dashboard-empty-hint">
+                No quality-assured innovation results match this combination of years, centres and programs.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
