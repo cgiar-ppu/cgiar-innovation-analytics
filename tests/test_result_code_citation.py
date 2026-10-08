@@ -23,6 +23,8 @@ from synapsis.tools.result_code_citation import (
     PUBLIC_IPSR_REPORT_TEMPLATE,
     PUBLIC_RESULT_REPORT_TEMPLATE,
     PUBLIC_RESULTS_DASHBOARD,
+    GATED_LINK_NOTE,
+    REPORT_UNAVAILABLE_NOTE,
     UNKNOWN_CODE_NOTE,
     assert_no_session_gated_url,
     get_result_link,
@@ -32,6 +34,8 @@ from synapsis.tools.result_code_citation import (
     linkify_result_codes_report,
     normalize_result_code,
     resolve_result_code_url,
+    result_code_in_url,
+    result_code_status,
     use_citation_db_path,
 )
 
@@ -160,45 +164,83 @@ def test_bilateral_and_open_phase_only_codes(snapshot):
 def test_broken_ipsr_phase_is_skipped_for_a_later_working_phase(snapshot):
     # QA'd in IPSR 2024 (broken report) but also present in IPSR 2025 → v7.
     assert resolve_result_code_url(14935) == I.format(14935, 7)
-    assert get_result_link(14935).dashboard_fallback is False
+    assert get_result_link(14935).report_unavailable is False
 
 
-def test_code_only_in_broken_ipsr_phases_falls_back_to_the_dashboard(snapshot):
-    dash = "https://www.cgiar.org/food-security-impact/results-dashboard/?result_code={}"
+def test_code_only_in_broken_ipsr_phases_is_not_linked_and_never_to_the_dashboard(snapshot):
     for code in (16106, 8271):
-        url = resolve_result_code_url(code)
-        assert url == dash.format(code)
-        assert get_result_link(code).dashboard_fallback is True
-        assert not is_session_gated_url(url)
+        assert resolve_result_code_url(code) is None
+        assert result_code_status(code) == ("report_unavailable", None)
+        link = get_result_link(code)
+        assert link.report_unavailable is True and link.url is None
+        # the canonical PRMS address is still known (for QA / when PRMS fixes it)
+        assert link.report_url == I.format(code, 5 if code == 16106 else 2)
 
 
-def test_fallback_codes_stay_clickable_and_are_not_flagged(snapshot):
-    report = linkify_result_codes_report("Packages [R16106] and R8271 and R14935.")
-    assert "[R16106](https://www.cgiar.org/food-security-impact/results-dashboard/?result_code=16106)" in report.text
-    assert "[R8271](https://www.cgiar.org/food-security-impact/results-dashboard/?result_code=8271)" in report.text
-    assert f"[R14935]({I.format(14935, 7)})" in report.text
-    assert report.unknown == [] and UNKNOWN_CODE_NOTE not in report.text
-    assert linkify_result_codes(report.text) == report.text  # idempotent
+def test_unavailable_codes_get_an_honest_note_once_and_no_link(snapshot):
+    report = linkify_result_codes_report(
+        "Packages [R16106] and R8271 and R14935; again R16106 and result code 8271."
+    )
+    t = report.text
+    assert f"R16106 ({REPORT_UNAVAILABLE_NOTE}) and R8271 ({REPORT_UNAVAILABLE_NOTE})" in t
+    assert t.count(REPORT_UNAVAILABLE_NOTE) == 2          # first mention only
+    assert "again R16106 and result code 8271." in t
+    assert f"[R14935]({I.format(14935, 7)})" in t
+    assert "results-dashboard" not in t and "](" in t
+    assert report.unknown == [] and UNKNOWN_CODE_NOTE not in t
+    assert sorted(report.unavailable) == ["16106", "8271"]
+    assert linkify_result_codes(t) == t  # idempotent
 
 
-def test_no_link_ever_targets_a_known_broken_prms_report(snapshot):
+def test_unavailable_code_as_link_target_and_in_a_table(snapshot):
+    out = linkify_result_codes(
+        "A [seed package](R16106) here.\n\n| Result code | Name |\n|---|---|\n| 16106 | Seed |\n| 1003 | Dairy |\n"
+    )
+    assert f"A seed package (R16106, {REPORT_UNAVAILABLE_NOTE}) here." in out
+    assert "| R16106 | Seed |" in out                       # already noted above: no repeat
+    assert f"| [R1003]({R.format(1003, 6)}) | Dairy |" in out
+    assert linkify_result_codes(out) == out
+
+
+def test_env_override_clears_the_broken_phases(snapshot, monkeypatch):
+    monkeypatch.setenv(rcc.BROKEN_PHASES_ENV, "")
+    assert resolve_result_code_url(16106) == I.format(16106, 5)
+    assert resolve_result_code_url(8271) == I.format(8271, 2)
+    monkeypatch.setenv(rcc.BROKEN_PHASES_ENV, "2, 5")
+    assert resolve_result_code_url(16106) is None
+    monkeypatch.setenv(rcc.BROKEN_PHASES_ENV, "garbage")
+    assert rcc.broken_report_phases() == rcc.PRMS_BROKEN_IPSR_REPORT_PHASES
+
+
+def test_no_link_ever_targets_a_known_broken_prms_report_or_the_dashboard(snapshot):
     from synapsis.tools.result_code_citation import PRMS_BROKEN_IPSR_REPORT_PHASES
 
     for code in {str(r[1]) for r in _RESULTS}:
         url = resolve_result_code_url(code)
+        if url is None:
+            continue
+        assert is_public_prms_report_url(url), url
+        assert "results-dashboard" not in url
         for phase in PRMS_BROKEN_IPSR_REPORT_PHASES:
             assert not url.endswith(f"ipsr-details/{code}?phase={phase}"), url
+
+
+def test_every_code_in_the_snapshot_is_a_report_link_or_honestly_unavailable(snapshot):
+    for code in {str(r[1]) for r in _RESULTS}:
+        status, url = result_code_status(code)
+        assert status in ("linked", "report_unavailable"), (code, status)
+        assert (url is not None) == (status == "linked")
 
 
 def test_unknown_code_is_never_guessed(snapshot):
     assert resolve_result_code_url(999999) is None
     assert get_result_link("R999999") is None
+    assert result_code_status(999999) == ("unknown", None)
 
 
-def test_snapshot_unavailable_falls_back_to_public_dashboard(no_snapshot):
-    url = resolve_result_code_url(1003)
-    assert url.startswith(PUBLIC_RESULTS_DASHBOARD)
-    assert not is_session_gated_url(url)
+def test_snapshot_unavailable_never_falls_back_to_the_dashboard(no_snapshot):
+    assert resolve_result_code_url(1003) is None
+    assert result_code_status(1003) == ("no_snapshot", None)
 
 
 def test_normalize():
@@ -262,6 +304,9 @@ def test_is_public_prms_report_url():
 def test_resolver_never_emits_session_gated_url(snapshot):
     for code, *_ in [(r[1],) for r in _RESULTS]:
         url = resolve_result_code_url(code)
+        if code in (16106, 8271):  # only broken IPSR phases: no link at all
+            assert url is None
+            continue
         assert url is not None
         assert not is_session_gated_url(url), f"gated URL for {code}: {url}"
 
@@ -351,6 +396,86 @@ def test_legacy_dashboard_links_are_upgraded(snapshot):
     assert linkify_result_codes(text) == f"[R188]({R.format(188, 4)}) radical"
 
 
+DASH = "https://www.cgiar.org/food-security-impact/results-dashboard"
+
+
+@pytest.mark.parametrize(
+    "written, expected",
+    [
+        # model-written dashboard deep link (the dashboard ignores the parameter)
+        (f"[R1003]({DASH}/?result_code=1003)", f"[R1003]({R.format(1003, 6)})"),
+        (f"[Dairy genomics]({DASH}?result_code=1003)", f"[Dairy genomics]({R.format(1003, 6)})"),
+        # dashboard HOME linked from a code
+        (f"[R11855]({DASH}/)", f"[R11855]({I.format(11855, 7)})"),
+        (f"[11855]({DASH})", f"[11855]({I.format(11855, 7)})"),
+        # hand-written report URL with the wrong route / a phase where the code is not
+        (f"[R11855]({R.format(11855, 7)})", f"[R11855]({I.format(11855, 7)})"),
+        (f"[R1003]({R.format(1003, 8)})", f"[R1003]({R.format(1003, 6)})"),
+        # no phase (would be gated) → resolved
+        ("[R1003](https://reporting.cgiar.org/reports/result-details/1003)", f"[R1003]({R.format(1003, 6)})"),
+        # IPSR 2024 (broken) for a code that has IPSR 2025 → v7
+        (f"[R14935]({I.format(14935, 5)})", f"[R14935]({I.format(14935, 7)})"),
+        # code with no working report at all → honest note, no link
+        (f"[R16106]({DASH}/?result_code=16106)", f"R16106 ({REPORT_UNAVAILABLE_NOTE})"),
+        (f"[Seed package]({I.format(16106, 5)})", f"Seed package (R16106, {REPORT_UNAVAILABLE_NOTE})"),
+        # bare URLs in prose
+        (f"See {DASH}/?result_code=1003 now", f"See {R.format(1003, 6)} now"),
+        (f"See <{DASH}/?result_code=11855>", f"See <{I.format(11855, 7)}>"),
+        (f"See {DASH}/?result_code=16106.", f"See R16106 ({REPORT_UNAVAILABLE_NOTE})."),
+        # unknown code on the dashboard → flagged, no dashboard link
+        (f"[R77777]({DASH}/?result_code=77777)", f"R77777 ({UNKNOWN_CODE_NOTE})"),
+    ],
+)
+def test_model_written_result_urls_are_rewritten_to_the_prms_report(snapshot, written, expected):
+    out = linkify_result_codes(written)
+    assert out == expected
+    assert linkify_result_codes(out) == out
+
+
+def test_hand_written_link_to_another_working_phase_is_kept(snapshot):
+    # the 2024 edition of R1003 is a real, working PRMS report: keep it
+    text = f"The 2024 report [R1003]({R.format(1003, 4)})."
+    assert linkify_result_codes(text) == text
+
+
+def test_portal_link_without_a_result_is_left_alone(snapshot):
+    text = f"Cross-check with the [CGIAR Results Dashboard]({DASH}/) and {DASH}."
+    assert linkify_result_codes(text) == text
+
+
+def test_marc_example_11180_in_a_real_snapshot_shape(snapshot, tmp_path):
+    # 11180: Innovation Package reported in IPSR 2023, 2024 and 2025 (as in the
+    # 13-Sep snapshot) → Marc's exact URL, never the broken 2023/2024 report.
+    import sqlite3 as _sq
+    with _sq.connect(snapshot) as conn:
+        conn.executemany("INSERT INTO result VALUES (?,?,?,?,?,?,?, 'x')", [
+            (11809, 11180, 2, 10, "Result", 2, 1),
+            (19913, 11180, 5, 10, "Result", 2, 1),
+            (29633, 11180, 7, 10, "Result", 2, 1),
+        ])
+    use_citation_db_path(str(snapshot))
+    assert resolve_result_code_url("R11180") == "https://reporting.cgiar.org/reports/ipsr-details/11180?phase=7"
+    out = linkify_result_codes(f"[R11180]({DASH}/?result_code=11180) and [R11180]({I.format(11180, 5)})")
+    assert out == f"[R11180]({I.format(11180, 7)}) and [R11180]({I.format(11180, 7)})"
+
+
+def test_result_code_in_url():
+    assert result_code_in_url(f"{DASH}/?result_code=1003") == "1003"
+    assert result_code_in_url(R.format(1003, 6)) == "1003"
+    assert result_code_in_url("https://reporting.cgiar.org/reports/ipsr-details/11180") == "11180"
+    assert result_code_in_url(DASH) is None
+    assert result_code_in_url("https://example.org/?result_code=1003") is None
+    assert result_code_in_url("https://reporting.cgiar.org/result/result-detail/1003/general-information") is None
+
+
+def test_gated_urls_are_never_emitted_even_when_the_code_is_known(snapshot):
+    gated = "https://reporting.cgiar.org/result/result-detail/1003/general-information?phase=6"
+    for text in (f"[R1003]({gated})", f"See {gated}", "https://prms.cgiar.org/result/1003"):
+        out = linkify_result_codes(text)
+        assert f"]({gated})" not in out and "](https://prms." not in out
+        assert GATED_LINK_NOTE in out
+
+
 def test_code_as_link_target_for_funder_prose(snapshot):
     out = linkify_result_codes("A [dairy genomics programme](R1003) in East Africa.")
     assert out == f"A [dairy genomics programme]({R.format(1003, 6)}) in East Africa."
@@ -403,14 +528,18 @@ def test_code_spans_fences_charts_and_urls_are_protected(snapshot):
     assert linkify_result_codes(text) == text
 
 
-def test_fallback_mode_links_to_dashboard_and_does_not_flag(no_snapshot):
+def test_no_snapshot_mode_leaves_codes_plain_and_does_not_flag(no_snapshot):
     report = linkify_result_codes_report("See [R1003] and R17.")
     assert report.index_available is False
-    assert "[R1003](https://www.cgiar.org/food-security-impact/results-dashboard/?result_code=1003)" in report.text
-    assert UNKNOWN_CODE_NOTE not in report.text
-    # the URL produced by the fallback must not be re-processed (it contains
-    # "result_code=1003")
-    assert report.text.count("](") == 2
+    assert report.text == "See R1003 and R17."
+    assert UNKNOWN_CODE_NOTE not in report.text and "results-dashboard" not in report.text
+
+
+def test_no_snapshot_mode_drops_dashboard_links_for_results(no_snapshot):
+    out = linkify_result_codes(
+        "[R1003](https://www.cgiar.org/food-security-impact/results-dashboard/?result_code=1003)"
+    )
+    assert out == "R1003"
 
 
 def test_linkify_empty_and_none():

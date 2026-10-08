@@ -30,7 +30,9 @@ WHAT IT CHECKS (one JSON line on stdout; exit 1 if any check FAILS)
   admin_usage       /api/admin/usage 401 anonymous / 403 researcher / 200 admin
   removed_routes    Synapsis leftover routers answer 404 even for an admin
   security_headers  HSTS, nosniff, X-Frame-Options, Referrer-Policy, frame-ancestors, CSP
-  citation_mapping  result code -> public PRMS report URL pattern for 2 known codes
+  citation_mapping  result code -> public PRMS report URL pattern for 3 known codes (incl.
+                    Marc's 11180), a dashboard link is rewritten to the report, an
+                    IPSR-2024-only code gets the honest note, never the dashboard
   personas          the persona picker lists the two audience personas first
   prms_stats        the dashboard API answers with no KPI errors and consistent totals
   exports           md/html/docx of a seeded answer: 200, watermark, snapshot data-as-of
@@ -76,7 +78,9 @@ from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
 BASE = 'http://localhost:7780'
 REQUIRE = {x.strip().upper() for x in os.environ.get('IA_QA_REQUIRE', '').split(',') if x.strip()}
-KNOWN_CODES = {'1003': 'result-details', '11855': 'ipsr-details'}   # public-report pattern per code
+KNOWN_CODES = {'1003': 'result-details', '11855': 'ipsr-details',  # public-report pattern per code
+               '11180': 'ipsr-details'}                              # Marc's example (8 Oct)
+IPSR_2024_ONLY_CODE = '16106'   # only in IPSR 2024, whose PRMS report fails: honest note, never the dashboard
 FIXTURE_CODES = ('1003', '14935')                                  # linked at "save" time
 LEGACY_BARE_CODE = '11855'                                          # left bare: linked at export (Lane C)
 REMOVED_ROUTES = ('/api/memories', '/api/workflows', '/api/workflow-runs', '/api/fleet', '/api/git/status',
@@ -379,6 +383,14 @@ class QA:
             out[code] = url
         assert resolve_result_code_url('9999999') is None, 'unknown code resolved'
         assert 'not found in the PRMS snapshot' in linkify_result_codes('[R9999999]'), 'unknown code not flagged'
+        # Marc, 8 Oct: ALWAYS the PRMS PDF report, never the generic dashboard.
+        assert out['11180'].endswith('/reports/ipsr-details/11180?phase=7'), out['11180']
+        dash = 'https://www.cgiar.org/food-security-impact/results-dashboard/?result_code=1003'
+        assert linkify_result_codes(f'[R1003]({dash})') == f"[R1003]({out['1003']})", 'dashboard link not rewritten'
+        if resolve_result_code_url(IPSR_2024_ONLY_CODE) is None:
+            note = linkify_result_codes(f'[R{IPSR_2024_ONLY_CODE}]')
+            assert 'PRMS report currently unavailable' in note and 'results-dashboard' not in note, note
+            out[IPSR_2024_ONLY_CODE] = 'PRMS report currently unavailable (IPSR 2024 report broken PRMS-side)'
         return out
 
     async def c_personas(self):

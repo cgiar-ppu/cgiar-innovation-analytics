@@ -526,10 +526,13 @@ across years). Format the citation as a bracketed token so it renders as a link:
 cells are these `[R…]` citations.
 
 **Links.** Emit the bare `[R<code>]` token and never hand-write a URL: the
-platform links each code to its public PRMS result report
-(`reporting.cgiar.org/reports/result-details/<code>?phase=<n>`, no login needed)
-for the right phase. Never link other `reporting.cgiar.org` pages or
-`prms.cgiar.org` — those are the logged-in PRMS application.
+platform links each code to its PRMS-generated PDF report
+(`reporting.cgiar.org/reports/result-details/<code>?phase=<n>`, or
+`…/reports/ipsr-details/<code>?phase=<n>` for Innovation Packages / IPSR
+results; no login needed) for the right phase. Never link other
+`reporting.cgiar.org` pages or `prms.cgiar.org` — those are the logged-in PRMS
+application — and never give the CGIAR Results Dashboard as the link or source
+of a specific result (it cannot open one result).
 
 ## Output Guidelines
 - Present numbers precisely — never round unless explicitly asked
