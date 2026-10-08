@@ -1,7 +1,7 @@
 {
-  "stage": "staging",
+  "stage": "prod",
   "sha": "e42d6ad8786349305db9f91b990bb1bf8990ea66",
-  "sequence": 21,
+  "sequence": 22,
   "rotate_secrets": [],
   "models_config": {
     "model": "claude-sonnet-5",
