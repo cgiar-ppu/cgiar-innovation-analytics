@@ -16,7 +16,11 @@ import type { PRMSDashboardData } from '../../lib/types-extended'
 const getPRMSStats = vi.fn()
 
 vi.mock('../../services/dashboard', () => ({
-  dashboardService: { getPRMSStats: (...args: unknown[]) => getPRMSStats(...args) },
+  dashboardService: {
+    getPRMSStats: (...args: unknown[]) => getPRMSStats(...args),
+    // Centre / Program dropdown options (covered in DashboardFilters.test.tsx).
+    getFilterOptions: () => Promise.resolve({ centers: [], programs: [], source: 'prms' }),
+  },
 }))
 // Charts are covered elsewhere; keep this test about numbers and wording.
 vi.mock('../../components/chat/InteractiveChart', () => ({

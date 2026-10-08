@@ -428,7 +428,7 @@ class TestMethodNotes:
     @requires_prms_db
     def test_payload_carries_method_and_snapshot(self):
         data = _fetch_prms_data(years=None)
-        assert set(data["method"]) == {"data_source", "quality_gate", "bilateral_qa", "scope"}
+        assert set(data["method"]) == {"data_source", "quality_gate", "bilateral_qa", "scope", "filters"}
         assert data["method"]["scope"].startswith("'All years'")
         assert data["snapshot"]["extracted_on"] and data["snapshot"]["data_as_of"]
         assert data["kpi_errors"] == []

@@ -176,6 +176,25 @@ export interface PRMSMethodNotes {
   quality_gate: string;
   bilateral_qa: string;
   scope: string;
+  /** Centre / Program filter semantics (lead OR contribute; counted once). */
+  filters?: string;
+}
+
+/** Active Centre / Program filters as the backend applied them. */
+export interface PRMSDashboardFilters {
+  centers: { code: string; label: string }[];
+  programs: { code: string; label: string }[];
+  /** "Centre: CIMMYT · Program: SP01" — '' when no centre/program filter. */
+  label: string;
+  /** Friendly note when the program era and the years do not overlap. */
+  era_hint: string;
+}
+
+/** Values for the dashboard's Centre and Program/Accelerator dropdowns. */
+export interface PRMSDashboardFilterOptions {
+  centers: { code: string; acronym: string; name: string; label: string; results: number }[];
+  programs: { code: string; label: string; era: string; results: number }[];
+  source: 'prms' | 'fallback';
 }
 
 /** Which PRMS snapshot the backend read (mirrors synapsis/prms_snapshot.py). */
@@ -216,4 +235,8 @@ export interface PRMSDashboardData {
   method?: PRMSMethodNotes;
   /** KPI keys whose query failed; their value is null. */
   kpi_errors?: string[];
+  /** Active Centre / Program filters (absent on older backends). */
+  filters?: PRMSDashboardFilters;
+  /** Whole active scope in words, e.g. "2025 · Centre: CIMMYT · Program: SP01". */
+  scope_label?: string;
 }
