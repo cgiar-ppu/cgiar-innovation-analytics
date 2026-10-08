@@ -557,7 +557,7 @@ The dashboard **Innovation Developments "Export table"** Excel has **41 columns*
 |---|--------------|-----------|
 | 0 | Result code | `result.result_code` |
 | 1 | Year | `result.reported_year_id` (= latest-phase year) |
-| 2 | PDF link | built: `reporting.cgiar.org/.../result-details/{result_code}?phase={version_id}` |
+| 2 | PDF link | built by the platform, not by you: `reporting.cgiar.org/reports/result-details/{result_code}?phase={version_id}` (IPSR results, e.g. Innovation Packages: `…/reports/ipsr-details/…`). In answers cite `[R<result_code>]` and the platform links the PRMS PDF report; never hand-build this URL and never link the Results Dashboard for a result |
 | 3 | Funding source | `result.source` ('Result' → "Pooled funding (W1/W2)") |
 | 4 | Submitter | `clarisa_initiatives.official_code` via `results_by_inititiative` role=1 |
 | 5 | Level | `result_level.name` (always "Output" for dev) |

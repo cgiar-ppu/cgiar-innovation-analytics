@@ -122,13 +122,39 @@ def test_markdown_export_turns_charts_into_tables_and_scrubs_paths():
     assert "file://" not in md and "/workspace/" not in md and "`Kenya-report.docx`" in md
 
 
-def test_bare_citation_tokens_are_linked_at_export_time():
-    """Chats saved before Lane G's linkifier still export with links."""
+@pytest.fixture()
+def tiny_snapshot(tmp_path):
+    """A two-table PRMS snapshot with code 1003 (Reporting 2025), independent of CI data."""
+    import sqlite3
+
+    from synapsis.tools.result_code_citation import use_citation_db_path
+
+    db = tmp_path / "prms.sqlite"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE version (id INTEGER PRIMARY KEY, phase_name TEXT, phase_year INT, "
+                     "status INT, app_module_id INT)")
+        conn.execute("CREATE TABLE result (id INTEGER PRIMARY KEY, result_code INT, version_id INT, "
+                     "result_type_id INT, source TEXT, status_id INT, is_active INT, title TEXT)")
+        conn.execute("INSERT INTO version VALUES (6, 'Reporting 2025', 2025, 0, 1)")
+        conn.execute("INSERT INTO result VALUES (22506, 1003, 6, 7, 'Result', 2, 1, 'x')")
+    use_citation_db_path(str(db))
+    yield db
+    use_citation_db_path(None)
+
+
+def test_bare_citation_tokens_are_linked_at_export_time(tiny_snapshot):
+    """Chats saved before Lane G's linkifier still export with links — to the PRMS report."""
     md, _ = export_markdown("T", "sid", _rows("Key result: [R1003]."), "standard")
-    m = re.search(r"\[R1003\]\((https://[^)]+)\)", md)
-    assert m, md
+    assert f"[R1003]({REPORT_URL})" in md, md
     html, _ = export_html("T", "sid", _rows("Key result: [R1003]."), "standard")
-    assert '<a href="https://' in html and ">R1003</a>" in html
+    assert f'<a href="{REPORT_URL}"' in html.replace("&amp;", "&") and ">R1003</a>" in html
+
+
+def test_dashboard_links_saved_by_old_releases_export_as_prms_reports(tiny_snapshot):
+    """Marc, 8 Oct: never the generic Results Dashboard for a result."""
+    old = "[R1003](https://www.cgiar.org/food-security-impact/results-dashboard/?result_code=1003)"
+    md, _ = export_markdown("T", "sid", _rows(f"Key result: {old}."), "standard")
+    assert f"[R1003]({REPORT_URL})" in md and "results-dashboard" not in md
 
 
 # ---------------------------------------------------------------------------
