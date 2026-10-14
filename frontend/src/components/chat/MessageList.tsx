@@ -7,6 +7,8 @@ import { SystemMessage } from './SystemMessage'
 import { ToolCallCard } from './ToolCallCard'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ResultBanner } from './ResultBanner'
+import { NoticeMessage } from './NoticeMessage'
+import { isNotice } from '../../lib/chatNotice'
 
 interface Props {
   messages: ChatMessage[]
@@ -60,7 +62,7 @@ function buildCompactItems(messages: ChatMessage[]): RenderItem[] {
   }
 
   for (const msg of messages) {
-    if (COLLAPSIBLE_ROLES.has(msg.role)) {
+    if (COLLAPSIBLE_ROLES.has(msg.role) && !isNotice(msg)) {
       if (!currentGroup) currentGroup = []
       currentGroup.push(msg)
     } else {
@@ -160,7 +162,9 @@ export const MessageList = memo(function MessageList({ messages, expandedView = 
             case 'assistant':
               return <AssistantMessage key={msg.id} message={msg} />
             case 'system':
-              return <SystemMessage key={msg.id} message={msg} />
+              return isNotice(msg)
+                ? <NoticeMessage key={msg.id} message={msg} />
+                : <SystemMessage key={msg.id} message={msg} />
             case 'tool_use':
               return (
                 <ToolCallCard
@@ -204,6 +208,8 @@ export const MessageList = memo(function MessageList({ messages, expandedView = 
             return <AssistantMessage key={msg.id} message={msg} />
           case 'result':
             return <ResultBanner key={msg.id} message={msg} />
+          case 'system':
+            return isNotice(msg) ? <NoticeMessage key={msg.id} message={msg} /> : null
           default:
             return null
         }
