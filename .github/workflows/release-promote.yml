@@ -84,4 +84,16 @@ jobs:
           SUBNET_ID_1: ${{ vars.SUBNET_ID_1 }}
           SUBNET_ID_2: ${{ vars.SUBNET_ID_2 }}
           ACM_CERTIFICATE_ARN: ${{ vars.ACM_CERTIFICATE_ARN }}
+          # MVP test settings (items 1-5). Unset/empty = code default; release-host.py passes only set values.
+          IA_TEST_BUDGET_USD: ${{ vars.IA_TEST_BUDGET_USD }}
+          IA_TEST_START: ${{ vars.IA_TEST_START }}
+          IA_TEST_END: ${{ vars.IA_TEST_END }}
+          IA_SESSION_BUDGET_USD: ${{ vars.IA_SESSION_BUDGET_USD }}
+          IA_BUDGET_ALERT_THRESHOLDS: ${{ vars.IA_BUDGET_ALERT_THRESHOLDS }}
+          IA_MAX_BUDGET_USD_RESEARCHER: ${{ vars.IA_MAX_BUDGET_USD_RESEARCHER }}
+          IA_DAILY_USER_BUDGET_USD: ${{ vars.IA_DAILY_USER_BUDGET_USD }}
+          IA_TELEMETRY_ENABLED: ${{ vars.IA_TELEMETRY_ENABLED }}
+          IA_FEEDBACK_ENABLED: ${{ vars.IA_FEEDBACK_ENABLED }}
+          IA_EXTERNAL_BLOCK_POLICY_AMOUNTS: ${{ vars.IA_EXTERNAL_BLOCK_POLICY_AMOUNTS }}
+          IA_EXTERNAL_W12_ONLY: ${{ vars.IA_EXTERNAL_W12_ONLY }}
         run: python3 .github/scripts/release-deploy.py

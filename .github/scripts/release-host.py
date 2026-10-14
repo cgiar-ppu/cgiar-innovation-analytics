@@ -19,6 +19,20 @@ env={'AWS_REGION':'eu-central-1','LITESTREAM_S3_BUCKET':f'cgiar-ia-artifacts-{ac
  'SYNAPSIS_MODEL':cfg.get('model','claude-sonnet-4-6'),
  'SYNAPSIS_FALLBACK_MODEL':cfg.get('fallback','claude-opus-4-8'),
  'SYNAPSIS_AVAILABLE_MODELS':cfg.get('models','claude-sonnet-4-6,claude-opus-4-8[1m]')}
+# >>> mvp-env (SYN-2306 caps/window, SYN-2305 telemetry, SYN-2303 feedback, SYN-2283 external view)
+# Passed to the container ONLY when set, so an unset key keeps the code default. Source, in order:
+# promotion-request.json models_config (lower-case key) > GitHub environment variable (IA_* name,
+# forwarded by release-deploy.py). Empty values are never passed: an EMPTY IA_TELEMETRY_ENABLED
+# would switch telemetry off.
+MVP_ENV=(('test_budget_usd','IA_TEST_BUDGET_USD'),('test_start','IA_TEST_START'),('test_end','IA_TEST_END'),
+ ('session_budget_usd','IA_SESSION_BUDGET_USD'),('budget_alert_thresholds','IA_BUDGET_ALERT_THRESHOLDS'),
+ ('max_budget_usd_researcher','IA_MAX_BUDGET_USD_RESEARCHER'),('daily_user_budget_usd','IA_DAILY_USER_BUDGET_USD'),
+ ('telemetry_enabled','IA_TELEMETRY_ENABLED'),('feedback_enabled','IA_FEEDBACK_ENABLED'),
+ ('external_block_policy_amounts','IA_EXTERNAL_BLOCK_POLICY_AMOUNTS'),('external_w12_only','IA_EXTERNAL_W12_ONLY'))
+for key,name in MVP_ENV:
+ value=next((str(v).strip() for v in (cfg.get(key),cfg.get(name)) if v is not None and str(v).strip()),'')
+ if value: env[name]=value
+# <<< mvp-env
 assert env['IA_JWT_SECRET'] and env['ANTHROPIC_API_KEY'], 'Missing required target secrets'
 image=f'{account}.dkr.ecr.eu-central-1.amazonaws.com/cgiar-ia-service:{sha}'
 password=run(['aws','ecr','get-login-password','--region','eu-central-1'])

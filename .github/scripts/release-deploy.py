@@ -30,6 +30,14 @@ for _ in range(90):
  time.sleep(5)
 else:raise TimeoutError('SSM unavailable; instance not rebooted automatically')
 config={'stage':stage,'account':account,'sha':os.environ['SOURCE_SHA'],'issuer':os.environ['SSO_ISSUER'],'client':os.environ['SSO_CLIENT'],'domain':os.environ['SSO_DOMAIN'],'origin':os.environ['SSO_ORIGIN'],'admins':os.environ['SSO_ADMINS']}
+# >>> mvp-env: MVP test settings from the GitHub environment (release-promote.yml), only when set;
+# promotion-request.json models_config (lower-case keys) still wins in release-host.py.
+for name in ('IA_TEST_BUDGET_USD','IA_TEST_START','IA_TEST_END','IA_SESSION_BUDGET_USD','IA_BUDGET_ALERT_THRESHOLDS',
+             'IA_MAX_BUDGET_USD_RESEARCHER','IA_DAILY_USER_BUDGET_USD','IA_TELEMETRY_ENABLED','IA_FEEDBACK_ENABLED',
+             'IA_EXTERNAL_BLOCK_POLICY_AMOUNTS','IA_EXTERNAL_W12_ONLY'):
+ value=os.environ.get(name,'').strip()
+ if value: config[name]=value
+# <<< mvp-env
 request=json.loads(Path('.github/promotion-request.json').read_text())
 config.update(request.get('models_config',{}))
 script=base64.b64encode(Path('.github/scripts/release-host.py').read_bytes()).decode()
