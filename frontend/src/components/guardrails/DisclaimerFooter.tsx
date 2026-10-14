@@ -25,6 +25,7 @@ export default function DisclaimerFooter() {
       <div className="flex items-center justify-center gap-2 text-[11px] leading-tight text-[var(--text-muted)] text-center">
         <Info className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
         <span>
+          <strong className="font-medium text-[var(--text)]" data-testid="disclaimer-footer-mvp">MVP test version.</strong>{' '}
           AI outputs are for guidance only and require human quality assurance
           before use or citation. Based on CGIAR innovation data (PRMS) with
           AI-added interpretation.

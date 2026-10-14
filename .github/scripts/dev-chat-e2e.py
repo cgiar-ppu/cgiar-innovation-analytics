@@ -6,8 +6,21 @@ synthetic identities minted in the container (never printed), no real user
 account, no auth bypass.
 
 Input  (env IA_E2E_REQUEST, base64 JSON):
-  {"questions": [{"id": "q1", "text": "..."}], "public_key_pem": "...",
+  {"questions": [{"id": "q1", "text": "...",
+                  "role": "researcher" | "external" (optional, default researcher),
+                  "expect": "declined_financial" | "answered" (optional)}],
+   "public_key_pem": "...",
    "model": "claude-sonnet-5" (optional), "max_cost_usd": 5.0, "blob": "/tmp/x.b64"}
+
+``role`` picks the synthetic identity that asks the question (one per role).
+``expect`` adds a pass/fail check to the summary line (booleans only):
+  * declined_financial — the external-view refusal: no USD/currency amount in
+    the answer, the answer says the detail is not available in this external
+    view, and no tool call returned budget figures;
+  * answered — a normal answer: no error, at least one successful PRMS tool
+    call, and no external-view refusal wording.
+The workflow fails the run (after saving the encrypted transcript) when a
+check fails.
 Output:
   * stdout: ONE line {"dev_chat_e2e": {...}} with non-sensitive stats only
     (costs, turns, tool names, error codes). The repository is public.
@@ -18,7 +31,7 @@ Output:
     and deletes the file. Only the holder of the private key can read it.
 Every chat it creates is titled "[QA] ..." and deleted at the end.
 """
-import asyncio, base64, json, os, time, zlib
+import asyncio, base64, json, os, re, time, zlib
 
 import httpx, websockets
 from cryptography.hazmat.primitives import hashes, serialization
@@ -30,6 +43,30 @@ BASE = os.environ.get('IA_E2E_BASE', 'http://localhost:7780')
 REQ = json.loads(base64.b64decode(os.environ['IA_E2E_REQUEST']))
 TOOL_RESULT_CAP = 6000
 EXPORT_CAP = 120_000
+ROLES = ('researcher', 'external')
+# A currency amount in an answer, e.g. "USD 1.2 million", "$450,000", "US$ 3m".
+_MONEY = re.compile(r'(?:USD|US\$|\$|EUR|€|GBP|£)\s?\d|\d[\d,.]*\s?(?:USD|US dollars|dollars)\b', re.I)
+_EXTERNAL_VIEW = re.compile(r'(?:external view|not available)', re.I)
+_PRMS_TOOLS = ('prms_query', 'prms_search')
+
+
+def check(rec, expect):
+    """Pass/fail for a question's ``expect`` (non-sensitive booleans only)."""
+    answer = rec.get('answer') or ''
+    tools = rec.get('tools', [])
+    prms = [t for t in tools if any(n in str(t.get('tool')) for n in _PRMS_TOOLS)]
+    if expect == 'declined_financial':
+        tool_money = any(_MONEY.search(str(t.get('result') or '')) for t in tools)
+        parts = {'no_error': not rec.get('error'), 'no_amount_in_answer': not _MONEY.search(answer),
+                 'says_not_available': bool(_EXTERNAL_VIEW.search(answer)),
+                 'no_amount_from_tools': not tool_money}
+    elif expect == 'answered':
+        parts = {'no_error': not rec.get('error'), 'has_answer': len(answer.strip()) > 40,
+                 'prms_tool_ok': any(not t.get('is_error') for t in prms),
+                 'no_refusal_wording': 'external view' not in answer.lower()}
+    else:
+        return None
+    return {'expect': expect, 'pass': all(parts.values()), **parts}
 
 
 async def ask(token, question, model, h):
@@ -81,7 +118,7 @@ async def ask(token, question, model, h):
     return rec
 
 
-async def cleanup(out, h):
+async def cleanup(out, headers):
     # Clean-up: delete the [QA] chats. A DELETE can race the server's orphan reaper
     # (client_registry.cleanup_session_client KeyError -> 500, seen 14 Oct), so
     # tolerate errors and retry once; the result is reported, never fatal.
@@ -91,6 +128,7 @@ async def cleanup(out, h):
         for rec in out['questions']:
             if not rec.get('session_id'):
                 continue
+            h = headers[rec.get('role', 'researcher')]
             status = None
             for attempt in range(2):
                 try:
@@ -125,10 +163,17 @@ async def cleanup(out, h):
 
 
 async def main():
-    owner = 'dev-e2e-qa-' + str(int(time.time()))
+    stamp = str(int(time.time()))
+    owner = 'dev-e2e-qa-' + stamp
     token = create_access_token(owner, 'Synthetic E2E researcher QA', 'researcher',
                                 auth_source='sso', lifetime_seconds=3600)
     h = {'Authorization': 'Bearer ' + token}
+    # One synthetic identity per role; the external one exercises the partner
+    # view (no budget / financial data). Never an admin.
+    tokens = {'researcher': token,
+              'external': create_access_token('dev-e2e-qa-ext-' + stamp, 'Synthetic E2E external QA', 'external',
+                                              auth_source='sso', lifetime_seconds=3600)}
+    headers = {r: {'Authorization': 'Bearer ' + t} for r, t in tokens.items()}
     out = {'started_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'questions': []}
     async with httpx.AsyncClient(timeout=120) as c:
         out['health'] = (await c.get(BASE + '/api/health')).json()
@@ -149,7 +194,11 @@ async def main():
     for q in REQ['questions']:
         if spent >= float(REQ.get('max_cost_usd', 5)):
             out['questions'].append({'id': q['id'], 'skipped': 'budget'}); continue
-        rec = await ask(token, q, REQ.get('model'), h)
+        role = q.get('role', 'researcher')
+        assert role in ROLES, 'unknown role ' + repr(role)
+        rec = await ask(tokens[role], q, REQ.get('model'), headers[role])
+        rec['role'] = role
+        rec['check'] = check(rec, q.get('expect'))
         spent += float((rec.get('result') or {}).get('estimated_cost') or 0)
         out['questions'].append(rec)
     pub = serialization.load_pem_public_key(REQ['public_key_pem'].encode())
@@ -161,7 +210,7 @@ async def main():
     with open(REQ['blob'], 'w') as f:  # written BEFORE clean-up so a clean-up error cannot lose it
         f.write(blob)
     try:
-        out_cleanup = await cleanup(out, h)
+        out_cleanup = await cleanup(out, headers)
     except Exception as e:  # never lose the transcript summary over clean-up
         out_cleanup = {'error': repr(e)[:300]}
     stats = {'model': REQ.get('model') or 'default', 'cost_usd': round(spent, 4), 'blob_chars': len(blob),
@@ -170,9 +219,11 @@ async def main():
                             'cost': (r.get('result') or {}).get('estimated_cost'),
                             'error': (r.get('error') or {}).get('code'), 'skipped': r.get('skipped'),
                             'tools': [t['tool'] for t in r.get('tools', [])],
-                            'tool_errors': sum(1 for t in r.get('tools', []) if t.get('is_error'))}
+                            'tool_errors': sum(1 for t in r.get('tools', []) if t.get('is_error')),
+                            'role': r.get('role'), 'check': r.get('check')}
                            for r in out['questions']],
              'cleanup': out_cleanup}
+    stats['checks_failed'] = [r['id'] for r in out['questions'] if (r.get('check') or {}).get('pass') is False]
     print(json.dumps({'dev_chat_e2e': stats}))
 
 

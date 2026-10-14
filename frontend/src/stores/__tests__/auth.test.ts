@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useAuthStore, getAuthToken } from '../auth'
+import { useAuthStore, getAuthToken, ACK_KEY_PREFIX } from '../auth'
 
 function resetStore() {
   localStorage.clear()
@@ -113,7 +113,26 @@ describe('auth store', () => {
     expect(useAuthStore.getState().disclaimerAcknowledged).toBe(false)
     useAuthStore.getState().acknowledgeDisclaimer()
     expect(useAuthStore.getState().disclaimerAcknowledged).toBe(true)
-    expect(localStorage.getItem('ia-disclaimer-ack:alice@cgiar.org')).toBe('true')
+    expect(localStorage.getItem(ACK_KEY_PREFIX + 'alice@cgiar.org')).toBe('true')
+  })
+
+  it('the acknowledgement key is versioned for the MVP test text', () => {
+    // Bumped with the MVP test statements (Oct 2026) so users who clicked
+    // "I understand" on the old text see the new one once.
+    expect(ACK_KEY_PREFIX).toBe('ia-disclaimer-ack:v2-mvp:')
+  })
+
+  it('an acknowledgement of the previous disclaimer text does not count', async () => {
+    localStorage.setItem('ia-disclaimer-ack:old@cgiar.org', 'true')
+    localStorage.setItem('ia-auth-token', 't')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200,
+      json: async () => ({ user_id: 'old@cgiar.org', email: 'old@cgiar.org', name: 'Old', role: 'researcher' }) }))
+    await useAuthStore.getState().initialize()
+    expect(useAuthStore.getState().user?.userId).toBe('old@cgiar.org')
+    expect(useAuthStore.getState().disclaimerAcknowledged).toBe(false)
+    useAuthStore.getState().acknowledgeDisclaimer()
+    expect(localStorage.getItem(ACK_KEY_PREFIX + 'old@cgiar.org')).toBe('true')
+    vi.unstubAllGlobals()
   })
 
   it('logout clears the token and user', () => {

@@ -47,7 +47,9 @@ describe('InvitationManager', () => {
     await user.type(screen.getByLabelText('Test cohort (optional)'), 'WB TTLs Oct-2026')
     await user.selectOptions(screen.getByLabelText('Link valid for'), '14')
     await user.click(screen.getByRole('button', { name: 'Create invitation link' }))
-    await waitFor(() => expect(posts[0]).toEqual({ url: '/api/auth/invitations', body: { email: 'ext@worldbank.example', name: 'Ext Researcher', cohort: 'WB TTLs Oct-2026', expires_in_days: 14 } }))
+    // New invitations default to the external partner view (no budget/financial data).
+    expect(screen.getByLabelText('Access level')).toHaveValue('external')
+    await waitFor(() => expect(posts[0]).toEqual({ url: '/api/auth/invitations', body: { email: 'ext@worldbank.example', name: 'Ext Researcher', cohort: 'WB TTLs Oct-2026', expires_in_days: 14, role: 'external' } }))
     expect(screen.getByLabelText('Invitation link')).toHaveValue('https://ia.test/#invite=single')
     expect(screen.getByText(/expires in 14 days and can be used once\. No email has been sent\./)).toBeInTheDocument()
   })
@@ -58,9 +60,10 @@ describe('InvitationManager', () => {
     await user.click(await screen.findByRole('tab', { name: 'Several people (test group)' }))
     await user.type(screen.getByLabelText(/People to invite/), 'Jane Doe <jane@worldbank.example>{enter}john@fcdo.example, John{enter}Staff <staff@cgiar.org>')
     await user.type(screen.getByLabelText('Test cohort (optional)'), 'WB TTLs Oct-2026')
+    await user.selectOptions(screen.getByLabelText('Access level'), 'researcher')
     await user.click(screen.getByRole('button', { name: 'Create 3 links' }))
     await waitFor(() => expect(posts[0]!.url).toBe('/api/auth/invitations/bulk'))
-    expect(posts[0]!.body).toEqual({ cohort: 'WB TTLs Oct-2026', expires_in_days: 7, invitees: [
+    expect(posts[0]!.body).toEqual({ cohort: 'WB TTLs Oct-2026', expires_in_days: 7, role: 'researcher', invitees: [
       { email: 'jane@worldbank.example', name: 'Jane Doe' }, { email: 'john@fcdo.example', name: 'John' }, { email: 'staff@cgiar.org', name: 'Staff' }] })
     const links = await screen.findByTestId('bulk-links')
     expect(links).toHaveTextContent('2 links for "WB TTLs Oct-2026"')
@@ -78,6 +81,33 @@ describe('InvitationManager', () => {
     await user.click(screen.getByRole('button', { name: /End test round/ }))
     await waitFor(() => expect(posts.slice(-1)[0]!).toEqual({ url: '/api/auth/invitations/revoke-cohort', body: { cohort: 'WB TTLs Oct-2026' } }))
     expect(await screen.findByRole('status')).toHaveTextContent('Revoked 1 account in "WB TTLs Oct-2026".')
+  })
+
+  it('shows each account\'s access level and can switch it after confirmation', async () => {
+    accounts = [
+      { email: 'old@worldbank.example', name: 'Old Tester', enabled: 1, activated: 1, expires_at: null, cohort: 'WB TTLs Oct-2026' },
+      { email: 'partner@fcdo.example', name: 'Partner', enabled: 1, activated: 0, expires_at: null, cohort: 'Partner pilot', role: 'external' },
+    ]
+    const user = userEvent.setup()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<InvitationManager />)
+    expect(await screen.findByTestId('role-old@worldbank.example')).toHaveTextContent('Researcher')   // pre-role accounts
+    expect(screen.getByTestId('role-partner@fcdo.example')).toHaveTextContent('External')
+    await user.click(screen.getByRole('button', { name: 'Make external partner' }))
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/sign in again/))
+    await waitFor(() => expect(posts.slice(-1)[0]!).toEqual({ url: '/api/auth/invitations/role', body: { email: 'old@worldbank.example', role: 'external' } }))
+    await user.click(screen.getByRole('button', { name: 'Give full data access' }))
+    await waitFor(() => expect(posts.slice(-1)[0]!).toEqual({ url: '/api/auth/invitations/role', body: { email: 'partner@fcdo.example', role: 'researcher' } }))
+  })
+
+  it('reissue keeps the account\'s access level', async () => {
+    accounts = [{ email: 'partner@fcdo.example', name: 'Partner', enabled: 1, activated: 1, expires_at: null, cohort: '', role: 'researcher' }]
+    const user = userEvent.setup()
+    render(<InvitationManager />)
+    await user.click(await screen.findByRole('button', { name: 'Reissue / reset' }))
+    expect(screen.getByLabelText('Access level')).toHaveValue('researcher')
+    await user.click(screen.getByRole('button', { name: 'Create invitation link' }))
+    await waitFor(() => expect(posts[0]!.body).toMatchObject({ email: 'partner@fcdo.example', role: 'researcher' }))
   })
 
   it('is not rendered for non-admins', () => {

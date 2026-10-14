@@ -80,8 +80,12 @@ jobs:
           Path('e2e-transcript.enc.json').write_text(data)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as fh:
               fh.write('### DEV chat E2E\n\n```json\n' + json.dumps(json.loads(line), indent=1) + '\n```\n')
+          failed = json.loads(line)['dev_chat_e2e'].get('checks_failed') or []
+          if failed:  # transcript is saved above; the upload step still runs
+              raise SystemExit('E2E checks failed: ' + ', '.join(failed))
           PY
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: e2e-transcript-encrypted
           path: e2e-transcript.enc.json
