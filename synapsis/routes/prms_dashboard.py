@@ -18,6 +18,7 @@ import asyncio
 import logging
 import os
 from synapsis.prms_snapshot import get_snapshot_info, resolve_db_path
+from synapsis.prms_schema_check import check_schema
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -1569,7 +1570,10 @@ async def prms_snapshot_info():
     60 s and keyed on the real file, so a daily symlink retarget is picked up
     without a restart. Cheap enough to poll from any page footer.
     """
-    return get_snapshot_info(_PRMS_DB_PATH).to_dict()
+    body = get_snapshot_info(_PRMS_DB_PATH).to_dict()
+    # Expected tables missing from this snapshot (status ok | degraded | unavailable).
+    body["schema_check"] = check_schema(_PRMS_DB_PATH)
+    return body
 
 
 @router.get("/dashboard/prms-stats")

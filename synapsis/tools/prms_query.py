@@ -22,6 +22,7 @@ from claude_agent_sdk import tool
 from synapsis.utils.responses import error_response, success_response
 from synapsis.prms_snapshot import get_snapshot_info
 from synapsis.prms_snapshot import resolve_db_path
+from synapsis.prms_schema_check import is_expected_table, missing_table_message
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +51,9 @@ _FORBIDDEN_SQL = re.compile(
     r"^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|ATTACH|DETACH|REPLACE|VACUUM|REINDEX|PRAGMA\s+(?!query_only|table_info|database_list))",
     re.IGNORECASE | re.MULTILINE,
 )
+
+# Single-quoted SQL string literals ('' is an escaped quote inside one).
+_SQL_STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
 
 # Detect if a LIMIT clause is already present (simple heuristic)
 _HAS_LIMIT = re.compile(r"\bLIMIT\s+\d+", re.IGNORECASE)
@@ -85,7 +89,10 @@ def _validate_sql(sql: str) -> str | None:
     # Reject semicolons in the middle (potential multi-statement injection)
     # Allow trailing semicolon
     core = stripped.rstrip(";").strip()
-    if ";" in core:
+    # A ';' inside a string literal (e.g. GROUP_CONCAT(x, '; ')) is text, not a
+    # statement separator. (sqlite3 also refuses to run two statements in one
+    # execute() call, and the connection is read-only.)
+    if ";" in _SQL_STRING_LITERAL.sub("''", core):
         return (
             "Multi-statement queries are not allowed. "
             "Please send a single SELECT statement."
@@ -242,9 +249,56 @@ def _get_total_count(db_path: str, sql: str) -> int | None:
 _TITLE_COLUMN_RE = re.compile(r"(^|[_\s])(title|name)s?($|[_\s])", re.IGNORECASE)
 TITLE_CELL_LIMIT = 250
 
+# Base per-cell limits: table view (<= 12 columns) / key-value view (> 12).
+TABLE_CELL_LIMIT = 80
+KV_CELL_LIMIT = 200
+# Marc Schut, 13 Oct 2026: every non-title cell was cut at 80 characters
+# whatever the query, so the agent could not read the use numbers inside
+# result descriptions (376-2,396 characters) — not even with SUBSTR() chunks,
+# because each chunk was cut to 80 again. Long cells now share a fixed text
+# budget: few long values (e.g. 18 descriptions) come back in full, many long
+# values (e.g. 5,000 rows) still fall back to the base limit, so the extra
+# output is bounded by LONG_TEXT_BUDGET characters (~12k tokens) per call.
+LONG_TEXT_BUDGET = 48_000
+MAX_CELL_LIMIT = 6_000
+# Rows printed in key/value form (> 12 columns).
+KV_MAX_ROWS = 20
+
+_UNLIMITED = 10**12
+
 
 def _cell_limit(column, default: int) -> int:
     return max(default, TITLE_CELL_LIMIT) if _TITLE_COLUMN_RE.search(str(column)) else default
+
+
+def _water_level(lengths: list[int], budget: int) -> int:
+    """Largest per-cell length T so that sum(min(len, T)) <= budget.
+
+    Short values are kept whole; the remaining budget is shared equally by
+    the longer ones. Returns ``_UNLIMITED`` when everything fits.
+    """
+    remaining = budget
+    ordered = sorted(lengths)
+    n = len(ordered)
+    for i, length in enumerate(ordered):
+        if length * (n - i) <= remaining:
+            remaining -= length
+            continue
+        return max(remaining // (n - i), 0)
+    return _UNLIMITED
+
+
+def _cell_text(v) -> str:
+    return str(v) if v is not None else "NULL"
+
+
+def _long_text_limit(cells: list[tuple[str, str]], base: int) -> int:
+    """Per-cell limit for the long cells of one output (never below *base*)."""
+    long_lengths = [len(s) for col, s in cells if len(s) > _cell_limit(col, base)]
+    if not long_lengths:
+        return base
+    level = _water_level(long_lengths, LONG_TEXT_BUDGET)
+    return max(base, min(MAX_CELL_LIMIT, level))
 
 
 def _format_results_text(
@@ -271,34 +325,56 @@ def _format_results_text(
         lines.append("No results found.")
         return "\n".join(lines)
 
-    # Format as a table if reasonable number of columns
-    if columns and len(columns) <= 12:
+    table_view = bool(columns) and len(columns) <= 12
+    base = TABLE_CELL_LIMIT if table_view else KV_CELL_LIMIT
+    shown_rows = rows if table_view else rows[:KV_MAX_ROWS]
+    cells = [
+        (str(k), _cell_text(v))
+        for row in shown_rows
+        for k, v in (((c, row.get(c, "")) for c in columns) if table_view else row.items())
+    ]
+    long_limit = _long_text_limit(cells, base)
+    shortened = 0
+
+    def _fit(column, s: str) -> str:
+        nonlocal shortened
+        limit = max(_cell_limit(column, base), long_limit)
+        if len(s) > limit:
+            shortened += 1
+            return s[:limit - 3] + "..."
+        return s
+
+    if table_view:
         # Header row
         lines.append(" | ".join(str(c) for c in columns))
         lines.append(" | ".join("---" for _ in columns))
-
         for row in rows:
-            vals = []
-            for c in columns:
-                v = row.get(c, "")
-                s = str(v) if v is not None else "NULL"
-                # Truncate long values (titles/names get more room — QA-4 D5)
-                limit = _cell_limit(c, 80)
-                if len(s) > limit:
-                    s = s[:limit - 3] + "..."
-                vals.append(s)
-            lines.append(" | ".join(vals))
+            lines.append(" | ".join(_fit(c, _cell_text(row.get(c, ""))) for c in columns))
     else:
         # Too many columns -- show as key-value blocks
-        for i, row in enumerate(rows[:20]):
+        for i, row in enumerate(shown_rows):
             lines.append(f"--- Row {i + 1} ---")
             for k, v in row.items():
-                s = str(v) if v is not None else "NULL"
-                limit = _cell_limit(k, 200)
-                if len(s) > limit:
-                    s = s[:limit - 3] + "..."
-                lines.append(f"  {k}: {s}")
+                lines.append(f"  {k}: {_fit(k, _cell_text(v))}")
             lines.append("")
+        if row_count > len(shown_rows):
+            lines.append(
+                f"NOTE: only the first {len(shown_rows)} of {row_count} rows are printed "
+                f"because the query returns {len(columns)} columns (more than 12). "
+                "Select 12 columns or fewer to see every row as a table."
+            )
+
+    if shortened:
+        lines.append("")
+        lines.append(
+            f"NOTE: {shortened} long text value(s) were shortened (they end in \"...\"; "
+            f"cut at {long_limit} characters, titles/names at least {TITLE_CELL_LIMIT}). "
+            "This is a display limit, not the stored text. Long values share a budget of "
+            f"about {LONG_TEXT_BUDGET:,} characters per call (up to {MAX_CELL_LIMIT:,} per value): "
+            "to read full text (e.g. result descriptions), query fewer rows or fewer long "
+            "columns — about 15-20 full descriptions fit in one call — and never treat a "
+            "shortened value as complete."
+        )
 
     return "\n".join(lines)
 
@@ -321,7 +397,14 @@ def _format_results_text(
     "Returns structured results with row data, total count, and tables used. "
     "By default results are capped at 5000 rows; pass an integer 'row_limit' to "
     "raise or lower that cap when you need the full result set (or fewer rows). "
-    "An explicit LIMIT clause in the SQL always takes precedence over row_limit.",
+    "An explicit LIMIT clause in the SQL always takes precedence over row_limit. "
+    "Long text: small result sets return text cells in full (a shared budget of about "
+    "48,000 characters per call, up to 6,000 per value); large result sets shorten "
+    "long cells (to 80 characters, titles/names 250), mark them with '...' and say so. "
+    "To read full result descriptions, select only the rows you need (about 15-20 "
+    "descriptions per call). If a query fails because an expected PRMS table is "
+    "missing from the loaded snapshot, the tool says so: report it as a data-loading "
+    "issue, never as proof that PRMS lacks the data.",
     {
         "sql": str,
         "question": str,
@@ -400,8 +483,17 @@ async def prms_query(args: dict[str, Any]) -> dict[str, Any]:
         err_msg = str(exc)
         # Provide helpful hints for common errors
         if "no such table" in err_msg:
-            table_match = re.search(r"no such table: (\w+)", err_msg)
+            table_match = re.search(r"no such table: (?:main\.)?(\w+)", err_msg)
             hint = ""
+            if table_match and is_expected_table(table_match.group(1)):
+                # Marc Schut, 13 Oct 2026: the table is documented and exists in
+                # PRMS but was dropped by the snapshot load. Say so — the old
+                # "might be named differently" hint sent the agent looking for
+                # another source and it invented one.
+                return error_response(
+                    f"SQL error: {err_msg}. "
+                    + missing_table_message(table_match.group(1))
+                )
             if table_match:
                 bad_table = table_match.group(1)
                 hint = (

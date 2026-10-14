@@ -422,6 +422,55 @@ Pick ONE geography definition and reuse it for EVERY query in the same answer �
 
 ---
 
+## Recipe 11: Innovation Use detail — 0-9 use level + use numbers (who, how many) ✅
+
+**When to use:** "what is the use level of …", "how many farmers / users / women use …", "current use reported", "use level 0-9 column", "Innovation Use numbers", ISSCA-style tables of Innovation Use results.
+
+**Where the data is (all PRMS tables, one row per Innovation Use result phase-row):**
+| Need | Table / join |
+|---|---|
+| Use level 0-9 | `results_innovations_use` (`results_id` → `result.id`) → `clarisa_innovation_use_levels` on `id = innovation_use_level_id` → report **`.level`** (0-9) + `.name`. The `_id` is a lookup id = level + 1 — never print it as the level. |
+| Number of users (e.g. "171,561 farmers") | `result_actors` (`result_id` → `result.id`, `is_active = 1`) → `actor_type.name`; total = `how_many`; `women` / `men` include youth, `women_youth` / `men_youth` are "of which youth". **`section_id`: 1 = current use, 2 = target by 2030** (NULL on older rows = current) — never add the two. |
+| Organisations using | `results_by_institution_type` (`results_id` → `result.id`; `how_many`; `institution_types_id` → `clarisa_institution_types.code`; same `section_id` split) |
+| Other quantities (hectares, kg sold …) | `results_innovations_use_measures` joined on **`result_innovation_use_id = results_innovations_use.result_innovation_use_id`** (NOT `result.id`) → `quantity` + `unit_of_measure` |
+| Users added this period / narrative | `results_innovations_use.new_users_added` (NULL = not answered, not zero) / `use_expansion_narrative` (newer snapshots only) |
+
+### SQL (template — 2025 QAed Innovation Use results with use level and current use numbers)
+```sql
+WITH use_rows AS (
+  SELECT r.id, r.result_code, r.title
+  FROM result r
+  WHERE r.result_type_id = 2 AND r.is_active = 1 AND r.reported_year_id = 2025
+    AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
+)
+SELECT u.result_code,
+       u.title,
+       iul.level AS use_level,               -- 0-9
+       iul.name  AS use_level_name,
+       (SELECT SUM(ra.how_many) FROM result_actors ra
+         WHERE ra.result_id = u.id AND ra.is_active = 1
+           AND COALESCE(ra.section_id, 1) = 1) AS users_current,
+       (SELECT GROUP_CONCAT(COALESCE(NULLIF(ra.other_actor_type, ''), at.name) || ': ' || ra.how_many, '; ')
+          FROM result_actors ra LEFT JOIN actor_type at ON at.actor_type_id = ra.actor_type_id
+         WHERE ra.result_id = u.id AND ra.is_active = 1
+           AND COALESCE(ra.section_id, 1) = 1) AS users_by_actor_type,
+       (SELECT GROUP_CONCAT(m.quantity || ' ' || COALESCE(m.unit_of_measure, ''), '; ')
+          FROM results_innovations_use_measures m
+         WHERE m.result_innovation_use_id = riu.result_innovation_use_id
+           AND m.is_active = 1)                AS other_quantities
+FROM use_rows u
+LEFT JOIN results_innovations_use riu ON riu.results_id = u.id AND riu.is_active = 1
+LEFT JOIN clarisa_innovation_use_levels iul ON iul.id = riu.innovation_use_level_id
+ORDER BY u.result_code;
+```
+- Sub-queries (not JOINs) for actors and measures, so one result never fans out into several rows.
+- `SUM(how_many)` across actor types can double-count a person who is both e.g. a farmer and "other" — show `users_by_actor_type` next to any total and say "sum of reported actor counts".
+- For a Development ↔ Use pair, link the Innovation Development (type 7) to its Use result(s) via `linked_result` and read the use data from the **type-2** row; `result_actors` on a type-7 row describes the actors the innovation targets, not counted users.
+- Expected coverage (2025 QAed Innovation Use, 403 codes — identical on the June-2026, corrected 2026-09-13 and 2026-10-14 snapshots): use level on **401**, current actor numbers on **233** (242 with any actor row incl. 2030-target-only), organisation numbers (`results_by_institution_type`) on 193, other quantities on 10. If you get **0** for use level, the table is missing from the loaded snapshot (data-loading problem) — say so; do not conclude PRMS lacks use levels.
+- Spot checks (2025): R24600 level 8, 171,561 farmers · R22600 level 9, 85,100 · R24797 level 9, 238,470 · R22751 level 9, no actor numbers (160,000 ha is in the title).
+
+---
+
 ## Anti-Patterns ❌
 
 ### DO NOT answer a single-year question with the all-years dedup CTE (the 2026-06-15 incident)
@@ -454,6 +503,12 @@ WITH cand AS (
 )
 ```
 The correct pattern: build the candidate set across ALL result types first, then filter to result_type_id = 7 at the end.
+
+### DO NOT join `results_innovations_use_measures` to `result.id`
+`results_innovations_use_measures.result_innovation_use_id` points at `results_innovations_use.result_innovation_use_id`. Joining it to `result.id` silently matches unrelated results (the 13-Oct-2026 "only 72 results database-wide / 0 of 403" answer). Use Recipe 11.
+
+### DO NOT read `innovation_use_level_id` / `innovation_readiness_level_id` as the 0-9 level
+They are lookup ids (use level id = level + 1; readiness ids 11-20). Join the lookup and report its `level`.
 
 ---
 

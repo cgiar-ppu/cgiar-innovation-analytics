@@ -31,6 +31,7 @@ from synapsis.config import (
     INVITED_LOGIN_ENABLED,
 )
 from synapsis.agents import SUBAGENTS
+from synapsis.prms_schema_check import check_schema
 from synapsis.auth.middleware import get_current_user, get_optional_user, resolve_role
 from synapsis.runtime_policy import (
     allowed_models_for_role,
@@ -88,6 +89,10 @@ async def health(user=Depends(get_optional_user)):
             "workspace": str(WORKSPACE),
             "auth_method": AUTH_METHOD,
             "available_models": allowed_models_for_role("admin"),
+            # PRMS data health (Marc Schut, 13 Oct 2026): expected tables
+            # missing from the loaded snapshot. ``status`` above stays "ok" —
+            # the app runs; this says whether its data is complete.
+            "prms_data": check_schema(),
         })
     return body
 
