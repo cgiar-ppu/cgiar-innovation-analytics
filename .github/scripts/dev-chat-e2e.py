@@ -107,8 +107,25 @@ async def ask(token, question, model, h):
                         return got
                     if e.get('type') == kind:
                         return got
-        await ws.send(json.dumps({'type': 'new_session'}))
-        sid = (await until('session', 90))[-1]['session_id']
+        # New chats are rate-limited per user (IA_NEW_CHATS_PER_USER per minute):
+        # wait and retry on rate_limited; any other refusal ends this question
+        # with its error recorded (never crash the run before the transcript).
+        sid = None
+        for attempt in range(4):
+            await ws.send(json.dumps({'type': 'new_session'}))
+            last = (await until('session', 90))[-1]
+            if last.get('type') == 'session' and last.get('session_id'):
+                sid = last['session_id']; rec.pop('error', None)
+                break
+            if last.get('code') == 'rate_limited' and attempt < 3:
+                rec['rate_limited_waits'] = rec.get('rate_limited_waits', 0) + 1
+                await asyncio.sleep(65)
+                continue
+            break
+        if not sid:
+            rec.setdefault('error', {'code': 'no_session'})
+            rec['answer'] = ''
+            return rec
         rec['session_id'] = sid
         async with httpx.AsyncClient() as c:
             await c.patch(BASE + '/api/sessions/' + sid, headers=h, json={'title': f"[QA] E2E {question['id']}"})
@@ -201,18 +218,24 @@ async def cleanup(out, headers):
         if prev.get('session_ids'):
             lo, hi = prev['owner_epoch_range']
             assert 0 <= hi - lo <= 120, 'owner_epoch_range too wide'
+            # Both synthetic identities: researcher 'dev-e2e-qa-<epoch>', external 'dev-e2e-qa-ext-<epoch>'.
+            owners = [('dev-e2e-qa-', 'researcher'), ('dev-e2e-qa-ext-', 'external')]
             for sid in prev['session_ids']:
                 leftovers[sid] = 'not found'
                 for ts in range(lo, hi + 1):
-                    tok = create_access_token('dev-e2e-qa-' + str(ts), 'Synthetic E2E researcher QA', 'researcher',
-                                              auth_source='sso', lifetime_seconds=120)
-                    try:
-                        st = (await c.delete(BASE + '/api/sessions/' + sid,
-                                             headers={'Authorization': 'Bearer ' + tok})).status_code
-                    except httpx.HTTPError as e:
-                        st = type(e).__name__
-                    if st == 200:
-                        leftovers[sid] = 'deleted'; break
+                    done = False
+                    for prefix, role in owners:
+                        tok = create_access_token(prefix + str(ts), 'Synthetic E2E QA cleanup', role,
+                                                  auth_source='sso', lifetime_seconds=120)
+                        try:
+                            st = (await c.delete(BASE + '/api/sessions/' + sid,
+                                                 headers={'Authorization': 'Bearer ' + tok})).status_code
+                        except httpx.HTTPError as e:
+                            st = type(e).__name__
+                        if st == 200:
+                            leftovers[sid] = 'deleted'; done = True; break
+                    if done:
+                        break
     return {'this_run': deleted, 'previous': leftovers}
 
 
