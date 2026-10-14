@@ -69,7 +69,8 @@ Also for restricted roles (Oct 2026 verification round):
 * ``INTERNAL_DENIED_TABLES`` / ``INTERNAL_TABLE_PREFIXES`` /
   ``INTERNAL_NULLED_COLUMNS``: PRMS workflow data that is not on the public
   Results Dashboard (account names, QA/review and submission comments, field
-  revision history, AI drafts, notifications, deletion/backup copies);
+  revision history, AI drafts and AI review proposals, account-to-role
+  assignments, notifications, deletion/backup copies);
 * :func:`redact_amounts`: currency amounts inside any text value returned to
   the model are replaced by ``AMOUNT_PLACEHOLDER``. A column authorizer
   cannot see inside free text, so this is the second layer. It is a
@@ -219,12 +220,15 @@ INTERNAL_DENIED_TABLES: dict[str, str] = {
     "notifications": "application notifications",
     "result_deletion_audit": "deletion audit",
     "user_notification_settings": "user notification settings",
+    "role_by_user": "PRMS account-to-role assignments",
 }
 
 #: Table-name prefixes refused for external roles (dated copies, companions).
 INTERNAL_TABLE_PREFIXES: tuple[str, ...] = (
     "share_result_request",          # share_result_request, share_result_request_seen
     "result_reactivation_backup_",   # result_reactivation_backup_<yyyymmdd>
+    "ai_review_",                    # ai_review_proposal/_event/_session: AI rewrite proposals and review history
+    "bilateral_ai_",                 # bilateral_ai_drafts/_jobs/_draft_evidence: AI drafting jobs and drafts
 )
 
 #: Columns that read as NULL for external roles.

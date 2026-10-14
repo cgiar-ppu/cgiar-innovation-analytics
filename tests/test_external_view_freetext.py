@@ -105,6 +105,21 @@ def _make_db(path: Path) -> Path:
         INSERT INTO result_reactivation_backup_20990101 VALUES (1, 'backup');
         CREATE TABLE user_notification_settings (id INTEGER PRIMARY KEY, user_id INTEGER);
         INSERT INTO user_notification_settings VALUES (1, 7);
+        CREATE TABLE ai_review_proposal (id INTEGER PRIMARY KEY, field_name TEXT, original_text TEXT,
+            proposed_text TEXT);
+        INSERT INTO ai_review_proposal VALUES (1, 'title', 'old', 'AI-PROPOSAL-SENTINEL');
+        CREATE TABLE ai_review_event (id INTEGER PRIMARY KEY, result_id INTEGER, user_id INTEGER);
+        INSERT INTO ai_review_event VALUES (1, 1, 7);
+        CREATE TABLE ai_review_session (id INTEGER PRIMARY KEY, result_id INTEGER);
+        INSERT INTO ai_review_session VALUES (1, 1);
+        CREATE TABLE bilateral_ai_drafts (id INTEGER PRIMARY KEY, result_id INTEGER, extracted_mds TEXT);
+        INSERT INTO bilateral_ai_drafts VALUES (1, 2, 'draft');
+        CREATE TABLE bilateral_ai_jobs (job_id INTEGER PRIMARY KEY, user_id INTEGER, text_context TEXT);
+        INSERT INTO bilateral_ai_jobs VALUES (1, 7, 'context');
+        CREATE TABLE bilateral_ai_draft_evidence (id INTEGER PRIMARY KEY, draft_id INTEGER, file_name TEXT);
+        INSERT INTO bilateral_ai_draft_evidence VALUES (1, 1, 'f.pdf');
+        CREATE TABLE role_by_user (id INTEGER PRIMARY KEY, role INTEGER, "user" INTEGER, initiative_id INTEGER);
+        INSERT INTO role_by_user VALUES (1, 3, 7, 5);
         """
     )
     conn.commit()
@@ -321,6 +336,8 @@ INTERNAL_TABLES = [
     "bilateral_quality_assessments", "notifications", "share_result_request",
     "share_result_request_seen", "result_deletion_audit",
     "result_reactivation_backup_20990101", "user_notification_settings",
+    "ai_review_proposal", "ai_review_event", "ai_review_session",
+    "bilateral_ai_drafts", "bilateral_ai_jobs", "bilateral_ai_draft_evidence", "role_by_user",
 ]
 
 INTERNAL_COLUMNS = [
@@ -355,6 +372,34 @@ class TestInternalWorkflowData:
         for role in ("admin", "researcher"):
             rows, _, _ = _run(db, sql, role)
             assert rows == _raw(db, sql) and rows[0]["v"] is not None
+
+    def test_ai_proposal_text_never_reaches_an_external_role(self, db):
+        is_err, text = _query_as("external", db, "SELECT proposed_text FROM ai_review_proposal")
+        assert is_err and "AI-PROPOSAL-SENTINEL" not in text
+        assert "Not available in this external view" in text
+        is_err, text = _query_as("researcher", db, "SELECT proposed_text FROM ai_review_proposal")
+        assert not is_err and "AI-PROPOSAL-SENTINEL" in text
+
+    def test_internal_tables_cannot_be_joined_in(self, db):
+        with pytest.raises(ap.PRMSAccessDenied):
+            _run(db, "SELECT r.result_code FROM result r JOIN role_by_user u ON u.\"user\" = r.created_by", "external")
+        with pytest.raises(ap.PRMSAccessDenied):
+            _run(db, "SELECT result_code FROM result WHERE id IN (SELECT result_id FROM bilateral_ai_drafts)", "external")
+
+    def test_no_reference_or_product_query_uses_internal_tables(self):
+        """Blocking them for externals must not break any recipe or fixed product query."""
+        repo = Path(__file__).resolve().parents[1]
+        import re
+        names = [re.escape(t) + r"\b" for t in ap.INTERNAL_DENIED_TABLES]
+        names += [re.escape(p) + r"\w*" for p in ap.INTERNAL_TABLE_PREFIXES]
+        sql_ref = re.compile(r"\b(?:FROM|JOIN)\s+[`\"\[]?(?:" + "|".join(names) + ")", re.I)
+        offenders = []
+        for p in [*(repo / "synapsis").rglob("*.py"), *(repo / "references").rglob("*.md")]:
+            if p.name == "prms_access_policy.py":
+                continue
+            for m in sql_ref.finditer(p.read_text(encoding="utf-8", errors="replace")):
+                offenders.append(f"{p.name}: {m.group(0)}")
+        assert offenders == []
 
     def test_prms_query_messages(self, db):
         is_err, text = _query_as("external", db, "SELECT * FROM result_qaed_log")
@@ -396,6 +441,7 @@ class TestInternalWorkflowData:
             "result_qaed_log", "result_field_revision", "result_field_ai_state",
             "bilateral_quality_assessments", "notifications", "result_deletion_audit",
             "user_notification_settings", "share_result_request*", "result_reactivation_backup_*",
+            "role_by_user", "ai_review_*", "bilateral_ai_*",
             "users.first_name", "users.last_name", "result_review_history.comment",
             "submission.comment", "result.reviewed_by",
         }
@@ -543,7 +589,9 @@ class TestRealSnapshot:
         tables = self._tables()
         present = [t for t in tables if ap.is_internal_table(t)]
         # the core ones exist in every vintage since Sep 2026
-        assert {"result_qaed_log", "result_field_revision", "notifications"} <= set(present)
+        assert {"result_qaed_log", "result_field_revision", "notifications", "ai_review_proposal",
+                "ai_review_event", "bilateral_ai_drafts", "bilateral_ai_jobs",
+                "bilateral_ai_draft_evidence", "role_by_user"} <= set(present)
         for t in present:
             with pytest.raises(ap.PRMSAccessDenied):
                 _run(Path(_REAL), f"SELECT COUNT(*) FROM {t}", "external")
@@ -580,6 +628,12 @@ class TestRealSnapshot:
         "JOIN result r ON r.id = rbi.result_id WHERE rbi.is_active = 1",
         "SELECT COUNT(DISTINCT rc.country_id) AS n FROM result_country rc "
         "JOIN result r ON r.id = rc.result_id WHERE r.result_type_id = 7",
+        # W3/bilateral innovations and initiative attribution (tables next to the blocked AI/role ones)
+        "SELECT COUNT(DISTINCT result_code) AS n FROM result WHERE source = 'API' AND status_id = 6 "
+        "AND result_type_id IN (2,7,10) AND is_active = 1",
+        "SELECT b.inititiative_id AS i, COUNT(DISTINCT r.result_code) AS n FROM result r "
+        "JOIN results_by_inititiative b ON b.result_id = r.id WHERE r.result_type_id = 7 "
+        "GROUP BY 1 ORDER BY 1",
     ])
     def test_headline_answers_identical_for_external_and_researcher(self, sql):
         ext, _, log = _run(Path(_REAL), sql, "external")
