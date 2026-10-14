@@ -61,6 +61,8 @@ app = FastAPI(title="CGIAR Innovation Analytics Platform", version="0.1.0",
 # (including errors and the SPA); GZip compresses the ~2 MB of JS/CSS.
 # CORS used to be "*" + credentials in every env; it is now the env's own
 # origin (CORS_ORIGINS, else IA_SSO_ORIGIN) — see synapsis/security_headers.py.
+from synapsis.routes.feedback import FeedbackUploadLimitMiddleware  # noqa: E402  (oversized uploads: 413 before spooling)
+app.add_middleware(FeedbackUploadLimitMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(CORSMiddleware, **cors_settings())
