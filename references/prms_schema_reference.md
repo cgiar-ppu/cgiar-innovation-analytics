@@ -377,36 +377,59 @@ ORDER BY cirl.level;
 | 3 | Disruptive innovation |
 | 4 | Other |
 
-### `results_innovations_use` (599 rows)
-Details for result_type_id=2 (Innovation use/adoption).
+### `results_innovations_use` (one row per Innovation Use result)
+Details for result_type_id=2 (Innovation use). **This is where the 0-9 Innovation Use level lives** (2025: 401 of 403 QAed Innovation Use results carry one on the June-2026 snapshot).
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `result_innovation_use_id` | INT PK | Row ID |
-| `results_id` | bigint | FK -> result.id |
-| `male_using` | bigint | Male users count |
-| `female_using` | bigint | Female users count |
-| `innovation_use_level_id` | bigint | FK -> clarisa_innovation_use_levels.id |
+| `result_innovation_use_id` | INT PK | Row ID — **parent key of `results_innovations_use_measures`** |
+| `results_id` | bigint UNIQUE | FK -> result.id (one row per result phase-row) |
+| `innovation_use_level_id` | bigint | FK -> `clarisa_innovation_use_levels.id` — a LOOKUP ID 1-10, **not** the level. Report `clarisa_innovation_use_levels.level` (0-9) |
+| `readiness_level_explanation` | TEXT | Reporter's justification of the use level |
+| `new_users_added` | int | Users added during this reporting period (PRMS P2-3537, newer snapshots only). NULL = not answered (not zero) |
+| `use_expansion_narrative` | TEXT | How use expanded during the period (P2-3537, newer snapshots only) |
+| `innov_use_to_be_determined` / `innov_use_2030_to_be_determined` | tinyint | Reporter ticked "to be determined" for current / 2030 use |
+| `innov_use_2030_justification` | TEXT | Justification of the 2030 target (newer snapshots only) |
+| `has_innovation_link`, `has_scaling_studies` | tinyint | Flags |
+| `male_using` / `female_using` | bigint | Legacy columns — normally NULL; the use numbers are in `result_actors` |
 | `is_active` | tinyint | Active flag |
 
 ### `clarisa_innovation_use_levels` (10 rows)
-Levels 0-9 describing adoption from "No use" to "Commonly used by end-users/beneficiaries".
+`id` 1-10 ↔ `level` 0-9 (**id = level + 1**). Names: 0 No use · 1 Project lead organization · 2-3 Partners · 4-5 Connected next-user · 6-7 Unconnected next-user · 8-9 End-user / Beneficiaries. `definition` holds the full text.
 
-### `result_actors` (8,128 rows)
-Actors (users) of innovations with demographic breakdowns.
+### `results_innovations_use_measures` (other quantities of use, e.g. hectares)
+| Column | Type | Description |
+|--------|------|-------------|
+| `result_innovations_use_measure_id` | INT PK | Row ID |
+| `result_innovation_use_id` | int | FK -> **`results_innovations_use.result_innovation_use_id`** — NOT `result.id`. Joining it to `result.id` matches unrelated results |
+| `quantity` | float | Amount |
+| `unit_of_measure` | TEXT | Free-text unit (e.g. "Area (ha)") |
+| `unit_of_measure_id` | int | FK -> `units_of_measure.unit_of_measure_id` |
+| `is_active` | tinyint | Active flag |
+
+### `result_actors` (use numbers by actor type)
+How many people use (type 2) — or are targeted by (type 7) — an innovation, by actor type, with sex/age breakdowns.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `result_actors_id` | bigint PK | Row ID |
 | `result_id` | bigint | FK -> result.id |
 | `actor_type_id` | bigint | FK -> actor_type.actor_type_id |
-| `women` | bigint | Female count |
-| `men` | bigint | Male count |
-| `women_youth` | bigint | Female youth count |
-| `men_youth` | bigint | Male youth count |
-| `how_many` | bigint | Total count |
-| `other_actor_type` | TEXT | Description if actor_type_id=5 |
+| `how_many` | bigint | Total for this actor type (= `women` + `men` when disaggregated) |
+| `women` / `men` | bigint | Women / men — INCLUDING youth |
+| `women_youth` / `men_youth` | bigint | Of which youth (subset of `women` / `men`, do not add them again) |
+| `section_id` | bigint | FK -> `result_innov_section.id`: 1 = Current (evidence of use), 2 = Future (target by end of 2030). NULL on older rows = current |
+| `other_actor_type` | TEXT | Description if actor_type_id=5 ("Other") |
 | `sex_and_age_disaggregation` | tinyint | Whether disaggregation is available |
+| `has_women`, `has_women_youth`, `has_men`, `has_men_youth` | tinyint | Which groups are present |
+| `age_disaggregation_not_available`, `youth_split_applied_by_system` | tinyint | P2-3537 (newer snapshots): reporter cannot split by age / youth figures split 50/50 by the system, not reported |
+| `addressing_demands` | TEXT | Narrative |
+
+### `result_innov_section` (2 rows)
+1 = Current ("Current Innovation Use evidence"), 2 = Future ("Targeted innovation use by the end of 2030"). Used by `result_actors.section_id` and `results_by_institution_type.section_id`.
+
+### `results_by_institution_type` (organisations using, by type)
+`results_id` -> result.id · `institution_roles_id` -> `institution_role` · `institution_types_id` -> `clarisa_institution_types.code` · `how_many` · `other_institution` · `graduate_students` · `section_id` -> `result_innov_section` (current vs 2030).
 
 ### `actor_type` (5 rows)
 | actor_type_id | name |
@@ -711,7 +734,7 @@ GROUP BY ci.name, ci.acronym ORDER BY result_count DESC LIMIT 20;
 6. **Country name format:** Some names are formal (e.g. "Tanzania, United Republic", "The Socialist Republic of Viet Nam") -- use LIKE for flexible matching
 7. **Innovation readiness level IDs:** IDs are 11-20 (not 0-9). The `level` column in `clarisa_innovation_readiness_level` has the 0-9 value
 8. **results_innovations_dev.results_id:** Note the column is `results_id` (with 's'), not `result_id`
-9. **results_innovations_use.results_id:** Same pattern -- `results_id` (with 's')
+9. **results_innovations_use.results_id:** Same pattern -- `results_id` (with 's'). Its `innovation_use_level_id` is a lookup id (level + 1) -- join `clarisa_innovation_use_levels` and report `level`. Its child `results_innovations_use_measures` joins on `result_innovation_use_id`, never on `result.id`.
 10. **results_knowledge_product.results_id:** Same pattern
 11. **clarisa_center.institutionId:** CamelCase column, links to `clarisa_institutions.id`
 12. **Region hierarchy:** `clarisa_regions.parent_regions_code` is self-referential for sub-regions (e.g. Eastern Africa -> Sub-Saharan Africa -> Africa)
