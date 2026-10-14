@@ -128,3 +128,10 @@ def test_frontend_loads_no_third_party_fonts_or_styles():
     assert offenders == []
     fonts = front / "src" / "assets" / "fonts"
     assert len(list(fonts.glob("*.woff2"))) >= 3 and len(list(fonts.glob("OFL-*.txt"))) == 3
+
+
+def test_self_hosted_fonts_are_served_as_fonts():
+    """The SPA's woff2 files carry font/woff2 (Python 3.12 does not know .woff2)."""
+    import mimetypes
+    import synapsis.server  # noqa: F401  (registers the types)
+    assert mimetypes.guess_type("x.woff2")[0] == "font/woff2"
