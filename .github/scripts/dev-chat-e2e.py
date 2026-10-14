@@ -46,7 +46,10 @@ EXPORT_CAP = 120_000
 ROLES = ('researcher', 'external')
 # A currency amount in an answer, e.g. "USD 1.2 million", "$450,000", "US$ 3m".
 _MONEY = re.compile(r'(?:USD|US\$|\$|EUR|€|GBP|£)\s?\d|\d[\d,.]*\s?(?:USD|US dollars|dollars)\b', re.I)
-_EXTERNAL_VIEW = re.compile(r'(?:external view|not available)', re.I)
+# The external-view refusal: "not available in this external view", or the model's
+# paraphrases seen on DEV ("this external partner view ... aren't available").
+_EXTERNAL_VIEW_PHRASE = re.compile(r"external(?: partner)? view", re.I)
+_EXTERNAL_VIEW = re.compile(r"external(?: partner)? view|(?:not|n't|n’t) available", re.I)
 _PRMS_TOOLS = ('prms_query', 'prms_search')
 
 
@@ -63,7 +66,7 @@ def check(rec, expect):
     elif expect == 'answered':
         parts = {'no_error': not rec.get('error'), 'has_answer': len(answer.strip()) > 40,
                  'prms_tool_ok': any(not t.get('is_error') for t in prms),
-                 'no_refusal_wording': 'external view' not in answer.lower()}
+                 'no_refusal_wording': not _EXTERNAL_VIEW_PHRASE.search(answer)}
     else:
         return None
     return {'expect': expect, 'pass': all(parts.values()), **parts}
