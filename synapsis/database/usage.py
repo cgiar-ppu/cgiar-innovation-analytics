@@ -219,6 +219,11 @@ def _legacy_role(user_id: str, roles: dict[str, str]) -> str:
     return "unknown"
 
 
+#: A chat result message saved at most this long before the session's first
+#: ledger row belongs to a turn the ledger already holds.
+LEDGER_OVERLAP_SECONDS = 120.0
+
+
 async def usage_summary(days: int, now: Optional[float] = None) -> dict[str, Any]:
     """Per-day turns/sessions/users/cost by role and model (+ voice).
 
@@ -284,6 +289,12 @@ async def usage_summary(days: int, now: Optional[float] = None) -> dict[str, Any
         # Estimated history before the ledger existed.
         if start < cutover:
             roles = await _role_lookup(db)
+            # A turn that is in the ledger must not be estimated again: on a
+            # fresh database the very first turn's result message is saved a
+            # moment BEFORE its ledger row (the first row defines the cutover),
+            # so it used to be counted twice (verification round, Oct 2026).
+            cursor = await db.execute("SELECT session_id, MIN(ts) FROM usage_events GROUP BY session_id")
+            first_ledger = {str(sid): float(ts) for sid, ts in await cursor.fetchall() if ts is not None}
             cursor = await db.execute(
                 "SELECT m.session_id, m.ts, m.data, s.user_id, s.model FROM messages m "
                 "LEFT JOIN sessions s ON s.session_id = m.session_id "
@@ -303,6 +314,8 @@ async def usage_summary(days: int, now: Optional[float] = None) -> dict[str, Any
                 prev[sid] = float(total)
                 if ts < start:
                     continue
+                if sid in first_ledger and ts >= first_ledger[sid] - LEDGER_OVERLAP_SECONDS:
+                    continue  # this turn is already in the ledger
                 uid = uid or _config.LEGACY_USER_ID
                 add(utc_day(ts), uid, _legacy_role(uid, roles), sid, model,
                     cost, bool(payload.get("is_error")), "estimated")

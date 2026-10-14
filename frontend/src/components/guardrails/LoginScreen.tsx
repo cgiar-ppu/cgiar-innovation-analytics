@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Eye, EyeOff, LogIn, ShieldCheck } from 'lucide-react'
 import { useAuthStore } from '../../stores/auth'
 import SignInCard from './SignInCard'
+import { leaveSignInPath } from '../../lib/signInPath'
 
 const fieldClass = 'mt-1.5 w-full rounded-md border border-[#d1d5db] bg-white px-3 py-2.5 text-sm text-[#111827] outline-none focus:border-[#d97832] focus:ring-2 focus:ring-[#d97832]/20'
 
@@ -50,6 +51,7 @@ export default function LoginScreen() {
       ? await signup(name.trim(), email.trim(), password)
       : await login(email.trim(), password)
     setBusy(false); setError(problem)
+    if (!problem) leaveSignInPath()
   }
 
   return (
