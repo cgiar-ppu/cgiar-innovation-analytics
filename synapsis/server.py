@@ -212,7 +212,12 @@ _novnc_dir = "/usr/share/novnc"
 if os.path.isdir(_novnc_dir):
     app.mount("/vnc", StaticFiles(directory=_novnc_dir), name="novnc")
 
-# -- Static assets (JS, CSS, images) --
+# -- Static assets (JS, CSS, images, self-hosted fonts) --
+# Python 3.12's mimetypes table has no .woff2 entry (served as
+# application/octet-stream with nosniff); register the proper font type.
+import mimetypes
+mimetypes.add_type("font/woff2", ".woff2")
+mimetypes.add_type("font/woff", ".woff")
 _static_dir = Path("static")
 if _static_dir.is_dir():
     app.mount("/assets", StaticFiles(directory=str(_static_dir / "assets")), name="assets")
