@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import UsagePanel, { usageToCsv } from '../UsagePanel'
+
+// The engagement section has its own tests (EngagementPanel.test.tsx).
+vi.mock('../EngagementPanel', () => ({ default: () => null }))
 import { api } from '../../../lib/api'
 import type { AdminUsage } from '../../../lib/types/usage'
 
@@ -122,5 +125,41 @@ describe('cohort split (QA-4 D14)', () => {
     const header = usageToCsv(WITH_COHORTS).split('\n')[0]!
     expect(header).toContain('questions_cohort_QA4 cohort Sep-2026')
     expect(header).toContain('cost_usd_cohort_WB TTLs Oct-2026')
+  })
+})
+
+describe('MVP test budget card (SYN-2306)', () => {
+  beforeEach(() => vi.restoreAllMocks())
+
+  const BUDGET = {
+    enabled: true, budget_usd: 5000, spent_usd: 3812.5, remaining_usd: 1187.5, pct: 76.25, state: 'open',
+    window: { start: '2026-10-15T08:00:00+00:00', end: '2026-11-14T08:00:00+00:00', start_source: 'first_run',
+      end_source: 'start+30d', days_left: 12.5 },
+    thresholds: [50, 75, 90],
+    alerts: [{ pct: 50, fraction: 0.5, spent_usd: 2501, crossed_at: '2026-10-25T10:00:00+00:00' },
+      { pct: 75, fraction: 0.75, spent_usd: 3751, crossed_at: '2026-11-01T10:00:00+00:00' }],
+    session_budget_usd: 3, questions: 7000, voice: { minutes: 0, usd: 0, usd_per_minute: 0.1 }, basis: 'x',
+  }
+
+  it('shows spent vs budget, window, crossed thresholds and the per-chat limit', async () => {
+    vi.spyOn(api, 'getAdminUsage').mockResolvedValue({ ...USAGE, test_budget: BUDGET })
+    render(<UsagePanel />)
+    const card = await screen.findByTestId('test-budget')
+    expect(card).toHaveTextContent('Test budget: $3812.50 of $5000.00 (76.3%)')
+    expect(card).toHaveTextContent('2026-10-15 to 2026-11-14 (12.5 days left)')
+    expect(card).toHaveTextContent('50% (crossed), 75% (crossed), 90%')
+    expect(card).toHaveTextContent('Per-chat limit $3.00')
+    expect(card).toHaveTextContent('Open')
+  })
+
+  it('names the paused state and hides the card when no budget is set', async () => {
+    vi.spyOn(api, 'getAdminUsage').mockResolvedValue({ ...USAGE, test_budget: { ...BUDGET, state: 'exhausted', pct: 100.4 } })
+    const { unmount } = render(<UsagePanel />)
+    expect(await screen.findByTestId('test-budget')).toHaveTextContent('Budget used up - non-admins paused')
+    unmount()
+    vi.spyOn(api, 'getAdminUsage').mockResolvedValue({ ...USAGE, test_budget: { ...BUDGET, enabled: false, state: 'disabled' } })
+    render(<UsagePanel />)
+    await screen.findByTestId('usage-totals')
+    expect(screen.queryByTestId('test-budget')).toBeNull()
   })
 })

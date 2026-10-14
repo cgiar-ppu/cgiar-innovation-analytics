@@ -52,6 +52,7 @@ export function SessionItem({ session, isActive, onSelect, onRename, onDelete }:
     <div
       onClick={onSelect}
       onDoubleClick={() => setEditing(true)}
+      data-track="chat.open"
       className={`group flex items-start gap-2.5 px-3 py-2.5 cursor-pointer transition-all rounded-xl my-0.5
         ${isActive
           ? 'glass border border-accent/20'
@@ -96,6 +97,7 @@ export function SessionItem({ session, isActive, onSelect, onRename, onDelete }:
       <div className="flex items-center gap-0.5 flex-shrink-0">
         <button
           onClick={handleTogglePin}
+          data-track="chat.pin"
           className={`p-1 rounded-lg hover:bg-surface-2 text-text-muted hover:text-accent
             transition-all flex-shrink-0 ${session.pinned ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
           aria-label={session.pinned ? 'Unpin session' : 'Pin session'}
@@ -105,6 +107,7 @@ export function SessionItem({ session, isActive, onSelect, onRename, onDelete }:
         </button>
         <button
           onClick={handleDelete}
+          data-track="chat.delete"
           className="p-1 rounded-lg hover:bg-danger-soft text-text-muted hover:text-danger
             opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
           aria-label="Delete session"

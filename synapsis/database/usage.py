@@ -118,6 +118,13 @@ async def record_turn_usage(
             await db.commit()
     except Exception:
         logger.warning("Could not record usage for session %s", session_id, exc_info=True)
+        return
+    # MVP test budget: log (once) any alert threshold this question crossed.
+    try:
+        from synapsis.runtime_policy import check_test_budget_thresholds
+        await check_test_budget_thresholds()
+    except Exception:
+        logger.debug("Budget threshold check skipped", exc_info=True)
 
 
 async def spent_today_usd(user_id: str, now: Optional[float] = None) -> float:

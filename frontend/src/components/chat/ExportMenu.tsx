@@ -37,6 +37,7 @@ export function ExportMenu() {
       <button
         onClick={() => setOpen(!open)}
         disabled={!activeSessionId}
+        data-track="export.menu"
         className="flex items-center gap-1 p-2 rounded-xl hover:bg-surface-2 transition-colors text-text-muted hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed"
         title={activeSessionId ? 'Export conversation' : 'Start a conversation first'}
       >
@@ -62,6 +63,7 @@ export function ExportMenu() {
             </div>
             <button
               onClick={() => setDetailed(!detailed)}
+              data-track="export.detailed"
               className={`relative w-9 h-5 rounded-full transition-colors ${detailed ? 'bg-accent' : 'bg-surface-3'}`}
             >
               <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm ${detailed ? 'translate-x-4' : ''}`} />
@@ -72,6 +74,7 @@ export function ExportMenu() {
             <button
               key={fmt.key}
               onClick={() => handleExport(fmt.key)}
+              data-track={`export.${fmt.key}`}
               className="w-full flex items-center gap-3 px-4 py-3 hover:bg-surface-2 transition-colors text-left"
             >
               <fmt.icon size={16} className="text-accent flex-shrink-0" />

@@ -201,6 +201,69 @@ NEW_CHATS_WINDOW_SECONDS: int = _get_int_env("IA_NEW_CHATS_WINDOW_SECONDS", 60)
 ENVIRONMENT_LABEL: str = os.getenv("IA_ENVIRONMENT", "").strip()
 
 # ---------------------------------------------------------------------------
+# MVP test budget (SYN-2306, 2026-10-14)
+# ---------------------------------------------------------------------------
+# One deployment-wide model budget for a time-boxed test round, on top of the
+# per-question / per-day caps above. See synapsis/runtime_policy.py
+# (enforce_test_budget / enforce_session_budget / test_budget_status).
+#
+#   IA_TEST_BUDGET_USD        total model spend allowed in the test window
+#                             (USD, SDK list prices). 0 disables the global cap.
+#   IA_TEST_START             ISO date/time (UTC) the window opens. Empty = the
+#                             first time this environment ran with the budget
+#                             feature (persisted in the chat DB, so restarts do
+#                             not move it) -> "promotion day" on each stage.
+#   IA_TEST_END               ISO date/time (UTC) the window closes. Empty =
+#                             start + IA_TEST_DAYS.
+#   IA_TEST_DAYS              window length when IA_TEST_END is empty (30).
+#   IA_SESSION_BUDGET_USD     per chat-session spend cap for non-admins (3.00).
+#                             0 disables it.
+#   IA_BUDGET_ALERT_THRESHOLDS  fractions of the test budget that emit ONE
+#                             distinctive log line each when crossed
+#                             ("0.5,0.75,0.9").
+#   IA_VOICE_USD_PER_MINUTE   conversion used to count voice minutes against
+#                             the test budget (voice is metered in minutes).
+
+
+def _parse_thresholds(raw: str | None) -> tuple[float, ...]:
+    values = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            v = float(part)
+        except ValueError:
+            continue
+        if v > 1.0:  # tolerate percentages ("50,75,90")
+            v = v / 100.0
+        if 0.0 < v < 1.0:
+            values.append(round(v, 4))
+    return tuple(sorted(set(values))) or (0.5, 0.75, 0.9)
+
+
+TEST_BUDGET_USD: float = _get_float_env("IA_TEST_BUDGET_USD", 5000.0)
+TEST_START: str = os.getenv("IA_TEST_START", "").strip()
+TEST_END: str = os.getenv("IA_TEST_END", "").strip()
+TEST_DAYS: int = max(1, _get_int_env("IA_TEST_DAYS", 30))
+SESSION_BUDGET_USD: float = _get_float_env("IA_SESSION_BUDGET_USD", 3.00)
+BUDGET_ALERT_THRESHOLDS: tuple[float, ...] = _parse_thresholds(
+    os.getenv("IA_BUDGET_ALERT_THRESHOLDS", "0.5,0.75,0.9")
+)
+VOICE_USD_PER_MINUTE: float = _get_float_env("IA_VOICE_USD_PER_MINUTE", 0.10)
+
+# ---------------------------------------------------------------------------
+# First-party usage tracking (SYN-2305, 2026-10-14)
+# ---------------------------------------------------------------------------
+# Cookieless in-app engagement events (page views, clicks on tagged elements,
+# 30-s heartbeats) posted by the SPA to POST /api/telemetry. Same origin only:
+# no third-party script, no cookies, no CSP change. Schema modelled on
+# Umami's event model. See synapsis/database/telemetry.py.
+TELEMETRY_ENABLED: bool = os.getenv("IA_TELEMETRY_ENABLED", "true").lower() == "true"
+# Per-user ingestion ceiling (events per minute); excess is dropped silently.
+TELEMETRY_MAX_EVENTS_PER_MINUTE: int = _get_int_env("IA_TELEMETRY_MAX_EVENTS_PER_MINUTE", 240)
+
+# ---------------------------------------------------------------------------
 # Application version
 # ---------------------------------------------------------------------------
 

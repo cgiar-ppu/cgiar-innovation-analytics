@@ -2,23 +2,33 @@
 Admin usage summary — cost and activity per day, role and model.
 
 - GET /api/admin/usage?days=N  (admin only; N = 1..90, default 14)
+  also carries ``test_budget`` (SYN-2306): budget, spent, pct, window, state,
+  crossed alert thresholds - what an external monitor polls.
+- GET /api/admin/engagement?days=N      (admin only) first-party usage events
+  (SYN-2305): questions, clicks, session length per day / user / cohort.
+- GET /api/admin/engagement.csv?days=N  (admin only) one row per day x user.
 
 Answers "how much does this environment cost, and who/what drives it?" for
 Jose and Jules. Each environment (DEV/TST/PRD) has its own chat database, so
 calling this on each host gives the per-environment split. Only aggregate
-counts are returned — never user identities or message content.
+counts are returned — never user identities or message content. The
+engagement read-outs list accounts by a keyed pseudonym (``user_key``) with
+role and test cohort, never by e-mail or name.
 """
 
+import csv
+import io
 import os
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 
 import synapsis.config as _config
 from synapsis.auth.middleware import get_current_user, resolve_role
 from synapsis.database.usage import usage_summary
-from synapsis.runtime_policy import policy_summary
+from synapsis.runtime_policy import policy_summary, test_budget_status
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -62,5 +72,48 @@ async def admin_usage(days: int = Query(14, ge=1, le=90), user: dict = Depends(_
             "researcher": policy_summary("researcher"),
             "admin": policy_summary("admin"),
         },
+        "test_budget": await test_budget_status(),
         **summary,
     }
+
+
+TRACKING_NOTE = (
+    "First-party, cookieless event log modelled on Umami's open-source event "
+    "schema (page views, clicks on tagged elements, 30-s heartbeats for session "
+    "length). Same origin only: no cookies, no third-party script. Questions "
+    "and cost come from the per-question ledger. Accounts are shown as keyed "
+    "pseudonyms (user_key) with role and test cohort."
+)
+
+
+@router.get("/engagement")
+async def admin_engagement(days: int = Query(14, ge=1, le=90), user: dict = Depends(_require_admin)):
+    from synapsis.database.telemetry import engagement_summary
+
+    summary = await engagement_summary(days)
+    return {
+        "environment": _environment_label(),
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "tracking": TRACKING_NOTE,
+        "telemetry_enabled": bool(_config.TELEMETRY_ENABLED),
+        **summary,
+    }
+
+
+@router.get("/engagement.csv")
+async def admin_engagement_csv(days: int = Query(14, ge=1, le=90), user: dict = Depends(_require_admin)):
+    from synapsis.database.telemetry import CSV_COLUMNS, engagement_csv_rows
+
+    env = _environment_label()
+    rows = await engagement_csv_rows(days)
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=list(CSV_COLUMNS), extrasaction="ignore", lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({"environment": env, **row})
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="ia-engagement-{env}-{days}d-{stamp}.csv"'},
+    )

@@ -70,11 +70,13 @@ async def api_query(payload: QueryRequest, user=Depends(get_current_user)):
     )
 
     set_current_user_id(resolve_user_id(user), resolve_role(user))
-    # Lane D: same soft daily spend cap as the chat socket (admins exempt).
-    from synapsis.runtime_policy import DailyBudgetExceeded, enforce_daily_budget
+    # Lane D: same cost guards as the chat socket (admins exempt from the
+    # stops): MVP test budget/window and the soft daily cap. No chat session
+    # here, so the per-session cap does not apply.
+    from synapsis.runtime_policy import PolicyError, enforce_spend_limits
     try:
-        await enforce_daily_budget()
-    except DailyBudgetExceeded as exc:
+        await enforce_spend_limits()
+    except PolicyError as exc:
         raise HTTPException(status_code=429, detail=exc.user_message) from None
     options = await build_agent_options()
 

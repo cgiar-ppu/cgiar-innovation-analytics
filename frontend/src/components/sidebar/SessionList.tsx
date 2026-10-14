@@ -36,6 +36,7 @@ export function SessionList({ send }: Props) {
       <div className="p-3">
         <button
           onClick={handleNewChat}
+          data-track="chat.new"
           className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-white text-sm font-medium
             shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all"
           style={{ background: 'var(--user-bubble)' }}

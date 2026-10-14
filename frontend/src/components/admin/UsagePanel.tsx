@@ -12,10 +12,11 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BarChart3, Download, RefreshCw } from 'lucide-react'
+import { BarChart3, Download, RefreshCw, Wallet } from 'lucide-react'
 import GlassCard from '../common/GlassCard'
+import EngagementPanel from './EngagementPanel'
 import { api } from '../../lib/api'
-import type { AdminUsage } from '../../lib/types/usage'
+import type { AdminUsage, TestBudget } from '../../lib/types/usage'
 
 export const USAGE_DAY_OPTIONS = [7, 14, 30, 90] as const
 
@@ -67,6 +68,46 @@ export function cohortTotals(usage: AdminUsage): [string, { turns: number; cost_
     }
   }
   return [...totals.entries()].sort((a, b) => b[1].cost_usd - a[1].cost_usd || a[0].localeCompare(b[0]))
+}
+
+const BUDGET_STATE_LABEL: Record<string, string> = {
+  open: 'Open',
+  exhausted: 'Budget used up - non-admins paused',
+  ended: 'Test period ended - non-admins paused',
+  not_started: 'Not started yet',
+  disabled: 'No test budget set',
+}
+
+/** MVP test budget: spent vs budget, window, thresholds (SYN-2306). */
+export function TestBudgetCard({ budget }: { budget: TestBudget }) {
+  if (!budget.enabled) return null
+  const pct = Math.max(0, Math.min(100, budget.pct ?? 0))
+  const crossed = new Set(budget.alerts.map((a) => a.pct))
+  const tone = pct >= 90 ? 'bg-red-500' : pct >= 75 ? 'bg-amber-500' : 'bg-[var(--accent,#16a34a)]'
+  return (
+    <div className="mb-4 bg-[var(--surface-1)] rounded-lg p-3" data-testid="test-budget">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-xs font-semibold text-[var(--text)] flex items-center gap-1.5">
+          <Wallet className="w-3.5 h-3.5" /> Test budget: {usd(budget.spent_usd)} of {usd(budget.budget_usd)} ({(budget.pct ?? 0).toFixed(1)}%)
+        </p>
+        <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--surface-2,#e5e7eb)] text-[var(--text-muted)]">
+          {BUDGET_STATE_LABEL[budget.state] ?? budget.state}
+        </span>
+      </div>
+      <div className="relative h-2 mt-2 rounded-full bg-[var(--surface-2,#e5e7eb)] overflow-hidden" aria-hidden="true">
+        <div className={`h-full ${tone}`} style={{ width: `${pct}%` }} />
+        {budget.thresholds.map((t) => (
+          <span key={t} className="absolute top-0 h-full w-px bg-[var(--text-muted)]" style={{ left: `${t}%` }} />
+        ))}
+      </div>
+      <p className="text-[10px] text-[var(--text-muted)] mt-1.5">
+        Window {(budget.window.start ?? '').slice(0, 10)} to {(budget.window.end ?? '').slice(0, 10)} ({budget.window.days_left} days left)
+        {' · '}Alerts at {budget.thresholds.map((t) => `${t}%${crossed.has(t) ? ' (crossed)' : ''}`).join(', ')}
+        {budget.session_budget_usd ? ` · Per-chat limit ${usd(budget.session_budget_usd)}` : ''}
+        {budget.voice.minutes ? ` · Voice ${budget.voice.minutes.toFixed(1)} min = ${usd(budget.voice.usd)}` : ''}
+      </p>
+    </div>
+  )
 }
 
 export default function UsagePanel() {
@@ -144,6 +185,7 @@ export default function UsagePanel() {
 
       {usage && (
         <>
+          {usage.test_budget && <TestBudgetCard budget={usage.test_budget} />}
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4" data-testid="usage-totals">
             {[
               ['Questions', String(usage.totals.turns)],
@@ -213,6 +255,8 @@ export default function UsagePanel() {
           <p className="text-[10px] text-[var(--text-muted)] mt-3">{usage.cost_basis}</p>
         </>
       )}
+
+      <EngagementPanel days={days} />
     </GlassCard>
   )
 }

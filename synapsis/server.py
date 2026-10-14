@@ -77,6 +77,8 @@ from synapsis.routes.usage import router as usage_router  # noqa: E402  (Lane D:
 app.include_router(usage_router)
 from synapsis.routes.feedback import router as feedback_router  # noqa: E402  (Lane H: answer/voice feedback)
 app.include_router(feedback_router)
+from synapsis.routes.telemetry import router as telemetry_router  # noqa: E402  (SYN-2305: first-party usage events)
+app.include_router(telemetry_router)
 app.include_router(files_router)
 app.include_router(sessions_router)
 app.include_router(query_router)
