@@ -66,6 +66,16 @@ Parameters:
     Default: latest
     Description: Docker image tag to deploy
 
+  BudgetAlertEmail1:
+    Type: String
+    Default: ''
+    Description: E-mail that receives the MVP test-budget alerts (SYN-2306), e.g. Jose. Empty = no alert topic.
+
+  BudgetAlertEmail2:
+    Type: String
+    Default: ''
+    Description: Second e-mail for the MVP test-budget alerts, e.g. Marc. Optional.
+
 # =============================================================================
 # Conditions
 # =============================================================================
@@ -76,6 +86,10 @@ Conditions:
   HasAcmCertAndHostedZone: !And
     - !Condition HasAcmCert
     - !Condition HasHostedZone
+  HasBudgetAlert: !Not [!Equals [!Ref BudgetAlertEmail1, '']]
+  HasBudgetAlert2: !And
+    - !Condition HasBudgetAlert
+    - !Not [!Equals [!Ref BudgetAlertEmail2, '']]
 
 # =============================================================================
 # Mappings
@@ -430,6 +444,88 @@ Resources:
           Value: !Ref Stage
 
   # ---------------------------------------------------------------------------
+  # MVP test-budget alert (SYN-2306): the app logs IA_TEST_BUDGET_THRESHOLD /
+  # IA_TEST_BUDGET_EXHAUSTED once per threshold; these turn each line into an
+  # SNS e-mail. Recipients must click the AWS confirmation link once.
+  # ---------------------------------------------------------------------------
+  BudgetAlertTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasBudgetAlert
+    Properties:
+      TopicName: !Sub cgiar-ia-${Stage}-test-budget-alerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref BudgetAlertEmail1
+
+  BudgetAlertSubscription2:
+    Type: AWS::SNS::Subscription
+    Condition: HasBudgetAlert2
+    Properties:
+      TopicArn: !Ref BudgetAlertTopic
+      Protocol: email
+      Endpoint: !Ref BudgetAlertEmail2
+
+  BudgetThresholdMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: HasBudgetAlert
+    Properties:
+      LogGroupName: !Ref AgentLogGroup
+      FilterPattern: '"IA_TEST_BUDGET_THRESHOLD"'
+      MetricTransformations:
+        - MetricNamespace: CGIAR-IA
+          MetricName: !Sub TestBudgetThreshold-${Stage}
+          MetricValue: '1'
+          DefaultValue: 0
+
+  BudgetExhaustedMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: HasBudgetAlert
+    Properties:
+      LogGroupName: !Ref AgentLogGroup
+      FilterPattern: '"IA_TEST_BUDGET_EXHAUSTED"'
+      MetricTransformations:
+        - MetricNamespace: CGIAR-IA
+          MetricName: !Sub TestBudgetExhausted-${Stage}
+          MetricValue: '1'
+          DefaultValue: 0
+
+  BudgetThresholdAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasBudgetAlert
+    Properties:
+      AlarmName: !Sub cgiar-ia-${Stage}-test-budget-threshold
+      AlarmDescription: !Sub >-
+        Innovation Analytics (${Stage}) crossed a test-budget alert threshold
+        (50/75/90 %). See Settings > Usage and cost, or GET /api/admin/usage.
+      Namespace: CGIAR-IA
+      MetricName: !Sub TestBudgetThreshold-${Stage}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref BudgetAlertTopic]
+
+  BudgetExhaustedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasBudgetAlert
+    Properties:
+      AlarmName: !Sub cgiar-ia-${Stage}-test-budget-exhausted
+      AlarmDescription: !Sub >-
+        Innovation Analytics (${Stage}) test budget is USED UP: non-admin users
+        are now refused. Raise IA_TEST_BUDGET_USD or end the test.
+      Namespace: CGIAR-IA
+      MetricName: !Sub TestBudgetExhausted-${Stage}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref BudgetAlertTopic]
+
+  # ---------------------------------------------------------------------------
   # Application Load Balancer (conditional - only when ACM cert is provided)
   # ---------------------------------------------------------------------------
   ALB:
@@ -474,7 +570,7 @@ Resources:
       UnhealthyThresholdCount: 3
       TargetGroupAttributes:
         - Key: stickiness.enabled
-          Value: 'true'
+          Value: 'false'  # single instance: AWSALB cookies served no purpose and broke 'no cookies' (SYN-2305)
         - Key: stickiness.type
           Value: lb_cookie
         - Key: stickiness.lb_cookie.duration_seconds
