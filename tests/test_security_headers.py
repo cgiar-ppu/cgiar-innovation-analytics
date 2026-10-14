@@ -39,11 +39,13 @@ def test_csp_report_only_by_default_and_tuned_for_the_spa():
     headers = dict(static_security_headers({"IA_SSO_ORIGIN": DEV}))
     ro = headers["content-security-policy-report-only"]
     assert headers["content-security-policy"] == "frame-ancestors 'none'"
-    for needle in ("script-src 'self'", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-                   "font-src 'self' data: https://fonts.gstatic.com", "img-src 'self' data: blob:",
+    for needle in ("script-src 'self'", "style-src 'self' 'unsafe-inline';",
+                   "font-src 'self' data:;", "img-src 'self' data: blob:",
                    "wss://innovation-analytics-dev.synapsis-analytics.com", "frame-src 'self' blob: data:",
                    "object-src 'none'", "frame-ancestors 'none'", "mediastream:"):
         assert needle in ro, needle
+    # Fonts are self-hosted: no third-party font/style origin (verification round, Oct 2026).
+    assert "googleapis" not in ro and "gstatic" not in ro
     assert headers["x-frame-options"] == "DENY"
     assert headers["x-content-type-options"] == "nosniff"
     assert "max-age=" in headers["strict-transport-security"]
@@ -111,3 +113,18 @@ async def test_cross_origin_preflight_from_a_foreign_site_is_refused(client):
     )
     assert resp.headers.get("access-control-allow-origin") != "https://evil.example"
     assert resp.headers.get("access-control-allow-origin") != "*"
+
+
+def test_frontend_loads_no_third_party_fonts_or_styles():
+    """No CSS/HTML in the SPA imports anything from another origin."""
+    from pathlib import Path
+    import re
+    front = Path(__file__).resolve().parents[1] / "frontend"
+    offenders = []
+    for p in [*front.joinpath("src").rglob("*.css"), front / "index.html"]:
+        text = p.read_text(encoding="utf-8")
+        if re.search(r"(@import\s+url\(\s*['\"]?https?:|fonts\.googleapis|fonts\.gstatic)", text):
+            offenders.append(p.name)
+    assert offenders == []
+    fonts = front / "src" / "assets" / "fonts"
+    assert len(list(fonts.glob("*.woff2"))) >= 3 and len(list(fonts.glob("OFL-*.txt"))) == 3

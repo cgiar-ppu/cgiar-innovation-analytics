@@ -83,8 +83,9 @@ def content_security_policy(environ: dict | None = None) -> str:
     directives = [
         "default-src 'self'",
         "script-src 'self'",
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-        "font-src 'self' data: https://fonts.gstatic.com",
+        # Fonts are self-hosted (frontend/src/styles/fonts.css): no third-party origin.
+        "style-src 'self' 'unsafe-inline'",
+        "font-src 'self' data:",
         "img-src 'self' data: blob:",
         "media-src 'self' blob: mediastream:",
         "connect-src " + " ".join(dict.fromkeys(connect)),
