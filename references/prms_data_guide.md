@@ -526,8 +526,9 @@ GROUP BY reported_year_id ORDER BY reported_year_id;
 | `results_innovations_dev` | 4,867 | Innovation Development (type 7) detail. Join `results_id → result.id`. |
 | `results_innovations_use` | ~1,000 | Innovation Use (type 2) detail — **the 0-9 use level** (`innovation_use_level_id` → `clarisa_innovation_use_levels.id`, report `.level`), `new_users_added`, `use_expansion_narrative`. Join `results_id → result.id`. |
 | `result_actors` | ~12,000 | **Use numbers** by actor type (`how_many`, `women`/`men` incl. youth, `*_youth` = of which youth). Join `result_id → result.id`; `section_id` 1 = current, 2 = 2030 target. |
-| `results_by_institution_type` | ~12,000 | Organisations using, by institution type (`how_many`, `section_id`). Join `results_id → result.id`. |
-| `results_innovations_use_measures` | ~180 | Other use quantities (hectares, kg …). Join `result_innovation_use_id → results_innovations_use.result_innovation_use_id` (**not** `result.id`). |
+| `results_by_institution_type` | ~12,000 | Organisations using, by institution type (`how_many`, `section_id`); Innovation Use organisations = `institution_roles_id = 5`. Join `results_id → result.id`. |
+| `result_ip_measure` | — | **Other quantitative measures of use** (hectares, kg …) as printed in the PRMS PDF: `quantity`, `unit_of_measure`, `section_id`. Join `result_id → result.id`. |
+| `results_innovations_use_measures` | ~180 | LEGACY 2022-style use quantities (2025 rows are carried-over copies the PDF does not show). Join `result_innovation_use_id → results_innovations_use.result_innovation_use_id` (**not** `result.id`). |
 | `result_innovation_package` | — | IPSR / package-level (PK = `result.id`). |
 | `result_by_innovation_package` | — | IPSR component innovations. Join `result_innovation_package_id`. |
 | `version` | 7 | Phase/year/portfolio. Join `result.version_id`. |
@@ -588,7 +589,7 @@ The dashboard **Innovation Developments "Export table"** Excel has **41 columns*
 | 37 | Evidences explanation | `results_innovations_dev.evidences_justification` |
 | 38–40 | Evidence 1–3 | pivot `evidence` (is_active=1) by row-number per result_id |
 
-**Innovation Use export** is a UNION of type 2 + type 10; type-specific columns include *Use level* (`clarisa_innovation_use_levels.level` via `results_innovations_use.innovation_use_level_id` — an id, level = id − 1), *Users by actor* (`result_actors`, current section only), *Organisations* (`results_by_institution_type`), *Other quantities* (`results_innovations_use_measures` via `results_innovations_use.result_innovation_use_id`), and IPSR-only fields (scaling ambition, components, experts) where readiness/use/potential scores are **computed**, not stored — fetch from the dashboard/PowerBI if a user needs them. The IPSR computation note applies to **packages (type 10) only**: an Innovation Use (type 2) result's own 0-9 use level and use numbers ARE stored — see `prms_query_cookbook` Recipe 11.
+**Innovation Use export** is a UNION of type 2 + type 10; type-specific columns include *Use level* (`clarisa_innovation_use_levels.level` via `results_innovations_use.innovation_use_level_id` — an id, level = id − 1), *Users by actor* (`result_actors`, current section only), *Organisations* (`results_by_institution_type`, role 5), *Other quantities* (`result_ip_measure`; the legacy `results_innovations_use_measures` joins via `results_innovations_use.result_innovation_use_id`), and IPSR-only fields (scaling ambition, components, experts) where readiness/use/potential scores are **computed**, not stored — fetch from the dashboard/PowerBI if a user needs them. The IPSR computation note applies to **packages (type 10) only**: an Innovation Use (type 2) result's own 0-9 use level and use numbers ARE stored — see `prms_query_cookbook` Recipe 11.
 
 ---
 

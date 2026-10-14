@@ -397,7 +397,18 @@ Details for result_type_id=2 (Innovation use). **This is where the 0-9 Innovatio
 ### `clarisa_innovation_use_levels` (10 rows)
 `id` 1-10 ↔ `level` 0-9 (**id = level + 1**). Names: 0 No use · 1 Project lead organization · 2-3 Partners · 4-5 Connected next-user · 6-7 Unconnected next-user · 8-9 End-user / Beneficiaries. `definition` holds the full text.
 
-### `results_innovations_use_measures` (other quantities of use, e.g. hectares)
+### `result_ip_measure` (other quantitative measures of use, e.g. hectares, kg — what the PRMS PDF prints)
+| Column | Type | Description |
+|--------|------|-------------|
+| `result_ip_measure_id` | INT PK | Row ID |
+| `result_id` | int | FK -> result.id |
+| `quantity` | float | Amount |
+| `unit_of_measure` | TEXT | Free-text unit (e.g. "hectares", "Kilograms") |
+| `section_id` | int | FK -> `result_innov_section.id`: 1 = Current, 2 = 2030 target |
+| `result_ip_id` | int | Package link (IPSR rows) |
+| `is_active` | tinyint | Active flag |
+
+### `results_innovations_use_measures` (LEGACY 2022-style quantities — use `result_ip_measure` for 2023+)
 | Column | Type | Description |
 |--------|------|-------------|
 | `result_innovations_use_measure_id` | INT PK | Row ID |
@@ -429,7 +440,7 @@ How many people use (type 2) — or are targeted by (type 7) — an innovation, 
 1 = Current ("Current Innovation Use evidence"), 2 = Future ("Targeted innovation use by the end of 2030"). Used by `result_actors.section_id` and `results_by_institution_type.section_id`.
 
 ### `results_by_institution_type` (organisations using, by type)
-`results_id` -> result.id · `institution_roles_id` -> `institution_role` · `institution_types_id` -> `clarisa_institution_types.code` · `how_many` · `other_institution` · `graduate_students` · `section_id` -> `result_innov_section` (current vs 2030).
+`results_id` -> result.id · `institution_roles_id` -> `institution_role` (Innovation Use organisations = **5**, although the lookup names it "Innovation Package Partners") · `institution_types_id` -> `clarisa_institution_types.code` · `how_many` · `other_institution` · `graduate_students` · `section_id` -> `result_innov_section` (current vs 2030).
 
 ### `actor_type` (5 rows)
 | actor_type_id | name |

@@ -64,10 +64,21 @@ def _make_db(path: Path, skip: set[str] = frozenset()) -> Path:
             conn.execute(
                 "CREATE TABLE result_actors (result_actors_id INTEGER PRIMARY KEY, result_id INT, "
                 "actor_type_id INT, how_many INT, women INT, men INT, other_actor_type TEXT, "
-                "section_id INT, is_active INT)"
+                "section_id INT, is_active INT, women_youth INT, men_youth INT)"
             )
         elif t == "actor_type":
             conn.execute("CREATE TABLE actor_type (actor_type_id INT, name TEXT)")
+        elif t == "result_ip_measure":
+            conn.execute(
+                "CREATE TABLE result_ip_measure (result_ip_measure_id INTEGER PRIMARY KEY, "
+                "result_id INT, quantity REAL, unit_of_measure TEXT, section_id INT, is_active INT)"
+            )
+        elif t == "results_by_institution_type":
+            conn.execute(
+                "CREATE TABLE results_by_institution_type (id INTEGER PRIMARY KEY, results_id INT, "
+                "institution_roles_id INT, institution_types_id INT, how_many INT, "
+                "other_institution TEXT, section_id INT, is_active INT)"
+            )
         elif t == "results_innovations_use_measures":
             conn.execute(
                 "CREATE TABLE results_innovations_use_measures (result_innovations_use_measure_id "
@@ -99,16 +110,40 @@ def _make_db(path: Path, skip: set[str] = frozenset()) -> Path:
         )
     if "result_actors" not in skip:
         conn.executemany(
-            "INSERT INTO result_actors VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO result_actors VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             [
-                (1, 100, 1, 171561, None, None, None, 1, 1),
-                (2, 100, 1, 500000, None, None, None, 2, 1),  # 2030 target: never added
+                (1, 100, 1, 171561, None, None, None, 1, 1, None, None),
+                (2, 100, 1, 500000, None, None, None, 2, 1, None, None),  # 2030 target: never added
+                (3, 100, 2, 70, 30, 40, None, 1, 1, 14, 14),               # women/men split
+                (4, 101, 1, 0, None, None, None, 1, 1, None, None),        # a row without a number
+            ],
+        )
+    if "results_by_institution_type" not in skip:
+        conn.executemany(
+            "INSERT INTO results_by_institution_type VALUES (?,?,?,?,?,?,?,?)",
+            [
+                (1, 100, 5, 22, 157, None, 1, 1),   # role 5, current: counts
+                (2, 101, 5, 22, 0, None, 1, 1),     # how_many 0: does not count
+                (3, 101, 1, 22, 9, None, 1, 1),     # other role: does not count
+            ],
+        )
+    if "clarisa_institution_types" not in skip:
+        conn.execute("CREATE TABLE IF NOT EXISTS clarisa_institution_types "
+                     "(id INTEGER PRIMARY KEY, code INT, name TEXT)")
+        conn.execute("INSERT INTO clarisa_institution_types VALUES (1, 22, 'Private company')")
+    if "result_ip_measure" not in skip:
+        conn.executemany(
+            "INSERT INTO result_ip_measure VALUES (?,?,?,?,?,?)",
+            [
+                (1, 101, 160000, 'hectares', 1, 1),   # current: what the PDF prints
+                (2, 101, 900000, 'hectares', 2, 1),   # 2030 target: not current
             ],
         )
     if "actor_type" not in skip:
         conn.execute("INSERT INTO actor_type VALUES (1, 'Farmers')")
     if "results_innovations_use_measures" not in skip:
-        conn.execute("INSERT INTO results_innovations_use_measures VALUES (1, 8, 160000, 'Area (ha)', 1)")
+        # Legacy table: a carried-over copy the PDF does not show (must be ignored).
+        conn.execute("INSERT INTO results_innovations_use_measures VALUES (1, 8, 6722, 'Area (ha)', 1)")
     conn.commit()
     conn.close()
     return path
@@ -287,7 +322,9 @@ class TestReferences:
     def test_cookbook_has_recipe_11_with_correct_joins(self):
         text = (REFERENCES / "prms_query_cookbook.md").read_text()
         assert "## Recipe 11: Innovation Use detail" in text
-        assert "m.result_innovation_use_id = riu.result_innovation_use_id" in text
+        assert "result_innovation_use_id = results_innovations_use.result_innovation_use_id" in text
+        assert "FROM result_ip_measure m" in text
+        assert "o.institution_roles_id = 5" in text
         assert "iul.id = riu.innovation_use_level_id" in text
         assert "COALESCE(ra.section_id, 1) = 1" in text
         assert "DO NOT join `results_innovations_use_measures` to `result.id`" in text
@@ -333,11 +370,18 @@ def test_recipe_11_on_synthetic_snapshot(full_db):
     conn.close()
     assert set(rows) == {24600, 22751}
     assert rows[24600]["use_level"] == 8 and rows[22751]["use_level"] == 9  # id - 1
-    assert rows[24600]["users_current"] == 171561  # 2030 target not added
-    assert rows[24600]["other_quantities"] is None
-    # Only the correct join (via results_innovations_use) finds the hectares;
-    # joining measures to result.id (13 Oct) finds nothing for 22751.
-    assert rows[22751]["other_quantities"] == "160000.0 Area (ha)"
+    assert rows[24600]["users_current"] == 171561 + 70  # 2030 target not added
+    assert "women 30 of which youth 14, men 40 of which youth 14" in rows[24600]["users_by_actor_type"]
+    assert rows[24600]["orgs_current"] == "157 Private company"
+    assert rows[24600]["other_measures_current"] is None
+    assert rows[24600]["reports_use_numbers"] == 1
+    # 22751: actor row without a number, org row with 0 / another role → none count;
+    # the current result_ip_measure row is the PDF's "other quantitative measure";
+    # the legacy results_innovations_use_measures copy and the 2030 target are ignored.
+    assert rows[22751]["users_current"] is None
+    assert rows[22751]["orgs_current"] is None
+    assert rows[22751]["other_measures_current"] == "160000.0 hectares"
+    assert rows[22751]["reports_use_numbers"] == 1
 
 
 def test_semicolon_inside_a_string_literal_is_not_a_second_statement():
@@ -349,7 +393,7 @@ def test_semicolon_inside_a_string_literal_is_not_a_second_statement():
 
 def test_recipe_11_runs_through_prms_query(full_db):
     out = _text(_query(_recipe_11_sql(), full_db))
-    assert "171561" in out and "Area (ha)" in out
+    assert "171561" in out and "160000.0 hectares" in out and "Area (ha)" not in out
 
 
 def _real_snapshot_with_use_tables():
@@ -376,3 +420,39 @@ def test_recipe_11_on_the_configured_snapshot():
     assert all(r["use_level"] is None or 0 <= r["use_level"] <= 9 for r in rows)
     with_users = sum(r["users_current"] is not None for r in rows)
     assert with_users / len(rows) > 0.4
+
+
+def _recipe_11_coverage_sql() -> str:
+    """Recipe 11's CTEs + its coverage SELECT (the second sql block)."""
+    text = (REFERENCES / "prms_query_cookbook.md").read_text()
+    section = text.split("## Recipe 11:", 1)[1].split("\n## ", 1)[0]
+    main, coverage = re.findall(r"```sql\n(.*?)```", section, re.S)[:2]
+    ctes = main[: main.index("\nSELECT u.result_code")]
+    return ctes + "\n" + coverage
+
+
+def test_recipe_11_coverage_on_a_synthetic_snapshot(full_db):
+    conn = sqlite3.connect(full_db)
+    conn.row_factory = sqlite3.Row
+    row = dict(conn.execute(_recipe_11_coverage_sql()).fetchone())
+    conn.close()
+    assert row == {"results": 2, "with_use_level": 2, "with_people_numbers": 1,
+                   "with_organisation_numbers": 1, "with_other_measures": 1,
+                   "with_any_current_number": 2}
+
+
+def test_recipe_11_coverage_matches_the_2025_ground_truth():
+    """2025 is a closed phase: on every corrected snapshot (13 Sep and 14 Oct
+    2026 vintages) the counts equal the PDF-verified ground truth."""
+    path = _real_snapshot_with_use_tables()
+    if path is None:
+        pytest.skip("no PRMS snapshot with the Innovation Use tables configured")
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    row = dict(conn.execute(_recipe_11_coverage_sql()).fetchone())
+    conn.close()
+    if row["results"] != 403:
+        pytest.skip(f"different 2025 population in this snapshot ({row['results']})")
+    assert row == {"results": 403, "with_use_level": 401, "with_people_numbers": 228,
+                   "with_organisation_numbers": 184, "with_other_measures": 81,
+                   "with_any_current_number": 324}
