@@ -110,6 +110,11 @@ async def activity(_user=Depends(get_current_user)):
     return stats
 
 
+def _feedback_enabled() -> bool:
+    from synapsis.routes.feedback import feedback_enabled
+    return feedback_enabled()
+
+
 @router.get("/config")
 async def get_config(user=Depends(get_optional_user)):
     """Return app configuration for the frontend.
@@ -149,6 +154,8 @@ async def get_config(user=Depends(get_optional_user)):
         "sso_enabled": SSO_ENABLED,
         "password_login_enabled": PASSWORD_LOGIN_ENABLED,
         "invited_login_enabled": INVITED_LOGIN_ENABLED,
+        # IA_FEEDBACK_ENABLED kill-switch: the "Give feedback" button hides itself.
+        "feedback_enabled": _feedback_enabled(),
     }
     if user is None:
         # QA-4 D15: the login page needs none of these; they only describe the
