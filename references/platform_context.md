@@ -9,7 +9,7 @@ This is "Project 2" in the CG Insights ecosystem -- built specifically for the P
 ## The Four Modules
 
 ### Module 1: Conversational Data Interrogation
-Users ask natural language questions about CGIAR innovations and receive sourced answers drawn from the PRMS database. Every answer includes clear attribution: which PRMS tables and records the data came from, and whether claims are PRMS-validated or AI-inferred.
+Users ask natural language questions about CGIAR innovations and receive sourced answers drawn from the PRMS database. Every answer includes clear attribution: which PRMS tables and records the data came from, and whether claims are Factual (from PRMS) or AI-inferred.
 
 **Example queries:**
 - "How many innovations are tagged for East Africa?"
@@ -90,9 +90,9 @@ Users can explore: "Are there innovations across different programmes that addre
 
 ## Design Principles
 
-### 1. Source Attribution (PRMS-validated vs AI-inferred)
+### 1. Source Attribution (Factual · PRMS vs AI-inferred)
 Every data point and claim made by the platform is labeled with its provenance:
-- **PRMS-validated:** Data drawn directly from the PRMS database, with specific table/record references
+- **Factual (from PRMS):** Data drawn directly from the PRMS database, with specific table/record references
 - **AI-inferred:** Insights generated through analysis, pattern recognition, or reasoning beyond what is explicitly stated in the data
 
 This distinction is critical for maintaining trust with CGIAR stakeholders who need to know exactly what comes from the official system of record versus what is analytical interpretation.

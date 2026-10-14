@@ -14,7 +14,7 @@ The CGIAR Innovation Analytics Platform provides intelligent, conversational acc
 
 | Module | Description | Status |
 |--------|-------------|--------|
-| **Conversational Data Interrogation** | Ask natural language questions about CGIAR innovations, partners, and geographies. Get sourced answers with clear PRMS-validated vs AI-inferred attribution. | Planned |
+| **Conversational Data Interrogation** | Ask natural language questions about CGIAR innovations, partners, and geographies. Get sourced answers with clear Factual (PRMS) vs AI-inferred attribution. | Planned |
 | **Self-Serve Visualization Builder** | Request charts through conversation. Bar, line, area, pie, scatter, map, and heatmap visualizations rendered inline with interactive Recharts components. | Planned |
 | **Scenario Planning** | Forward-looking "what if" analysis for portfolio decisions. Combines PRMS data with the scaling readiness framework for comparative before/after analysis. | Planned |
 | **Partner Identification** | Find external partners for scaling specific innovations. Combines PRMS partner data with web search, clearly distinguishing data-sourced vs AI-suggested partners. | Planned |

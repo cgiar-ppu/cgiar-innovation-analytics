@@ -381,7 +381,7 @@ async def run_all_tests():
             # Check source attribution
             has_prms_label = (
                 "[PRMS" in text or
-                "PRMS-VALIDATED" in text or
+                "[Factual · PRMS]" in text or
                 "PRMS database" in text or
                 "PRMS Database" in text
             )

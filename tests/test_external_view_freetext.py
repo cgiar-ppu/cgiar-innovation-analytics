@@ -586,3 +586,30 @@ class TestRealSnapshot:
         res, _, _ = _run(Path(_REAL), sql, "researcher")
         assert ext == res and ext
         assert not log.denied and not log.nulled
+
+
+# ---------------------------------------------------------------------------
+# 9. "PRMS" evidence label reads "Factual" everywhere it is shown or instructed
+# ---------------------------------------------------------------------------
+
+def test_no_prompt_tool_or_reference_still_prints_the_old_prms_validated_tag():
+    """Marc (9 Oct): the PRMS label on factual evidence reads "Factual". The tag
+    is now ``[Factual · PRMS]`` (PRMS stays in citations and Sources)."""
+    repo = Path(__file__).resolve().parents[1]
+    paths = [*(repo / "synapsis").rglob("*.py"), *(repo / "references").rglob("*.md"),
+             repo / "docs" / "user-guide.md"]
+    offenders = []
+    for p in paths:
+        for n, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if "PRMS-VALIDATED" in line.upper() and not line.lstrip().startswith("#"):
+                offenders.append(f"{p.relative_to(repo)}:{n}")
+    assert offenders == []
+
+
+def test_specialists_and_tools_use_the_factual_tag():
+    from synapsis.agents import definitions
+
+    text = Path(definitions.__file__).read_text(encoding="utf-8")
+    assert "[Factual · PRMS]" in text
+    assert "[Factual · PRMS]" in Path(sa.__file__).read_text(encoding="utf-8")
+    assert "[Factual · PRMS]" in Path(pi.__file__).read_text(encoding="utf-8")
