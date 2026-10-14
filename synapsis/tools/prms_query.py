@@ -128,11 +128,18 @@ class _TimeoutError(Exception):
     """Raised when a query exceeds the timeout."""
 
 
+#: Default for ``_execute_with_timeout(role=...)``: use the verified role of
+#: the calling request / chat connection (resolved in the caller's thread —
+#: the worker thread below does not inherit context variables).
+CALLER_ROLE: Any = object()
+
+
 def _execute_with_timeout(
     db_path: str,
     sql: str,
     timeout: int = QUERY_TIMEOUT_SECONDS,
     access_log: "prms_access_policy.AccessLog | None" = None,
+    role: Any = CALLER_ROLE,
 ) -> tuple[list[dict], list[str], int]:
     """Execute a SQL query with a timeout that really stops SQLite.
 
@@ -157,7 +164,14 @@ def _execute_with_timeout(
     (``synapsis/prms_access_policy.py``): credential / personal-contact tables
     are refused (``PRMSAccessDenied``) and a few contact columns read as NULL.
     Pass *access_log* to learn which columns were blanked.
+
+    *role* selects the role-aware layer of the policy: by default the verified
+    role of the caller (``prms_access_policy.caller_role()``), so an
+    ``external`` account cannot read budget / financial tables and columns;
+    ``None`` applies the base policy only.
     """
+    if role is CALLER_ROLE:
+        role = prms_access_policy.caller_role()
     result_holder: dict[str, Any] = {}
     error_holder: dict[str, Any] = {}
     conn_holder: dict[str, sqlite3.Connection] = {}
@@ -181,7 +195,7 @@ def _execute_with_timeout(
             conn.set_progress_handler(_past_deadline, _PROGRESS_STEPS)
             conn.execute("PRAGMA query_only = ON;")
             conn.row_factory = sqlite3.Row
-            access_log_holder["log"] = prms_access_policy.install(conn)
+            access_log_holder["log"] = prms_access_policy.install(conn, role)
 
             cursor = conn.execute(sql)
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
@@ -225,6 +239,10 @@ def _execute_with_timeout(
         src = access_log_holder["log"]
         access_log.denied.extend(t for t in src.denied if t not in access_log.denied)
         access_log.nulled.extend(c for c in src.nulled if c not in access_log.nulled)
+        access_log.financial_denied.extend(
+            t for t in src.financial_denied if t not in access_log.financial_denied)
+        access_log.financial_nulled.extend(
+            c for c in src.financial_nulled if c not in access_log.financial_nulled)
 
     if "error" in error_holder:
         exc = error_holder["error"]
@@ -242,7 +260,7 @@ def _execute_with_timeout(
     )
 
 
-def _get_total_count(db_path: str, sql: str) -> int | None:
+def _get_total_count(db_path: str, sql: str, role: Any = CALLER_ROLE) -> int | None:
     """Attempt to get the total row count for a query (before LIMIT).
 
     Returns None if it cannot be determined (e.g., query too complex).
@@ -253,7 +271,7 @@ def _get_total_count(db_path: str, sql: str) -> int | None:
     count_sql = f"SELECT COUNT(*) as total FROM ({count_sql})"
 
     try:
-        rows, _, _ = _execute_with_timeout(db_path, count_sql, timeout=15)
+        rows, _, _ = _execute_with_timeout(db_path, count_sql, timeout=15, role=role)
         if rows:
             return rows[0].get("total", None)
     except Exception:
@@ -428,7 +446,10 @@ def _format_results_text(
     "Operational tables of the PRMS web application that hold credentials or personal "
     "contact data (e.g. account passwords and e-mail addresses, access tokens, "
     "application settings) are not available: such queries are refused or those "
-    "columns come back empty, by design.",
+    "columns come back empty, by design. For external partner accounts, budget and "
+    "financial figures (budget tables, project budgets, allocations, sources of funding) "
+    "are refused or come back empty in the same way: decline those questions politely "
+    "as not available in this external view, never as missing data.",
     {
         "sql": str,
         "question": str,
@@ -498,13 +519,20 @@ async def prms_query(args: dict[str, Any]) -> dict[str, Any]:
     # Execute
     start_time = time.monotonic()
     access_log = prms_access_policy.AccessLog()
+    role = prms_access_policy.caller_role()
     try:
         rows, columns, row_count = _execute_with_timeout(
-            PRMS_DB_PATH, limited_sql, QUERY_TIMEOUT_SECONDS, access_log=access_log
+            PRMS_DB_PATH, limited_sql, QUERY_TIMEOUT_SECONDS,
+            access_log=access_log, role=role,
         )
     except _TimeoutError as exc:
         return error_response(str(exc))
     except PRMSAccessDenied as exc:
+        if exc.financial:
+            return error_response(
+                f"Not available in this external view: {exc} "
+                f"{prms_access_policy.FINANCIAL_GUIDANCE}"
+            )
         return error_response(
             f"Not available: {exc} Answer the user's question without it — the "
             "analytic PRMS tables (results, innovations, partners, geographies, "
@@ -552,7 +580,7 @@ async def prms_query(args: dict[str, Any]) -> dict[str, Any]:
     # Get total count if we may have limited the results
     total_count = None
     if row_count >= effective_limit:
-        total_count = _get_total_count(PRMS_DB_PATH, sql)
+        total_count = _get_total_count(PRMS_DB_PATH, sql, role=role)
 
     # Format the response
     result_text = _format_results_text(rows, columns, total_count, limited_sql, tables_used)

@@ -23,6 +23,8 @@ from typing import Any
 
 from claude_agent_sdk import tool
 
+from synapsis import prms_access_policy
+
 from synapsis.utils.responses import error_response, success_response
 from synapsis.prms_snapshot import get_snapshot_info, resolve_db_path
 
@@ -60,11 +62,36 @@ SENSITIVITY_BAND: float = 0.20            # +/-20% for optimistic/pessimistic
 # ---------------------------------------------------------------------------
 
 
+def _allocation_proxy_note() -> str:
+    """Assumption 1 of every scenario, worded for the caller's role.
+
+    External partner accounts get no budget figures at all, so their wording
+    does not refer to PRMS budget coverage.
+    """
+    if prms_access_policy.is_restricted(prms_access_policy.caller_role()):
+        return (
+            "1. Result counts used as proxy for resource allocation "
+            "(financial figures are not part of this external view) [DATA-LIMITATION]"
+        )
+    return (
+        "1. Result counts used as proxy for resource allocation "
+        "(budget data covers only 5.6% of results) [DATA-LIMITATION]"
+    )
+
+
+
 def _get_connection() -> sqlite3.Connection:
-    """Get read-only PRMS database connection."""
+    """Get read-only PRMS database connection.
+
+    The PRMS access policy is installed for the caller's verified role (the
+    queries here are fixed and read no financial data; the policy is defence
+    in depth so a future query cannot hand budget figures to an external role).
+    """
     if not os.path.isfile(PRMS_DB_PATH):
         raise FileNotFoundError(f"PRMS database not found: {PRMS_DB_PATH}")
-    return sqlite3.connect(f"file:{PRMS_DB_PATH}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"file:{PRMS_DB_PATH}?mode=ro", uri=True)
+    prms_access_policy.install(conn, prms_access_policy.caller_role())
+    return conn
 
 
 def _query_rows(conn: sqlite3.Connection, sql: str) -> list[dict]:
@@ -1106,8 +1133,7 @@ def _format_reallocation_response(
     # Assumptions
     lines.append("### Key Assumptions")
     lines.append(
-        "1. Result counts used as proxy for resource allocation "
-        "(budget data covers only 5.6% of results) [DATA-LIMITATION]"
+        _allocation_proxy_note()
     )
     lines.append(f"2. Diminishing returns factor: {DIMINISHING_RETURNS_FACTOR}x for reallocated capacity")
     lines.append(f"3. Sensitivity band: +/-{SENSITIVITY_BAND * 100:.0f}% for optimistic/pessimistic bounds")
@@ -1212,8 +1238,7 @@ def _format_irl_response(
     # Assumptions
     lines.append("### Key Assumptions")
     lines.append(
-        "1. Result counts used as proxy for resource allocation "
-        "(budget data covers only 5.6% of results) [DATA-LIMITATION]"
+        _allocation_proxy_note()
     )
     lines.append(f"2. IRL 6->7 'valley of death' factor: {IRL_VALLEY_OF_DEATH_FACTOR}x advancement rate")
     lines.append(f"3. Sensitivity band: +/-{SENSITIVITY_BAND * 100:.0f}% for optimistic/pessimistic bounds")
@@ -1326,8 +1351,7 @@ def _format_scaling_response(
     # Assumptions
     lines.append("### Key Assumptions")
     lines.append(
-        "1. Result counts used as proxy for resource allocation "
-        "(budget data covers only 5.6% of results) [DATA-LIMITATION]"
+        _allocation_proxy_note()
     )
     lines.append(
         f"2. Diminishing returns: scale_factor^{SCALING_EXPONENT} "
@@ -1467,8 +1491,7 @@ def _format_focus_response(
     # Assumptions
     lines.append("### Key Assumptions")
     lines.append(
-        "1. Result counts used as proxy for resource allocation "
-        "(budget data covers only 5.6% of results) [DATA-LIMITATION]"
+        _allocation_proxy_note()
     )
     if focus_area == "scaling_ready":
         lines.append(

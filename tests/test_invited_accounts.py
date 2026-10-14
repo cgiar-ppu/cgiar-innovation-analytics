@@ -254,3 +254,107 @@ async def test_pre_cohort_database_upgrades_in_place(client):
     await store.init_invited_tables()  # idempotent
     listing = (await client.get("/api/auth/invitations")).json()
     assert listing[0]["email"] == "old@example.org" and listing[0]["cohort"] == ""
+    assert listing[0]["role"] == "researcher"   # access level column added in place too
+
+
+# ---------------------------------------------------------------------------
+# External partner role (2026-10-14): invited accounts can be 'external'
+# (no budget / financial figures); existing accounts stay 'researcher'.
+# ---------------------------------------------------------------------------
+
+async def accept(client, token, password="long-test-password"):
+    response = await client.post("/api/auth/invitation/accept", json={"token": token, "password": password})
+    assert response.status_code == 200
+    return response.json()
+
+
+@pytest.mark.asyncio
+async def test_default_invitation_is_still_researcher(client):
+    data = await accept(client, await invite(client, "plain@example.org"))
+    assert verify_token(data["token"])["role"] == "researcher"
+    assert data["user"]["role"] == "researcher"
+    assert (await client.get("/api/auth/invitations")).json()[0]["role"] == "researcher"
+
+
+@pytest.mark.asyncio
+async def test_external_invitation_signs_in_with_the_external_role(client):
+    response = await client.post("/api/auth/invitations", json={
+        "email": "partner@example.org", "name": "Partner", "cohort": "Partner pilot",
+        "expires_in_days": 30, "role": "external"})
+    assert response.status_code == 200 and response.json()["role"] == "external"
+    data = await accept(client, fragment_token(response.json()["invitation_url"]))
+    assert verify_token(data["token"])["role"] == "external"
+    assert data["user"]["role"] == "external"
+    me = await client.get("/api/auth/me", headers={"Authorization": "Bearer " + data["token"]})
+    assert me.status_code == 200 and me.json()["role"] == "external"
+    login = await client.post("/api/auth/login", json={"email": "partner@example.org", "password": "long-test-password"})
+    assert verify_token(login.json()["token"])["role"] == "external"
+    listing = (await client.get("/api/auth/invitations")).json()
+    assert listing[0]["role"] == "external" and listing[0]["cohort"] == "Partner pilot"
+
+
+@pytest.mark.asyncio
+async def test_bulk_external_invitations_for_a_cohort(client):
+    response = await client.post("/api/auth/invitations/bulk", json={
+        "cohort": "Partner pilot", "expires_in_days": 30, "role": "external", "invitees": [
+            {"email": "p1@example.org", "name": "P One"}, {"email": "p2@example.org", "name": "P Two"}]})
+    assert response.status_code == 200 and response.json()["role"] == "external"
+    roles = {a["email"]: a["role"] for a in (await client.get("/api/auth/invitations")).json()}
+    assert roles == {"p1@example.org": "external", "p2@example.org": "external"}
+    data = await accept(client, fragment_token(response.json()["invitations"][1]["invitation_url"]))
+    assert verify_token(data["token"])["role"] == "external"
+
+
+@pytest.mark.asyncio
+async def test_reissue_without_role_keeps_the_access_level(client):
+    await client.post("/api/auth/invitations", json={"email": "k@example.org", "name": "K", "role": "external"})
+    token = await invite(client, "k@example.org")          # old body: no role field
+    assert (await client.get("/api/auth/invitations")).json()[0]["role"] == "external"
+    assert verify_token((await accept(client, token))["token"])["role"] == "external"
+
+
+@pytest.mark.asyncio
+async def test_changing_the_role_ends_current_sign_ins(client):
+    data = await accept(client, await invite(client, "c@example.org"))
+    researcher_token = data["token"]
+    researcher = create_access_token("sso:researcher", "Researcher", "researcher", auth_source="sso")
+    body = {"email": "C@example.org", "role": "external"}
+    assert (await client.post("/api/auth/invitations/role", json=body,
+                              headers={"Authorization": "Bearer " + researcher})).status_code == 403
+    assert (await client.post("/api/auth/invitations/role", json=body,
+                              headers={"Origin": "https://evil.example"})).status_code == 403
+    changed = await client.post("/api/auth/invitations/role", json=body)
+    assert changed.status_code == 200 and changed.json() == {"email": "c@example.org", "role": "external"}
+    assert verify_token(researcher_token) is None          # the old 'researcher' token is dead
+    login = await client.post("/api/auth/login", json={"email": "c@example.org", "password": "long-test-password"})
+    assert verify_token(login.json()["token"])["role"] == "external"
+    # Setting the same level again does not sign the person out.
+    external_token = login.json()["token"]
+    assert (await client.post("/api/auth/invitations/role", json=body)).status_code == 200
+    assert verify_token(external_token)
+    # Re-inviting with a different level also ends the old sign-in.
+    await client.post("/api/auth/invitations", json={"email": "c@example.org", "name": "C", "role": "researcher"})
+    assert verify_token(external_token) is None
+    assert (await client.post("/api/auth/invitations/role", json={"email": "nobody@example.org", "role": "external"})).status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["admin", "user", "EXTERNAL", ""])
+async def test_invitations_can_never_grant_admin_or_unknown_roles(client, role):
+    assert (await client.post("/api/auth/invitations", json={"email": "x@example.org", "name": "X", "role": role})).status_code == 422
+    assert (await client.post("/api/auth/invitations/bulk", json={"role": role, "invitees": [
+        {"email": "x@example.org", "name": "X"}]})).status_code == 422
+    assert (await client.post("/api/auth/invitations/role", json={"email": "x@example.org", "role": role})).status_code == 422
+    with pytest.raises(ValueError):
+        await store.create_invitation("x@example.org", "X", "admin", role=role or "none")
+
+
+@pytest.mark.asyncio
+async def test_a_tampered_role_in_the_table_never_exceeds_researcher(client):
+    data = await accept(client, await invite(client, "t@example.org"))
+    async with get_db() as db:
+        await db.execute("UPDATE invited_accounts SET role='admin' WHERE email='t@example.org'")
+        await db.commit()
+    login = await client.post("/api/auth/login", json={"email": "t@example.org", "password": "long-test-password"})
+    assert verify_token(login.json()["token"])["role"] == "researcher"
+    assert data["user"]["role"] == "researcher"

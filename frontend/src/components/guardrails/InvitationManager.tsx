@@ -3,10 +3,22 @@ import { Copy, UserPlus, Users } from 'lucide-react'
 import { getAuthToken, useAuthStore } from '../../stores/auth'
 import GlassCard from '../common/GlassCard'
 
-type Account = { email: string; name: string; enabled: number; activated: number; expires_at: number | null; cohort?: string }
+/**
+ * Access level of an invited account (Oct 2026): 'external' = partner view
+ * without budget / financial figures (blocked at query level by the backend);
+ * 'researcher' = full analytic data (what every earlier invitation had).
+ */
+export type InvitedRole = 'external' | 'researcher'
+type Account = { email: string; name: string; enabled: number; activated: number; expires_at: number | null; cohort?: string; role?: InvitedRole }
 type Invitee = { email: string; name: string }
 type Created = Invitee & { invitation_url: string }
-type BulkResult = { cohort: string; expires_in_days: number; invitations: Created[]; errors: { email: string; error: string }[] }
+type BulkResult = { cohort: string; expires_in_days: number; role?: InvitedRole; invitations: Created[]; errors: { email: string; error: string }[] }
+
+export const ROLE_LABELS: Record<InvitedRole, string> = {
+  external: 'External partner (no budget or financial data)',
+  researcher: 'Researcher (full data)',
+}
+const ROLE_BADGE: Record<InvitedRole, string> = { external: 'External', researcher: 'Researcher' }
 
 const EXPIRY_CHOICES = [7, 14, 30]
 const inputClass = 'mt-1 w-full rounded-md border border-[var(--border)] bg-[var(--surface-1)] px-3 py-2 text-sm text-[var(--text)]'
@@ -58,6 +70,9 @@ export default function InvitationManager() {
   const [bulkText, setBulkText] = useState('')
   const [cohort, setCohort] = useState('')
   const [expiry, setExpiry] = useState(7)
+  // New invitations default to the external partner view: invited accounts are
+  // people outside CGIAR (staff use SSO). Pick "Researcher" for full data.
+  const [role, setRole] = useState<InvitedRole>('external')
   const [link, setLink] = useState('')
   const [bulk, setBulk] = useState<BulkResult | null>(null)
   const [error, setError] = useState('')
@@ -87,11 +102,11 @@ export default function InvitationManager() {
     event.preventDefault(); reset()
     try {
       if (mode === 'one') {
-        const data = await call('', { email: email.trim(), name: name.trim(), cohort: cohort.trim(), expires_in_days: expiry })
+        const data = await call('', { email: email.trim(), name: name.trim(), cohort: cohort.trim(), expires_in_days: expiry, role })
         setLink(data.invitation_url)
       } else {
         if (!parsed.invitees.length) throw new Error('Add at least one line with an email address.')
-        setBulk(await call('/bulk', { invitees: parsed.invitees, cohort: cohort.trim(), expires_in_days: expiry }))
+        setBulk(await call('/bulk', { invitees: parsed.invitees, cohort: cohort.trim(), expires_in_days: expiry, role }))
       }
       await refresh()
     } catch (error) { setError(error instanceof Error ? error.message : 'Invitation failed.') }
@@ -106,12 +121,21 @@ export default function InvitationManager() {
     } catch (error) { setError(error instanceof Error ? error.message : 'Could not revoke the cohort.') }
     finally { setBusy(false) }
   }
+  const changeRole = async (account: Account, next: InvitedRole) => {
+    if (!window.confirm(`Change ${account.name} to "${ROLE_LABELS[next]}"? They will need to sign in again.`)) return
+    reset()
+    try {
+      await call('/role', { email: account.email, role: next })
+      setNotice(`${account.name} is now: ${ROLE_LABELS[next]}.`); await refresh()
+    } catch (error) { setError(error instanceof Error ? error.message : 'Could not change the access level.') }
+    finally { setBusy(false) }
+  }
   const expiryNote = (days: number) => `It expires in ${days === 7 ? 'seven' : days} days and can be used once. No email has been sent.`
   const shown = cohortFilter ? accounts.filter(a => (a.cohort || '') === cohortFilter) : accounts
 
   return <GlassCard>
     <h2 className="flex items-center gap-2 text-sm font-semibold text-[var(--text)]"><UserPlus size={17} /> Invited external accounts</h2>
-    <p className="mt-2 text-sm text-[var(--text-muted)]">Create a private invitation link for an external researcher, or links for a whole test group. CGIAR staff use SSO.</p>
+    <p className="mt-2 text-sm text-[var(--text-muted)]">Create a private invitation link for someone outside CGIAR, or links for a whole test group. CGIAR staff use SSO. External partners see everything except budget and financial figures.</p>
     {error && <p role="alert" className="mt-3 text-sm text-red-600">{error}</p>}
     {notice && <p role="status" className="mt-3 text-sm text-[var(--text)]">{notice}</p>}
     <div className="mt-4 flex gap-2 text-xs" role="tablist" aria-label="Invitation mode">
@@ -135,6 +159,11 @@ export default function InvitationManager() {
         <input value={cohort} maxLength={60} list="ia-cohorts" onChange={e => setCohort(e.target.value)} placeholder="e.g. WB TTLs Oct-2026" className={inputClass} />
         <datalist id="ia-cohorts">{cohorts.map(c => <option key={c} value={c} />)}</datalist>
       </label>
+      <label className="min-w-56 text-xs text-[var(--text-muted)]">Access level
+        <select value={role} onChange={e => setRole(e.target.value as InvitedRole)} className={inputClass}>
+          {(['external', 'researcher'] as const).map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+        </select>
+      </label>
       <label className="w-32 text-xs text-[var(--text-muted)]">Link valid for
         <select value={expiry} onChange={e => setExpiry(Number(e.target.value))} className={inputClass}>
           {EXPIRY_CHOICES.map(d => <option key={d} value={d}>{d} days</option>)}
@@ -150,7 +179,7 @@ export default function InvitationManager() {
     </div>}
     {bulk && <div className="mt-4 rounded-lg border border-[var(--border)] p-3" data-testid="bulk-links">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs text-[var(--text-muted)]">{bulk.invitations.length} link{bulk.invitations.length === 1 ? '' : 's'}{bulk.cohort ? ` for "${bulk.cohort}"` : ''}. Send each person only their own link. {expiryNote(bulk.expires_in_days)}</p>
+        <p className="text-xs text-[var(--text-muted)]">{bulk.invitations.length} link{bulk.invitations.length === 1 ? '' : 's'}{bulk.cohort ? ` for "${bulk.cohort}"` : ''}{bulk.role ? ` · ${ROLE_LABELS[bulk.role]}` : ''}. Send each person only their own link. {expiryNote(bulk.expires_in_days)}</p>
         {bulk.invitations.length > 1 && <CopyButton label="Copy all (name, email, link)" onError={setError}
           text={bulk.invitations.map(i => `${i.name}\t${i.email}\t${i.invitation_url}`).join('\n')} />}
       </div>
@@ -176,10 +205,14 @@ export default function InvitationManager() {
     </div>
     <div className="mt-3 space-y-3">
       {shown.map(account => <div key={account.email} className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] pt-3 text-sm">
-        <div><p className="text-[var(--text)]">{account.name}{account.cohort ? <span className="ml-2 rounded bg-[var(--surface-1)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">{account.cohort}</span> : null}</p>
+        <div><p className="text-[var(--text)]">{account.name}{account.cohort ? <span className="ml-2 rounded bg-[var(--surface-1)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">{account.cohort}</span> : null}
+          <span className="ml-2 rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]" data-testid={`role-${account.email}`}>{ROLE_BADGE[account.role ?? 'researcher']}</span></p>
           <p className="text-xs text-[var(--text-muted)]">{account.email} · {!account.enabled ? 'Revoked' : account.activated ? 'Active' : 'Awaiting activation'}</p></div>
         <div className="flex gap-3 text-xs">
-          <button type="button" className="text-[var(--accent)]" onClick={() => { setMode('one'); setEmail(account.email); setName(account.name); setCohort(account.cohort || ''); setLink(''); setBulk(null) }}>Reissue / reset</button>
+          <button type="button" className="text-[var(--accent)]" onClick={() => { setMode('one'); setEmail(account.email); setName(account.name); setCohort(account.cohort || ''); setRole(account.role ?? 'researcher'); setLink(''); setBulk(null) }}>Reissue / reset</button>
+          {Boolean(account.enabled) && <button type="button" disabled={busy} className="text-[var(--accent)]"
+            onClick={() => void changeRole(account, (account.role ?? 'researcher') === 'external' ? 'researcher' : 'external')}>
+            {(account.role ?? 'researcher') === 'external' ? 'Give full data access' : 'Make external partner'}</button>}
           {Boolean(account.enabled) && <button type="button" className="text-red-600" onClick={async () => {
             try { await call('/revoke', { email: account.email, name: account.name }); setLink(''); await refresh() }
             catch (error) { setError(error instanceof Error ? error.message : 'Could not revoke access.') }

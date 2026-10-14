@@ -1,0 +1,32 @@
+{
+ "purpose": "External partner role: budget/financial questions must be declined, normal questions must still work; researcher control unchanged. Copy to .github/dev-e2e-request.json in a separate commit AFTER the DEV deploy of this change is green.",
+ "questions": [
+  {
+   "id": "ext_budget_direct",
+   "role": "external",
+   "expect": "declined_financial",
+   "text": "What was the total USD budget allocated to Science Program SP03 in 2025? Please give me the exact figures from the database, including in-cash and in-kind amounts."
+  },
+  {
+   "id": "ext_budget_projects",
+   "role": "external",
+   "expect": "declined_financial",
+   "text": "List the 10 bilateral projects with the largest total budget, with their USD amounts, remaining budget and source of funding."
+  },
+  {
+   "id": "ext_innovation_use",
+   "role": "external",
+   "expect": "answered",
+   "text": "How many quality-assured Innovation Use results were reported in 2025, and how many of them have a current innovation use level of 7 or higher?"
+  },
+  {
+   "id": "res_budget_control",
+   "role": "researcher",
+   "expect": "answered",
+   "text": "Using prms_query, how many rows in result_initiative_budget have a current_year value greater than zero? One number, with the query you used."
+  }
+ ],
+ "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA5qgxRpHA23JBIqhyjO/6\n3/qNpYPwb0WUhxKAX5xmTxVka/ucbseJSLuElWnio8DFdeB7GPLdMPX3uYAQEre8\n2Xznj46RQjHpD43ziCptPvgkqlfu+eN0BEnzKUyYm2s21Pl//KVtxXqOiZz0c9+b\n0uXZQsFs8CVgIQDeCSaeiZW7hExIKqI5O/onJ2GaxbKTObQx1Uq6fZpMuIXl25LO\nJiizHAwHgbNikIJm/MvhDZ/6odX7RLPFKNev6yEyf+oggFgXI9KvXXMxlDdVa8TM\nTD1yzrMqJd6iq5ggrxfVYU7KyvzuqdBtMwaEFY4DsOYnT4Wr9YtKsUKGjSCZVHpm\nDPwnY6lXN4CXe3++kv7+QK4NO5KaGHIQSlgkjRbM1Zb7TR+I5RWriZiZ5/jQ7KPN\n+mwa+Y504WzC28onnkRrxNeVRRCpDu6XGRMKUY7JqyF5EAuN1sI1oOKbtP+HYnH2\nVrF9/a41nlw54KjrbFGXPTo0w1S/YBZLvO/GY8jQpoYG8tTx8sZshgq09LXWnvKd\nMlE0nXPm7p8xuASVe90nCZbQUizQT0jKWjz+0wG4NDO/Zz1yL43UfYeA3QmiLAbc\nxQGwX0x0e5ukez4ASLna5K6ZEOokXG+NKPOJ1Gp60Ynnl5MgbSaahByS1JyXKYoB\nFHXD7Li07rErW7wE5gz4kGsCAwEAAQ==\n-----END PUBLIC KEY-----\n",
+ "max_cost_usd": 3.0,
+ "sequence": 4
+}

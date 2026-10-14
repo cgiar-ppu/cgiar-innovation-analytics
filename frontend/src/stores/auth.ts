@@ -23,7 +23,13 @@ import { claimUserState, resetUserState } from './userStateReset'
 import { navigation } from '../lib/navigation'
 
 const TOKEN_KEY = 'ia-auth-token'
-const ACK_KEY_PREFIX = 'ia-disclaimer-ack:'
+/**
+ * Per-user disclaimer acknowledgement key. Versioned: bump the version when
+ * the disclaimer text changes materially so every user sees it once more.
+ *  - (unversioned) 'ia-disclaimer-ack:'      original July-2026 text
+ *  - 'ia-disclaimer-ack:v2-mvp:'             + MVP test statements (Oct 2026)
+ */
+export const ACK_KEY_PREFIX = 'ia-disclaimer-ack:v2-mvp:'
 const METHOD_KEY = 'ia-auth-method'
 let authEpoch = 0
 let ssoRestore: Promise<void> | null = null

@@ -11,6 +11,7 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 
+from synapsis import prms_access_policy
 from synapsis.config import IS_MACOS, PROJECT_DIR
 from synapsis.exporters.instructions import EXPORT_INSTRUCTIONS
 from synapsis.prms_snapshot import get_snapshot_info
@@ -119,12 +120,48 @@ def _reference_file_map() -> str:
     return "\n".join(rows)
 
 
-def build_system_prompt(agents_dict: dict = None) -> str:
+def external_view_rules(role: str | None) -> str:
+    """Prompt section for roles that must not see financial data, else ''.
+
+    External partner accounts (role ``external``; any role outside the two
+    full-access roles, fail-closed) cannot read budget / financial figures —
+    the PRMS tools refuse or blank them (``synapsis/prms_access_policy.py``).
+    This section makes the model DECLINE such questions politely instead of
+    reporting "missing data", estimating, or looking amounts up elsewhere.
+    """
+    if not prms_access_policy.is_restricted(role):
+        return ""
+    policy_amounts = (
+        ", investment amounts of policy-change results"
+        if prms_access_policy.external_blocks_policy_amounts() else ""
+    )
+    scope = ""
+    if prms_access_policy.external_w12_only():
+        scope = (
+            "\n- **Scope of this view: the public Results Dashboard.** Report W1/W2 "
+            "quality-assessed results only (`source='Result' AND status_id=2`, closed "
+            "reporting phases). Do not include W3/bilateral or open-phase (provisional) "
+            "results, and say in one line that figures follow the public-dashboard scope."
+        )
+    return f"""
+## ⛔ External view — budget and financial figures are not available
+
+This user is signed in with an **external partner** account. In this view, budget and financial figures are not available: budgets, funding amounts, allocations and allocation percentages, cash and in-kind contributions, remaining or annual project budgets, sources of funding{policy_amounts}. The PRMS tools refuse those tables or return those columns empty on purpose.
+- If the user asks for any of them (e.g. "how many USD went to …", "budget of initiative X", "allocation by country", "in-kind contributions of partners"), **decline politely in one or two sentences**: say that this financial detail isn't available in this external view of Innovation Analytics, then offer what you can answer instead (counts of results and innovations, readiness and use levels, partners, geographies, result details with their PRMS references).
+- Never describe it as missing, incomplete or not reported in PRMS; never estimate, infer or reconstruct amounts; do not look up CGIAR budget or funding figures with web search to fill the gap; and do not put financial figures into charts, dashboards or downloadable files.
+- Everything else works as usual for this user.{scope}
+"""
+
+
+def build_system_prompt(agents_dict: dict = None, role: str | None = None) -> str:
     """Build the main agent's system prompt with platform-specific paths and apps.
 
     Args:
         agents_dict: Optional dict of agent_id -> AgentDefinition. If provided,
                      dynamically generates the routing section listing all available agents.
+        role:        Verified role of the user the agent will serve. ``None``
+                     (or a full-access role) builds the standard prompt; an
+                     external role adds the "External view" rules.
 
     Returns:
         The full system prompt string for the Synapsis orchestrator agent.
@@ -175,6 +212,10 @@ def build_system_prompt(agents_dict: dict = None) -> str:
     # empty string when the snapshot is complete.
     _data_health = prompt_warning()
 
+    # External partner accounts (Marc Schut, 9 Oct 2026): decline budget /
+    # financial questions politely. Empty for admins and researchers.
+    _external_view = external_view_rules(role)
+
     return f"""You are a CGIAR innovations expert and data analyst with direct access to the PRMS
 database (a published PRMS Reporting snapshot) — {_snap_label}.
 You answer questions by writing and executing SQL queries via the mcp__synapsis__prms_query
@@ -183,7 +224,7 @@ You have comprehensive PRMS domain knowledge injected below. Before answering an
 SQL question, consult the PRMS Query Cookbook and PRMS Data Guide that are injected in full
 below — they contain verified SQL recipes and authoritative business rules.
 
-{_data_health}
+{_data_health}{_external_view}
 You are the **CGIAR Innovations Expert** — a specialized AI assistant for analyzing CGIAR's innovation portfolio, scaling readiness, and the PRMS database.
 
 ## ⛔ STOP — YEAR-SCOPE PRE-FLIGHT (run before EVERY PRMS query)
@@ -341,7 +382,7 @@ The platform turns every code into a clickable link to that result's **PRMS-gene
 ### Trust — separate data from interpretation (all answers, every persona)
 
 Users must be able to tell what comes from the data and what is your reading of it. In substantive answers, keep two clearly labelled parts (short bold lead-ins or headings, no colour-coding):
-- **From the PRMS data (snapshot <date from the `Source:` line>):** facts, counts and records exactly as retrieved, with their result codes.
+- **Factual — from CGIAR PRMS data (snapshot <date from the `Source:` line>):** facts, counts and records exactly as retrieved, with their result codes. Use this exact lead-in ("Factual"), not "PRMS" alone — many readers do not know what PRMS is; keep "PRMS" in the citations and the Sources list.
 - **Interpretation:** your analysis, patterns, judgements, recommendations and any assumptions — labelled as interpretation, with assumptions stated in the same sentence as the claim.
 Anything taken from web search is labelled **From the web** with its URL. Keep it light: skip the split for trivial one-line answers.
 

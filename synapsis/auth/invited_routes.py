@@ -1,5 +1,6 @@
 """Administrator-issued links and invited-user activation; no public signup."""
 import re
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -69,11 +70,17 @@ class Invitee(BaseModel):
         return valid_external_email(value)
 
 
+InvitedRole = Literal["researcher", "external"]
+
+
 class InvitationRequest(Invitee):
     # Optional test-round fields (2026-09-26). cohort None = keep the account's
     # current label (reissue), '' = clear it. Revoke ignores both.
     cohort: str | None = Field(default=None, max_length=80)
     expires_in_days: int = Field(default=store.DEFAULT_EXPIRY_DAYS, ge=1, le=store.MAX_EXPIRY_DAYS)
+    # Access level (2026-10-14): None = keep the account's level (new account:
+    # researcher); 'external' = partner view without budget/financial figures.
+    role: InvitedRole | None = None
 
     @field_validator("cohort")
     @classmethod
@@ -86,6 +93,7 @@ class BulkInvitationRequest(BaseModel):
     invitees: list[dict] = Field(min_length=1, max_length=50)
     cohort: str = Field(default="", max_length=80)
     expires_in_days: int = Field(default=store.DEFAULT_EXPIRY_DAYS, ge=1, le=store.MAX_EXPIRY_DAYS)
+    role: InvitedRole | None = None
 
     @field_validator("cohort")
     @classmethod
@@ -101,6 +109,11 @@ class CohortRequest(BaseModel):
     @classmethod
     def cohort_label(cls, value):
         return valid_cohort(value)
+
+
+class RoleRequest(BaseModel):
+    email: str = Field(max_length=254)
+    role: InvitedRole
 
 
 class CohortRevokeRequest(BaseModel):
@@ -128,7 +141,8 @@ class ActivationRequest(InvitationToken):
 
 
 def login_response(user):
-    token = create_access_token(user["user_id"], user["name"], "researcher", email=user["email"],
+    token = create_access_token(user["user_id"], user["name"], user.get("role") or store.DEFAULT_INVITED_ROLE,
+                                email=user["email"],
                                 auth_source="invited", credential_version=user["credential_version"],
                                 lifetime_seconds=8 * 3600)
     return JSONResponse({"token": token, "user": {k:v for k,v in user.items() if k != "credential_version"}}, headers=NO_STORE)
@@ -149,9 +163,10 @@ async def invite(body: InvitationRequest, request: Request, user=Depends(admin))
     require_origin(request)
     rate_limit(request, "invite", 20)
     token = await store.create_invitation(body.email, body.name.strip(), user["user_id"],
-                                          cohort=body.cohort, expires_days=body.expires_in_days)
+                                          cohort=body.cohort, expires_days=body.expires_in_days,
+                                          role=body.role)
     return JSONResponse({"invitation_url": invitation_url(token), "expires_in_days": body.expires_in_days,
-                         "cohort": body.cohort}, headers=NO_STORE)
+                         "cohort": body.cohort, "role": body.role}, headers=NO_STORE)
 
 
 @router.post("/invitations/bulk")
@@ -174,9 +189,10 @@ async def invite_many(body: BulkInvitationRequest, request: Request, user=Depend
             continue
         seen.add(invitee.email)
         token = await store.create_invitation(invitee.email, invitee.name, user["user_id"],
-                                              cohort=body.cohort, expires_days=body.expires_in_days)
+                                              cohort=body.cohort, expires_days=body.expires_in_days,
+                                              role=body.role)
         created.append({"email": invitee.email, "name": invitee.name, "invitation_url": invitation_url(token)})
-    return JSONResponse({"cohort": body.cohort, "expires_in_days": body.expires_in_days,
+    return JSONResponse({"cohort": body.cohort, "expires_in_days": body.expires_in_days, "role": body.role,
                          "invitations": created, "errors": errors}, headers=NO_STORE)
 
 
@@ -186,6 +202,16 @@ async def change_cohort(body: CohortRequest, request: Request, user=Depends(admi
     if not await store.set_cohort(body.email.strip().lower(), body.cohort):
         raise HTTPException(404, "No invited account with that email")
     return {"email": body.email.strip().lower(), "cohort": body.cohort}
+
+
+@router.post("/invitations/role")
+async def change_role(body: RoleRequest, request: Request, user=Depends(admin)):
+    """Set an invited account's access level (researcher / external). A change
+    ends the person's current sign-ins so the new level applies at once."""
+    require_origin(request)
+    if not await store.set_role(body.email.strip().lower(), body.role):
+        raise HTTPException(404, "No invited account with that email")
+    return {"email": body.email.strip().lower(), "role": body.role}
 
 
 @router.post("/invitations/revoke-cohort")
