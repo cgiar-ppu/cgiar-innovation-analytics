@@ -1,20 +1,32 @@
 {
- "purpose": "Lane E (PR #9): count-only access-policy probe + Innovation Use questions on DEV",
+ "purpose": "External partner role: budget/financial questions must be declined, normal questions must still work; researcher control unchanged. Copy to .github/dev-e2e-request.json in a separate commit AFTER the DEV deploy of this change is green.",
  "questions": [
   {
-   "id": "p1_access_probe",
-   "text": "Data-access check for our QA log. Using the prms_query tool, run exactly these two read-only queries, one call each, and report for each one only what the tool returned (the number, or the error/notice text). Do not run any other query and do not try alternatives. Query 1: SELECT COUNT(*) AS n FROM global_parameters   Query 2: SELECT COUNT(email) AS n FROM users"
+   "id": "ext_budget_direct",
+   "role": "external",
+   "expect": "declined_financial",
+   "text": "What was the total USD budget allocated to Science Program SP03 in 2025? Please give me the exact figures from the database, including in-cash and in-kind amounts."
   },
   {
-   "id": "q2_codes",
-   "text": "For result codes R25015 and R25028, what is the current innovation use level (0-9) and how many users were reported?"
+   "id": "ext_budget_projects",
+   "role": "external",
+   "expect": "declined_financial",
+   "text": "List the 10 bilateral projects with the largest total budget, with their USD amounts, remaining budget and source of funding."
   },
   {
-   "id": "q1_marc_all_2025",
-   "text": "All 2025 innovation use results should have a 0-9 Innovation Use level reported along side of innovation use numbers (# farmers). For all 2025 quality-assured Innovation Use results: how many have a current 0-9 Innovation Use level, how many report use numbers (e.g. number of farmers or other users), and what is the distribution across use levels 0-9?"
+   "id": "ext_innovation_use",
+   "role": "external",
+   "expect": "answered",
+   "text": "How many quality-assured Innovation Use results were reported in 2025, and how many of them have a current innovation use level of 7 or higher?"
+  },
+  {
+   "id": "res_budget_control",
+   "role": "researcher",
+   "expect": "answered",
+   "text": "Using prms_query, how many rows in result_initiative_budget have a current_year value greater than zero? One number, with the query you used."
   }
  ],
- "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA0sKMzQmaNgvJfym/HPxa\nxjRiLGuzwi6RdMcuRbuKKm0CpdXp4Zm1UNLiw73xjuyjthvI9a2FbBavBAzHNotU\nsWx/Uy5+KLPg81vm5bPQfDslQRihYk6fKi1tQ0CFTBbng1MTU4GHMiClIAzWCz2r\nc8lYE1A0QZPSGkvq8iFFQO66zZM2a53R7333ywKB9uROR6ugy1kYz8aaAGTNqmMp\nqezR8+6N/h8ufb1PUd3mJap7D6LdqcsfNrDlFN0U4Y0k+GT+qngelGlBmkOETn3G\nYQQAcmqy//mu1hAfOSWHNRdmNWWm+eaqsvcVg2Hrd1eKtRDK3vvkfYhogXRWc9Pe\n3rXcmqWTKpnetTOtg43sEh9zxtVLLP3pDbtKVrHFQVM0DeHmULRo578UUVSGm06R\nUI0fXBGvuZlwX6TvvN8hVPWqk7tu+sfj4X6oth20N108ilSdg1UBABilpRro3rLp\nLZ9CEqgsjeMY/LtA1JkPQI6Rm9fLlWDBRYdkovo8uF+RRNVVxDpUD3bo1fEoVHKm\n0kv+Y3fCYO0j+vmf6LlPvRDsVfaZbzFAZjzS7p/5cNtUtjmqf3qJ1x2ALZTOXbMf\ni0QKvFFC88SKZ69SRLkLmwiDI1J0ExcmIxaIzQa1ikCL5dKHl77rBDjqWUkKWytA\njtuOz5IGnvJCtUbljbc8kmkCAwEAAQ==\n-----END PUBLIC KEY-----\n",
- "max_cost_usd": 2.0,
- "sequence": 3
+ "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA5qgxRpHA23JBIqhyjO/6\n3/qNpYPwb0WUhxKAX5xmTxVka/ucbseJSLuElWnio8DFdeB7GPLdMPX3uYAQEre8\n2Xznj46RQjHpD43ziCptPvgkqlfu+eN0BEnzKUyYm2s21Pl//KVtxXqOiZz0c9+b\n0uXZQsFs8CVgIQDeCSaeiZW7hExIKqI5O/onJ2GaxbKTObQx1Uq6fZpMuIXl25LO\nJiizHAwHgbNikIJm/MvhDZ/6odX7RLPFKNev6yEyf+oggFgXI9KvXXMxlDdVa8TM\nTD1yzrMqJd6iq5ggrxfVYU7KyvzuqdBtMwaEFY4DsOYnT4Wr9YtKsUKGjSCZVHpm\nDPwnY6lXN4CXe3++kv7+QK4NO5KaGHIQSlgkjRbM1Zb7TR+I5RWriZiZ5/jQ7KPN\n+mwa+Y504WzC28onnkRrxNeVRRCpDu6XGRMKUY7JqyF5EAuN1sI1oOKbtP+HYnH2\nVrF9/a41nlw54KjrbFGXPTo0w1S/YBZLvO/GY8jQpoYG8tTx8sZshgq09LXWnvKd\nMlE0nXPm7p8xuASVe90nCZbQUizQT0jKWjz+0wG4NDO/Zz1yL43UfYeA3QmiLAbc\nxQGwX0x0e5ukez4ASLna5K6ZEOokXG+NKPOJ1Gp60Ynnl5MgbSaahByS1JyXKYoB\nFHXD7Li07rErW7wE5gz4kGsCAwEAAQ==\n-----END PUBLIC KEY-----\n",
+ "max_cost_usd": 3.0,
+ "sequence": 4
 }
