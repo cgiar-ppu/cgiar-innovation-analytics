@@ -3,6 +3,11 @@ name: Deploy Innovation Analytics
 on:
   push:
     branches: [feature/innovation-platform-foundation]
+    # A push that ONLY changes a DEV data/E2E request does not redeploy: the
+    # request's own workflow runs first and DEV is redeployed by dispatch after it.
+    paths-ignore:
+      - .github/prms-publish-dev-request.json
+      - .github/dev-e2e-request.json
   # Manual re-deploy of DEV only. The former `staging`/`prod` options were removed
   # (review L5-02): TST/PRD are deployed exclusively by the release lane
   # (release-promote.yml on feat/ia-release-20260914); no workflow or script
@@ -129,7 +134,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p data/search_index
-          aws s3 cp "s3://$S3_BUCKET/prdb.manifest.json" data/prdb.manifest.json
+          # DEV prefers its own pointer (prdb.manifest.dev.json, written only by
+          # publish-prms-dev.yml) and falls back to the global pointer that the
+          # release line uses. The global pointer is never written from here.
+          if aws s3api head-object --bucket "$S3_BUCKET" --key prdb.manifest.dev.json >/dev/null 2>&1; then
+            aws s3 cp "s3://$S3_BUCKET/prdb.manifest.dev.json" data/prdb.manifest.json
+            echo "PRMS pointer: prdb.manifest.dev.json (DEV-only)" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            aws s3 cp "s3://$S3_BUCKET/prdb.manifest.json" data/prdb.manifest.json
+            echo "PRMS pointer: prdb.manifest.json (global)" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
           PREFIX=$(python3 -c 'import json; print(json.load(open("data/prdb.manifest.json"))["s3_prefix"])')
           aws s3 cp "s3://$S3_BUCKET/$PREFIX/prdb.sqlite" data/prdb.sqlite
           aws s3 cp "s3://$S3_BUCKET/$PREFIX/search_index/" data/search_index/ --recursive

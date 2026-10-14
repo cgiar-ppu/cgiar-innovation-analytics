@@ -126,7 +126,14 @@ jobs:
           fi
           BUCKET="cgiar-ia-artifacts-$EXPECTED_ACCOUNT"
           DIR="$(dirname "$PRMS_DB_PATH")"; mkdir -p "$DIR"
-          aws s3 cp --only-show-errors "s3://$BUCKET/prdb.manifest.json" "$DIR/prdb.manifest.json"
+          # Same pointer preference as DEV deploy.yml: DEV-only pointer first, then global.
+          if aws s3api head-object --bucket "$BUCKET" --key prdb.manifest.dev.json >/dev/null 2>&1; then
+            aws s3 cp --only-show-errors "s3://$BUCKET/prdb.manifest.dev.json" "$DIR/prdb.manifest.json"
+            echo "PRMS pointer: prdb.manifest.dev.json (DEV-only)"
+          else
+            aws s3 cp --only-show-errors "s3://$BUCKET/prdb.manifest.json" "$DIR/prdb.manifest.json"
+            echo "PRMS pointer: prdb.manifest.json (global)"
+          fi
           PREFIX=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["s3_prefix"])' "$DIR/prdb.manifest.json")
           aws s3 cp --only-show-errors "s3://$BUCKET/$PREFIX/prdb.sqlite" "$PRMS_DB_PATH"
           python3 - "$DIR/prdb.manifest.json" <<'PY'
