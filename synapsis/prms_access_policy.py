@@ -61,11 +61,31 @@ Scope toggles (environment, read at call time):
   only" reading (W1/W2 quality-assessed results, no W3/bilateral, no open
   phases). It is applied in the system prompt only; row-level filtering is
   not something a column authorizer can do.
+
+Also for restricted roles (Oct 2026 verification round):
+
+* internal project narratives and funder identifiers are in
+  ``FINANCIAL_NULLED_COLUMNS`` (reporters typed project budgets into them);
+* ``INTERNAL_DENIED_TABLES`` / ``INTERNAL_TABLE_PREFIXES`` /
+  ``INTERNAL_NULLED_COLUMNS``: PRMS workflow data that is not on the public
+  Results Dashboard (account names, QA/review and submission comments, field
+  revision history, AI drafts, notifications, deletion/backup copies);
+* :func:`redact_amounts`: currency amounts inside any text value returned to
+  the model are replaced by ``AMOUNT_PLACEHOLDER``. A column authorizer
+  cannot see inside free text, so this is the second layer. It is a
+  best-effort pattern (symbols and codes such as $, USD, EUR, GBP with
+  million/bn/k), not a guarantee against SQL that rewrites the text first;
+  the narratives that are not public at all are NULLed by the authorizer.
+
+Defence in depth for every role: ``DENIED_VTABLES`` (raw page / storage
+statistics virtual tables), ``DENIED_PRAGMAS`` (``pragma_database_list``
+reveals the server path) and ``DENIED_FUNCTIONS``.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -94,8 +114,22 @@ NULLED_COLUMNS: dict[tuple[str, str], str] = {
     ("result_ip_expert_workshop_organized", "email"): "personal contact data",
 }
 
-#: SQL functions that are never callable from agent SQL (extension loading).
-DENIED_FUNCTIONS: frozenset[str] = frozenset({"load_extension"})
+#: SQL functions that are never callable from agent SQL: extension loading,
+#: file access (CLI helpers, if ever compiled in) and the FTS3 tokenizer hook
+#: (it takes and returns raw pointers). None of them is used by any feature.
+DENIED_FUNCTIONS: frozenset[str] = frozenset(
+    {"load_extension", "readfile", "writefile", "fts3_tokenizer", "edit"}
+)
+
+#: Eponymous virtual tables that expose raw storage: ``sqlite_dbpage`` returns
+#: the raw bytes of every page (it would bypass the column authorizer if the
+#: build has it) and ``dbstat`` page-level statistics. Refused for every role.
+DENIED_VTABLES: frozenset[str] = frozenset({"sqlite_dbpage", "dbstat"})
+
+#: Pragmas refused for every role, also as table-valued functions
+#: (``SELECT * FROM pragma_database_list`` shows the server-side file path).
+#: Schema browsing (``pragma_table_info`` etc.) stays allowed.
+DENIED_PRAGMAS: frozenset[str] = frozenset({"database_list"})
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +167,20 @@ FINANCIAL_NULLED_COLUMNS: dict[tuple[str, str], str] = {
     ("clarisa_project_mappings", "allocation"): "project-to-programme allocation",
     ("clarisa_project_countries", "allocation_percentage"): "project allocation by country",
     ("results_toc_result", "program_invested_financial_resources"): "programme financial-investment flag",
+    # Internal CLARISA project-registry narratives: not on the public Results
+    # Dashboard, and reporters typed project budgets into them ("over five
+    # years with a budget of ..."). Verification round, Oct 2026.
+    ("clarisa_projects", "summary"): "internal project narrative (may quote project budgets)",
+    ("clarisa_projects", "description"): "internal project narrative (may quote project budgets)",
+    ("clarisa_projects", "project_results"): "internal project progress narrative (may quote amounts)",
+    ("clarisa_projects", "interim_director_review"): "internal review status",
+    ("clarisa_projects", "modification_justification"): "internal justification",
+    ("clarisa_projects", "funder_code"): "funder of a bilateral grant",
+    ("clarisa_project_mappings", "comments"): "internal mapping comments",
+    ("clarisa_project_mappings", "complementarity"): "internal mapping assessment",
+    ("clarisa_project_mappings", "efficiencies"): "internal mapping assessment",
+    ("non_pooled_project", "funder_institution_id"): "funder of a non-pooled grant",
+    ("non_pooled_project", "center_grant_id"): "internal grant / contract number",
 }
 
 #: Policy-change investment amounts (toggle ``IA_EXTERNAL_BLOCK_POLICY_AMOUNTS``).
@@ -140,6 +188,58 @@ POLICY_AMOUNT_COLUMNS: dict[tuple[str, str], str] = {
     ("results_policy_changes", "amount"): "investment amount of a policy change",
     ("results_policy_changes", "status_amount"): "status of that investment amount",
 }
+
+
+# ---------------------------------------------------------------------------
+# Role-aware layer: internal PRMS workflow data (not on the public dashboard)
+# ---------------------------------------------------------------------------
+
+#: Shown to the model when a statement touches internal workflow data for an
+#: external role.
+INTERNAL_DENIAL_MESSAGE = (
+    "Internal PRMS workflow data (account names, QA / review and submission "
+    "comments, revision history, AI drafts, notifications) is not part of the "
+    "public Results Dashboard and is not available in this external view of "
+    "Innovation Analytics."
+)
+
+#: What the model should do when internal workflow data was refused or blanked.
+INTERNAL_GUIDANCE = (
+    "Tell the user briefly that this internal detail isn't available in this "
+    "external view (do not call it missing from PRMS), then answer the rest of "
+    "the question from the published result data."
+)
+
+#: Tables refused as a whole for external roles (lower-case name -> rationale).
+INTERNAL_DENIED_TABLES: dict[str, str] = {
+    "result_qaed_log": "QA log (who quality-assessed what)",
+    "result_field_revision": "field revision history (old/new values, user, reason)",
+    "result_field_ai_state": "AI drafts and user feedback on them",
+    "bilateral_quality_assessments": "AI QA verdicts on bilateral results",
+    "notifications": "application notifications",
+    "result_deletion_audit": "deletion audit",
+    "user_notification_settings": "user notification settings",
+}
+
+#: Table-name prefixes refused for external roles (dated copies, companions).
+INTERNAL_TABLE_PREFIXES: tuple[str, ...] = (
+    "share_result_request",          # share_result_request, share_result_request_seen
+    "result_reactivation_backup_",   # result_reactivation_backup_<yyyymmdd>
+)
+
+#: Columns that read as NULL for external roles.
+INTERNAL_NULLED_COLUMNS: dict[tuple[str, str], str] = {
+    ("users", "first_name"): "PRMS account name",
+    ("users", "last_name"): "PRMS account name",
+    ("result_review_history", "comment"): "QA / review comment",
+    ("submission", "comment"): "submission comment",
+    ("result", "reviewed_by"): "reviewer account",
+}
+
+
+def is_internal_table(table: str) -> bool:
+    """True when *table* (lower-case) is internal workflow data."""
+    return table in INTERNAL_DENIED_TABLES or table.startswith(INTERNAL_TABLE_PREFIXES)
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -197,19 +297,35 @@ def blocked_financial_objects() -> list[str]:
     )
 
 
+def blocked_internal_objects() -> list[str]:
+    """Internal workflow tables / prefixes / columns external roles cannot read."""
+    return (sorted(INTERNAL_DENIED_TABLES)
+            + sorted(f"{p}*" for p in INTERNAL_TABLE_PREFIXES)
+            + sorted(f"{t}.{c}" for t, c in INTERNAL_NULLED_COLUMNS))
+
+
 class PRMSAccessDenied(sqlite3.DatabaseError):
     """A statement referenced a denied table (raised instead of SQLite's
     generic "not authorized").
 
     ``financial`` is True when every refused object is a financial table
-    refused for an external role (the message then says so).
+    refused for an external role (the message then says so). ``external_view``
+    is True when every refused object is refused only because of the external
+    view (financial or internal workflow data); ``guidance`` is the matching
+    instruction for the model.
     """
 
-    def __init__(self, tables: list[str], financial: bool = False):
+    def __init__(self, tables: list[str], financial: bool = False, external_view: bool = False):
         self.tables = tables
         self.financial = financial
+        self.external_view = financial or external_view
         names = ", ".join(tables) if tables else "a restricted object"
-        message = FINANCIAL_DENIAL_MESSAGE if financial else DENIAL_MESSAGE
+        if financial:
+            message, self.guidance = FINANCIAL_DENIAL_MESSAGE, FINANCIAL_GUIDANCE
+        elif self.external_view:
+            message, self.guidance = INTERNAL_DENIAL_MESSAGE, INTERNAL_GUIDANCE
+        else:
+            message, self.guidance = DENIAL_MESSAGE, ""
         super().__init__(f"{names}: {message}")
 
 
@@ -223,6 +339,11 @@ class AccessLog:
     #: for an external role.
     financial_denied: list[str] = field(default_factory=list)
     financial_nulled: list[str] = field(default_factory=list)
+    #: Subsets refused / blanked as internal workflow data for an external role.
+    internal_denied: list[str] = field(default_factory=list)
+    internal_nulled: list[str] = field(default_factory=list)
+    #: Currency amounts replaced inside text values (external roles).
+    redacted_amounts: int = 0
 
     def _add(self, bucket: list[str], item: str) -> None:
         if item not in bucket:
@@ -238,16 +359,21 @@ def make_authorizer(log: AccessLog, role: Optional[str] = None) -> Callable[...,
     restricted = is_restricted(role)
     fin_tables = FINANCIAL_DENIED_TABLES if restricted else {}
     fin_columns = financial_nulled_columns() if restricted else {}
+    int_columns = INTERNAL_NULLED_COLUMNS if restricted else {}
 
     def _authorize(action: int, arg1, arg2, _db_name, _source) -> int:
         if action == sqlite3.SQLITE_READ:
             table = (arg1 or "").lower()
-            if table in DENIED_TABLES:
+            if table in DENIED_TABLES or table in DENIED_VTABLES:
                 log._add(log.denied, table)
                 return sqlite3.SQLITE_DENY
             if table in fin_tables:
                 log._add(log.denied, table)
                 log._add(log.financial_denied, table)
+                return sqlite3.SQLITE_DENY
+            if restricted and is_internal_table(table):
+                log._add(log.denied, table)
+                log._add(log.internal_denied, table)
                 return sqlite3.SQLITE_DENY
             column = (arg2 or "").lower()
             if (table, column) in NULLED_COLUMNS:
@@ -257,9 +383,16 @@ def make_authorizer(log: AccessLog, role: Optional[str] = None) -> Callable[...,
                 log._add(log.nulled, f"{table}.{column}")
                 log._add(log.financial_nulled, f"{table}.{column}")
                 return sqlite3.SQLITE_IGNORE
+            if (table, column) in int_columns:
+                log._add(log.nulled, f"{table}.{column}")
+                log._add(log.internal_nulled, f"{table}.{column}")
+                return sqlite3.SQLITE_IGNORE
             return sqlite3.SQLITE_OK
         if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH):
             log._add(log.denied, "ATTACH/DETACH")
+            return sqlite3.SQLITE_DENY
+        if action == sqlite3.SQLITE_PRAGMA and (arg1 or "").lower() in DENIED_PRAGMAS:
+            log._add(log.denied, f"pragma_{(arg1 or '').lower()}")
             return sqlite3.SQLITE_DENY
         if action == sqlite3.SQLITE_FUNCTION and (arg2 or "").lower() in DENIED_FUNCTIONS:
             log._add(log.denied, f"{arg2}()")
@@ -279,8 +412,11 @@ def install(conn: sqlite3.Connection, role: Optional[str] = None) -> AccessLog:
 def translate_error(exc: BaseException, log: AccessLog) -> BaseException:
     """Turn SQLite's bare "not authorized" into a ``PRMSAccessDenied``."""
     if log.denied and isinstance(exc, sqlite3.DatabaseError):
-        financial = bool(log.financial_denied) and set(log.denied) <= set(log.financial_denied)
-        return PRMSAccessDenied(list(log.denied), financial=financial)
+        denied = set(log.denied)
+        financial = bool(log.financial_denied) and denied <= set(log.financial_denied)
+        external_view = denied <= set(log.financial_denied) | set(log.internal_denied)
+        return PRMSAccessDenied(list(log.denied), financial=financial,
+                                external_view=external_view)
     return exc
 
 
@@ -293,12 +429,95 @@ FINANCIAL_GUIDANCE = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Currency amounts inside free text (restricted roles)
+# ---------------------------------------------------------------------------
+
+#: A number: 1,200,000 / 1 200 000 / 1.2 / 450 / 3,5.
+_NUM = r"(?:\d{1,3}(?:[,\u00a0\u202f ]\d{3})+(?:\.\d+)?|\d+(?:[.,]\d+)?)"
+#: A number that starts a token (not the tail of a longer number or word).
+_NUM_START = rf"(?<![\w.,]){_NUM}"
+#: Other currency codes / names seen in PRMS text (case-sensitive, so gene
+#: names such as "rs123" or words such as "Europe" never match).
+_OTHER_CODES = r"(?-i:INR|KES|KSh|KSH|Ksh|ETB|NGN|UGX|TZS|RWF|XOF|BDT|PKR|NPR|CHF|AUD|CAD|ZAR|Rs\.)"
+#: Currency before the number. Longer forms first; letter codes not glued to
+#: a preceding letter (so "EUROPE" or "BUSD" never match).
+_CUR_PRE = (r"(?:(?<![A-Za-z])(?:U\.?S\.?\s?\$|US-\$|\$\s?US(?![A-Za-z])|USD|EUR(?![a-z])|GBP|"
+            r"Euros?(?!\s?(?:19|20)\d\d(?![\d.,]))|\(euro\)|dollars?|" + _OTHER_CODES + r")|\$|€|£)")
+#: Currency after the number (not followed by another number, where it is
+#: the prefix of that number instead: "in 2023 USD 5 million").
+_CUR_POST = (r"(?:US\s?\$|\$\s?US|USD|EUR|GBP|€|£|\$|(?:US\s|U\.S\.\s)?dollars?|euros?|pounds?\s+sterling|"
+             + _OTHER_CODES + r")(?![A-Za-z])(?!\s?\d)")
+#: Optional range: "$1-2 million", "USD 3–5 m".
+_RANGE = rf"(?:\s?(?:-|\u2013|to)\s?(?:\$|US\$|USD|EUR|€|GBP|£)?\s?{_NUM})?"
+#: Optional scale word: million / m / mn / bn / billion / k / thousand / B.
+_SCALE = r"(?:\s{0,2}(?:million|billion|trillion|thousand|mln|mio|mn|bn|crores?|lakhs?|m|b|k)\b)?"
+
+#: A currency amount in free text. Case-insensitive except the codes above.
+AMOUNT_RE = re.compile(
+    rf"{_CUR_PRE}\s?{_NUM}{_RANGE}{_SCALE}"
+    rf"|{_NUM_START}{_RANGE}{_SCALE}[\s-]{{0,2}}{_CUR_POST}",
+    re.IGNORECASE,
+)
+
+#: What a redacted amount reads as.
+AMOUNT_PLACEHOLDER = "[amount withheld in external view]"
+
+
+def redact_amounts(value):
+    """Replace currency amounts inside a text value; other values unchanged."""
+    if isinstance(value, str) and value:
+        return AMOUNT_RE.sub(AMOUNT_PLACEHOLDER, value)
+    return value
+
+
+def count_amounts(text: str) -> int:
+    """Number of currency amounts in *text*."""
+    return len(AMOUNT_RE.findall(text)) if isinstance(text, str) and text else 0
+
+
+def redact_rows(rows: list[dict], log: Optional["AccessLog"] = None) -> list[dict]:
+    """Redact currency amounts in every text cell of *rows* (new list).
+
+    Records the number of replacements in ``log.redacted_amounts``.
+    """
+    out = []
+    hits = 0
+    for row in rows:
+        new = {}
+        for key, val in row.items():
+            if isinstance(val, str) and val:
+                red, n = AMOUNT_RE.subn(AMOUNT_PLACEHOLDER, val)
+                hits += n
+                new[key] = red
+            else:
+                new[key] = val
+        out.append(new)
+    if log is not None:
+        log.redacted_amounts += hits
+    return out
+
+
+def redact_for_role(rows: list[dict], role: Optional[str], log: Optional["AccessLog"] = None) -> list[dict]:
+    """``redact_rows`` for restricted roles; *rows* unchanged otherwise."""
+    return redact_rows(rows, log) if is_restricted(role) else rows
+
+
+#: Tool-output note when amounts were replaced.
+AMOUNT_NOTE = (
+    "NOTE: {n} currency amount(s) inside text values were replaced with "
+    f"\"{AMOUNT_PLACEHOLDER}\" on purpose: {FINANCIAL_DENIAL_MESSAGE} "
+    "Quote the text with the placeholder as it is; do not guess the amount."
+)
+
+
 def nulled_note(log: AccessLog) -> str | None:
     """A line for the tool output when columns were blanked, else None."""
-    if not log.nulled:
+    if not log.nulled and not log.redacted_amounts:
         return None
     lines = []
-    contact = [c for c in log.nulled if c not in log.financial_nulled]
+    contact = [c for c in log.nulled
+               if c not in log.financial_nulled and c not in log.internal_nulled]
     if contact:
         lines.append(
             f"NOTE: {', '.join(contact)} returned empty (NULL) on purpose: "
@@ -309,4 +528,11 @@ def nulled_note(log: AccessLog) -> str | None:
             f"NOTE: {', '.join(log.financial_nulled)} returned empty (NULL) on purpose: "
             f"{FINANCIAL_DENIAL_MESSAGE} {FINANCIAL_GUIDANCE}"
         )
+    if log.internal_nulled:
+        lines.append(
+            f"NOTE: {', '.join(log.internal_nulled)} returned empty (NULL) on purpose: "
+            f"{INTERNAL_DENIAL_MESSAGE} {INTERNAL_GUIDANCE}"
+        )
+    if log.redacted_amounts:
+        lines.append(AMOUNT_NOTE.format(n=log.redacted_amounts))
     return "\n".join(lines)

@@ -99,7 +99,10 @@ def _query_rows(conn: sqlite3.Connection, sql: str) -> list[dict]:
     cur = conn.cursor()
     cur.execute(sql)
     cols = [d[0] for d in cur.description]
-    return [dict(zip(cols, row)) for row in cur.fetchall()]
+    rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+    # External (restricted) roles: no currency amounts in any text value
+    # (defence in depth; the fixed queries here return names and counts).
+    return prms_access_policy.redact_for_role(rows, prms_access_policy.caller_role())
 
 
 def _query_scalar(conn: sqlite3.Connection, sql: str) -> Any:

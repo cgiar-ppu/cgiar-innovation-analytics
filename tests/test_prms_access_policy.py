@@ -81,9 +81,9 @@ def db(tmp_path) -> Path:
     return _make_db(tmp_path / "prdb.sqlite")
 
 
-def _run(db: Path, sql: str):
+def _run(db: Path, sql: str, role=pq.CALLER_ROLE):
     log = ap.AccessLog()
-    rows, cols, n = pq._execute_with_timeout(str(db), sql, timeout=5, access_log=log)
+    rows, cols, n = pq._execute_with_timeout(str(db), sql, timeout=5, access_log=log, role=role)
     return rows, cols, log
 
 
@@ -150,7 +150,9 @@ class TestDeniedTables:
 class TestNulledColumns:
 
     def test_select_star_works_and_blanks_only_the_listed_columns(self, db):
-        rows, cols, log = _run(db, "SELECT * FROM users ORDER BY id")
+        # A full-access role: account names are blanked for external roles
+        # (see test_external_view_freetext.py), credentials for everyone.
+        rows, cols, log = _run(db, "SELECT * FROM users ORDER BY id", "researcher")
         assert cols == ["id", "first_name", "last_name", "password", "email", "is_cgiar"]
         assert [r["first_name"] for r in rows] == ["Ada", "Alan"]
         assert all(r["email"] is None and r["password"] is None for r in rows)
@@ -192,6 +194,7 @@ class TestNulledColumns:
             db,
             "SELECT r.result_code, u.first_name || ' ' || u.last_name AS creator "
             "FROM result r JOIN users u ON u.id = r.created_by ORDER BY r.result_code",
+            "researcher",
         )
         assert [r["creator"] for r in rows] == ["Ada Lovelace", "Alan Turing"]
         assert not log.nulled and not log.denied

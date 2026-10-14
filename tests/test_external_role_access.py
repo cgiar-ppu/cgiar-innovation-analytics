@@ -164,6 +164,13 @@ class TestRoles:
             "clarisa_project_countries.allocation_percentage",
             "results_toc_result.program_invested_financial_resources",
             "results_policy_changes.amount", "results_policy_changes.status_amount",
+            # internal project narratives and funder identifiers (verification round, Oct 2026)
+            "clarisa_projects.summary", "clarisa_projects.description",
+            "clarisa_projects.project_results", "clarisa_projects.funder_code",
+            "clarisa_projects.interim_director_review", "clarisa_projects.modification_justification",
+            "clarisa_project_mappings.comments", "clarisa_project_mappings.complementarity",
+            "clarisa_project_mappings.efficiencies",
+            "non_pooled_project.funder_institution_id", "non_pooled_project.center_grant_id",
         } == blocked
 
 
@@ -247,7 +254,9 @@ class TestExternalNulled:
     def test_rest_of_the_project_tables_stays_usable(self, db):
         rows, _, _ = _run(db, "SELECT * FROM clarisa_projects ORDER BY id", "external")
         assert [r["short_name"] for r in rows] == ["PRJ-A", "PRJ-B"]
-        assert [r["funder_code"] for r in rows] == [42, 43]
+        assert [r["full_name"] for r in rows] == ["Project A", "Project B"]
+        # the funder of a bilateral grant is blanked for external roles too
+        assert [r["funder_code"] for r in rows] == [None, None]
         assert all(r["total_budget"] is None and r["source_of_funding"] is None for r in rows)
         rows, _, _ = _run(db, "SELECT program_code FROM clarisa_project_mappings", "external")
         assert rows == [{"program_code": "SP03"}]
@@ -326,7 +335,9 @@ class TestFullAccessUnchanged:
             _run(db, "SELECT value FROM global_parameters", role)
         assert exc.value.financial is False
         rows, _, _ = _run(db, "SELECT first_name, password, email FROM users", role)
-        assert rows == [{"first_name": "Ada", "password": None, "email": None}]
+        # PRMS account names are internal workflow data: blank for external roles
+        name = None if role == "external" else "Ada"
+        assert rows == [{"first_name": name, "password": None, "email": None}]
 
 
 # ---------------------------------------------------------------------------

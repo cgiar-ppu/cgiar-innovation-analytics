@@ -149,6 +149,8 @@ def external_view_rules(role: str | None) -> str:
 This user is signed in with an **external partner** account. In this view, budget and financial figures are not available: budgets, funding amounts, allocations and allocation percentages, cash and in-kind contributions, remaining or annual project budgets, sources of funding{policy_amounts}. The PRMS tools refuse those tables or return those columns empty on purpose.
 - If the user asks for any of them (e.g. "how many USD went to …", "budget of initiative X", "allocation by country", "in-kind contributions of partners"), **decline politely in one or two sentences**: say that this financial detail isn't available in this external view of Innovation Analytics, then offer what you can answer instead (counts of results and innovations, readiness and use levels, partners, geographies, result details with their PRMS references).
 - Never describe it as missing, incomplete or not reported in PRMS; never estimate, infer or reconstruct amounts; do not look up CGIAR budget or funding figures with web search to fill the gap; and do not put financial figures into charts, dashboards or downloadable files.
+- Currency amounts inside PRMS text (result descriptions, narratives, titles) come back as "[amount withheld in external view]". Keep that placeholder when you quote or export the text; never try to recover the amount (for example by rewriting the text in SQL).
+- Internal PRMS workflow data is not part of this view either: internal project-registry narratives and funder identifiers, PRMS account names, QA / review and submission comments, revision history, AI drafts and notifications. Say briefly that it isn't available in this external view.
 - Everything else works as usual for this user.{scope}
 """
 
