@@ -72,7 +72,8 @@ describe('AdminFeedbackPanel — Give feedback submissions', () => {
     urls = []
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       urls.push(url)
-      if (url.endsWith('/attachment')) return new Response(new Blob(['png'], { type: 'image/png' }))
+      // String body: Node 20's Response cannot read a jsdom Blob (the call would hang).
+      if (url.endsWith('/attachment')) return new Response('png', { headers: { 'Content-Type': 'image/png' } })
       if (url.includes('format=zip')) return new Response('zip', { headers: { 'content-disposition': 'attachment; filename="ia-feedback-dev-20261014.zip"' } })
       return new Response(JSON.stringify(withGeneral), { headers: { 'Content-Type': 'application/json' } })
     }))
@@ -88,8 +89,7 @@ describe('AdminFeedbackPanel — Give feedback submissions', () => {
     expect(screen.getAllByText('Screenshot').length).toBeGreaterThan(0)
     expect(urls.some(u => u.endsWith('/attachment'))).toBe(false)
     await user.click(screen.getByText('Stuck on the dashboard'))
-    // <details> toggle -> fetch -> blob URL: allow for slower CI runners.
-    expect(await screen.findByAltText('Screenshot attached to feedback 9', {}, { timeout: 5000 })).toHaveAttribute('src', 'blob:shot')
+    expect(await screen.findByAltText('Screenshot attached to feedback 9')).toHaveAttribute('src', 'blob:shot')
     expect(screen.getByText('chat-a · r2')).toBeInTheDocument()
     expect(screen.getByText('/chat')).toBeInTheDocument()
     const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls.find(c => c[0].endsWith('/attachment'))!
