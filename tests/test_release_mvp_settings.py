@@ -1,112 +1,24 @@
-"""Release path carries the MVP test settings; the release smoke checks the MVP endpoints.
+"""The release smoke checks the MVP endpoints (Marc items 1-5).
 
-* ``release-promote.yml`` exports the GitHub environment variables,
-  ``release-deploy.py`` forwards the ones that are set, and ``release-host.py``
-  passes them to the container only when set (``promotion-request.json``
-  ``models_config`` wins). An unset or empty value keeps the code default.
-* ``release-smoke.py`` refuses a promotion whose MVP endpoints answer an
-  anonymous caller with anything but 401/403 (200 = open, 404 = missing).
+``release-smoke.py`` (identical on the DEV branch and the release line, so a
+DEV -> release merge carries it) refuses a promotion whose MVP endpoints answer
+an anonymous caller with anything but 401/403 (200 = open, 404 = missing).
 
-The scripts run on CI / the target host, so the tests execute only the marked
-``mvp-env`` blocks with fake inputs. No AWS, Docker or network.
+The MVP settings themselves reach TST/PRD through ``promotion-request.json``
+``models_config`` on the release line; that change is prepared as a patch
+against the release-line ``release-host.py`` (it differs from the DEV copy) and
+is not made here.
 """
 
 from __future__ import annotations
 
 import importlib.util
-import re
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-HOST = REPO / ".github/scripts/release-host.py"
-DEPLOY = REPO / ".github/scripts/release-deploy.py"
-PROMOTE = REPO / ".github/workflows/release-promote.yml"
 SMOKE = REPO / ".github/scripts/release-smoke.py"
-
-MVP_VARS = [
-    "IA_TEST_BUDGET_USD", "IA_TEST_START", "IA_TEST_END", "IA_SESSION_BUDGET_USD",
-    "IA_BUDGET_ALERT_THRESHOLDS", "IA_MAX_BUDGET_USD_RESEARCHER", "IA_DAILY_USER_BUDGET_USD",
-    "IA_TELEMETRY_ENABLED", "IA_FEEDBACK_ENABLED", "IA_EXTERNAL_BLOCK_POLICY_AMOUNTS",
-    "IA_EXTERNAL_W12_ONLY",
-]
-
-
-def _block(path: Path) -> str:
-    text = path.read_text()
-    m = re.search(r"^# >>> mvp-env.*?^# <<< mvp-env", text, flags=re.S | re.M)
-    assert m, f"mvp-env block missing in {path.name}"
-    return m.group(0)
-
-
-def _host_env(cfg: dict) -> dict:
-    env = {"IA_JWT_SECRET": "x"}
-    exec(_block(HOST), {"cfg": cfg, "env": env})
-    return env
-
-
-class TestReleaseHost:
-
-    def test_nothing_set_passes_nothing(self):
-        assert _host_env({"stage": "prod"}) == {"IA_JWT_SECRET": "x"}
-
-    def test_every_variable_is_known(self):
-        names = {name for _, name in re.findall(r"\('(\w+)','(IA_\w+)'\)", _block(HOST))}
-        assert names == set(MVP_VARS)
-
-    def test_models_config_keys_are_passed(self):
-        env = _host_env({"test_budget_usd": 5000, "test_start": "2026-10-15",
-                         "test_end": "2026-11-15", "telemetry_enabled": False,
-                         "external_w12_only": "true"})
-        assert env["IA_TEST_BUDGET_USD"] == "5000"
-        assert env["IA_TEST_START"] == "2026-10-15" and env["IA_TEST_END"] == "2026-11-15"
-        assert env["IA_TELEMETRY_ENABLED"].lower() == "false"
-        assert env["IA_EXTERNAL_W12_ONLY"] == "true"
-
-    def test_github_variables_forwarded_by_deploy_are_passed(self):
-        env = _host_env({"IA_SESSION_BUDGET_USD": "5", "IA_DAILY_USER_BUDGET_USD": "10"})
-        assert env["IA_SESSION_BUDGET_USD"] == "5" and env["IA_DAILY_USER_BUDGET_USD"] == "10"
-
-    def test_models_config_wins_over_the_github_variable(self):
-        env = _host_env({"IA_TEST_BUDGET_USD": "4000", "test_budget_usd": "5000"})
-        assert env["IA_TEST_BUDGET_USD"] == "5000"
-
-    @pytest.mark.parametrize("empty", ["", "  ", None])
-    def test_empty_values_are_never_passed(self, empty):
-        env = _host_env({"telemetry_enabled": empty, "IA_TELEMETRY_ENABLED": empty})
-        assert "IA_TELEMETRY_ENABLED" not in env
-
-    def test_block_sits_before_the_container_start(self):
-        text = HOST.read_text()
-        assert text.index("# <<< mvp-env") < text.index("args.append(image)")
-        assert "for key in env: args+=['-e',key]" in text  # values travel in the child environment only
-
-
-class TestReleaseDeployAndWorkflow:
-
-    def test_deploy_forwards_only_set_variables(self, monkeypatch):
-        for name in MVP_VARS:
-            monkeypatch.delenv(name, raising=False)
-        monkeypatch.setenv("IA_TEST_BUDGET_USD", "5000")
-        monkeypatch.setenv("IA_TEST_END", "  ")
-        import os
-        config: dict = {}
-        exec(_block(DEPLOY), {"os": os, "config": config})
-        assert config == {"IA_TEST_BUDGET_USD": "5000"}
-
-    def test_deploy_block_covers_every_variable(self):
-        assert set(re.findall(r"'(IA_\w+)'", _block(DEPLOY))) == set(MVP_VARS)
-
-    def test_deploy_reads_models_config_after_the_variables(self):
-        text = DEPLOY.read_text()
-        assert text.index("# <<< mvp-env") < text.index("config.update(request.get('models_config',{}))")
-
-    def test_promote_workflow_exports_every_variable_to_the_deploy_step(self):
-        text = PROMOTE.read_text()
-        step = text[text.index("- name: Deploy with data preservation"):]
-        for name in MVP_VARS:
-            assert f"{name}: ${{{{ vars.{name} }}}}" in step, name
 
 
 def _smoke():

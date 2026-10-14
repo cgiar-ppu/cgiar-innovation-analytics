@@ -77,6 +77,25 @@ def test_defaults_match_the_agreed_test_plan():
     assert c.TELEMETRY_ENABLED is True
 
 
+@pytest.mark.parametrize("raw,expected", [
+    (None, True), ("", True), ("  ", True), ("true", True), ("1", True),
+    ("false", False), ("FALSE", False), ("0", False), ("off", False),
+])
+def test_empty_telemetry_flag_keeps_the_default(monkeypatch, raw, expected):
+    """V4 D6: an empty IA_TELEMETRY_ENABLED (unset GitHub variable) must not switch it off."""
+    import importlib
+    import synapsis.config as c
+    if raw is None:
+        monkeypatch.delenv("IA_TELEMETRY_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("IA_TELEMETRY_ENABLED", raw)
+    try:
+        assert importlib.reload(c).TELEMETRY_ENABLED is expected
+    finally:
+        monkeypatch.delenv("IA_TELEMETRY_ENABLED", raising=False)
+        importlib.reload(c)
+
+
 # ---------------------------------------------------------------------------
 # Window
 # ---------------------------------------------------------------------------
