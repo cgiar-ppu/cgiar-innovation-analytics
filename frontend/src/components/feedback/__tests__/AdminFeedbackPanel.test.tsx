@@ -58,3 +58,51 @@ describe('AdminFeedbackPanel', () => {
     expect(ratingLabel('voice', 3)).toBe('3/5')
   })
 })
+
+describe('AdminFeedbackPanel — Give feedback submissions', () => {
+  const general = item({
+    id: 9, channel: 'general', rating: 0, sentiment: '', comment: 'Stuck on the dashboard', expected: '', message_id: '',
+    category: 'stuck', category_label: "I'm stuck", page: '/chat', chat_id: 'chat-a', answer_id: 'r2',
+    has_attachment: true, attachment_type: 'png', attachment_url: '/api/admin/feedback/9/attachment',
+  })
+  const withGeneral = { ...list, total: 3, returned: 3, items: [general, ...list.items],
+    by_category: { stuck: 1, wrong_result: 0, inappropriate_inaccurate: 0, other: 0 } }
+
+  beforeEach(() => {
+    urls = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      urls.push(url)
+      if (url.endsWith('/attachment')) return new Response(new Blob(['png'], { type: 'image/png' }))
+      if (url.includes('format=zip')) return new Response('zip', { headers: { 'content-disposition': 'attachment; filename="ia-feedback-dev-20261014.zip"' } })
+      return new Response(JSON.stringify(withGeneral), { headers: { 'Content-Type': 'application/json' } })
+    }))
+    URL.createObjectURL = vi.fn(() => 'blob:shot'); URL.revokeObjectURL = vi.fn()
+    useAuthStore.setState({ token: 'jwt', user: { userId: 'a', email: 'a@x', name: 'A', role: 'admin' } } as never)
+  })
+
+  it('shows the category, page/chat context and loads the screenshot only when opened', async () => {
+    const user = userEvent.setup()
+    render(<AdminFeedbackPanel />)
+    expect(await screen.findByTestId('feedback-summary')).toHaveTextContent("1 via Give feedback (1 i'm stuck)")
+    expect(screen.getAllByText("I'm stuck")[0]).toBeInTheDocument()
+    expect(screen.getAllByText('Screenshot').length).toBeGreaterThan(0)
+    expect(urls.some(u => u.endsWith('/attachment'))).toBe(false)
+    await user.click(screen.getByText('Stuck on the dashboard'))
+    expect(await screen.findByAltText('Screenshot attached to feedback 9')).toHaveAttribute('src', 'blob:shot')
+    expect(screen.getByText('chat-a · r2')).toBeInTheDocument()
+    expect(screen.getByText('/chat')).toBeInTheDocument()
+    const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls.find(c => c[0].endsWith('/attachment'))!
+    expect((call[1].headers as Record<string, string>).Authorization).toBe('Bearer jwt')
+  })
+
+  it('filters by channel and category and exports CSV + screenshots as a ZIP', async () => {
+    const user = userEvent.setup()
+    render(<AdminFeedbackPanel />)
+    await screen.findByTestId('feedback-summary')
+    await user.selectOptions(screen.getByLabelText('Channel'), 'general')
+    await user.selectOptions(screen.getByLabelText('Category'), 'wrong_result')
+    await waitFor(() => expect(urls.slice(-1)[0]!).toBe('/api/admin/feedback?channel=general&category=wrong_result'))
+    await user.click(screen.getByRole('button', { name: /CSV \+ screenshots/ }))
+    await waitFor(() => expect(urls.slice(-1)[0]!).toBe('/api/admin/feedback?channel=general&category=wrong_result&format=zip'))
+  })
+})

@@ -56,6 +56,8 @@ export interface GuardrailContactInfo {
 
 export interface AppConfig {
   invited_login_enabled?: boolean;
+  /** IA_FEEDBACK_ENABLED kill-switch; absent = enabled (older servers). */
+  feedback_enabled?: boolean;
   /** Primary model identifier. */
   model: string
   /** Fallback model used when the primary is unavailable. */

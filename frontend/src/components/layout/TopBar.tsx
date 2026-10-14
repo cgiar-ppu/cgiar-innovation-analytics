@@ -9,6 +9,7 @@ import { TTSToggle } from '../chat/TTSToggle';
 import { ModelSelector } from './ModelSelector';
 import { UserMenu } from './UserMenu';
 import { useIsAdmin } from '../../stores/appConfig';
+import GiveFeedbackButton from '../feedback/GiveFeedback';
 import type { AppConfig } from '../../lib/types';
 
 /** `adminOnly` items are hidden for researchers / invited users (L4-03). */
@@ -135,6 +136,9 @@ export default function TopBar({ config }: TopBarProps) {
             <span className={`w-1.5 h-1.5 rounded-full ${statusColor}`} />
             <span className="hidden sm:inline">{statusText}</span>
           </div>
+
+          {/* Give feedback: on every page (MVP test release item 1); hidden by the feedback kill-switch */}
+          <GiveFeedbackButton />
 
           {/* Search button */}
           <button
