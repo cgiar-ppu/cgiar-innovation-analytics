@@ -135,8 +135,17 @@ def test_spa_catch_all_never_escapes_static(tmp_path):
                      "server": ("t", 80), "client": ("c", 1), "root_path": ""}
             sent = []
 
+            requested = []
+
             async def receive():
-                return {"type": "http.request", "body": b"", "more_body": False}
+                # A connected client: the request once, then nothing until the
+                # response is done. (Returning http.request forever made
+                # Starlette >= 1.x's FileResponse disconnect listener spin —
+                # the test hung until pytest-timeout, locally and in CI.)
+                if not requested:
+                    requested.append(True)
+                    return {"type": "http.request", "body": b"", "more_body": False}
+                await asyncio.Event().wait()
 
             async def send(message):
                 sent.append(message)

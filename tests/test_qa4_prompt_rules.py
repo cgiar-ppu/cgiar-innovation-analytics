@@ -41,10 +41,19 @@ def test_prms_query_keeps_titles_long_enough_to_quote():
     rows = [{"result_code": 3426, "title": title, "description": "d" * 300}]
     out = _format_results_text(rows, ["result_code", "title", "description"], None, "SELECT 1", ["result"])
     assert title in out                     # full title, verbatim
-    assert "d" * 77 + "..." in out          # other long text still cut at 80
+    # Marc Schut 13 Oct 2026: a few long values now come back whole (shared
+    # text budget, tests/test_prms_use_data.py) …
+    assert "d" * 300 in out
+    # … while a large result set still cuts non-title text at 80 and titles at 250.
+    many = [{"result_code": i, "title": title, "description": "d" * 300} for i in range(2000)]
+    out = _format_results_text(many, ["result_code", "title", "description"], None, "SELECT 1", ["result"])
+    assert title in out
+    assert "d" * 77 + "..." in out
     assert "d" * 78 not in out
     long_title = "T" * 400
     out = _format_results_text([{"short_title": long_title}], ["short_title"], None, "SELECT 1", ["result"])
+    assert long_title in out                # one long title fits the shared text budget
+    out = _format_results_text([{"short_title": long_title}] * 2000, ["short_title"], None, "SELECT 1", ["result"])
     assert "T" * (TITLE_CELL_LIMIT - 3) + "..." in out and "T" * (TITLE_CELL_LIMIT - 2) not in out
 
 
