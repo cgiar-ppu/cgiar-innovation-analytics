@@ -179,7 +179,10 @@ class SessionManager:
                     # Also reap dead subprocesses (exited but still in sessions dict)
                     reaped = 0
                     for sid in list(self._client_registry.sessions):
-                        client = self._client_registry.sessions[sid]
+                        # A chat DELETE may have removed it meanwhile.
+                        client = self._client_registry.sessions.get(sid)
+                        if client is None:
+                            continue
                         if not self._client_registry._is_client_alive(client):
                             logger.info(
                                 "Reaper: removing dead subprocess for session %s", sid

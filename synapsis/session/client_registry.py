@@ -459,14 +459,23 @@ class ClientRegistry:
         Called externally (e.g. when the user deletes a session via the REST
         API) so the SDK connection is cleaned up gracefully. Also removes any
         lock associated with the session.
+
+        Idempotent and safe to run concurrently (e.g. a chat DELETE racing the
+        orphan/idle reaper): the entry is taken out of the dict BEFORE the
+        awaited disconnect, so only one caller ever disconnects a client and
+        nobody fails on an entry another caller already removed.
         """
-        if session_id in self.sessions:
+        client = self.sessions.pop(session_id, None)
+        if client is not None:
             try:
-                await self.sessions[session_id].disconnect()
+                await client.disconnect()
             except Exception:
                 # SDK disconnect may raise anything; ignore on teardown
                 pass
-            del self.sessions[session_id]
+        if session_id in self.sessions:
+            # The chat was reopened while the old client shut down: the new
+            # client owns the lock and LRU entry now — leave them alone.
+            return
         # Release and remove the per-session lock so it does not linger.
         self.release_session_client(session_id)
         self._session_locks.pop(session_id, None)
