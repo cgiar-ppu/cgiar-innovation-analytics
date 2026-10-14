@@ -1,0 +1,23 @@
+{
+ "purpose": "ia-use-levels-20261014 Lane D: E2E of restored results_innovations_use/result_actors on DEV (Marc Schut questions, 13 Oct)",
+ "questions": [
+  {
+   "id": "q1_marc_all_2025",
+   "text": "All 2025 innovation use results should have a 0-9 Innovation Use level reported along side of innovation use numbers (# farmers). For all 2025 quality-assured Innovation Use results: how many have a current 0-9 Innovation Use level, how many report use numbers (e.g. number of farmers or other users), and what is the distribution across use levels 0-9?"
+  },
+  {
+   "id": "q2_codes",
+   "text": "For result codes R25015 and R25028, what is the current innovation use level (0-9) and how many users were reported?"
+  },
+  {
+   "id": "q3_marc_africa",
+   "text": "For the \"Proven\" candidates from Africa: please consider 2025 Innovation Use results with a current use level of 7-9. List the top 10 by number of users, with a dedicated use level column (current 0-9 use level) and a column with the current use reported (e.g. 10000 farmers)."
+  },
+  {
+   "id": "q4_regression",
+   "text": "How many innovations were reported in 2025 (quality-assured), split W1/W2 vs W3/bilateral, and how many of them are Innovation Use results?"
+  }
+ ],
+ "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAoiu7FdmX58FFmnsMAMtZ\nufJcUxKhwBm8AMqIDPzi2k9w2TdKn1MIuakfBioz/7OgUrHCTIJEScu4eERCNinA\nz4i1acifT41aZ0c++uIYMKLN8a1IwkEljzF5/sOsPxt0Uy+sTFctcv7WKAH6rALw\njJsi+1C0jn7Hk4D7RSm/VnD2eATindEwXh3umwS5ZyVnhBV0SYCHyF3IQ2x6yZHM\nKG45LlgFKwrp3GvXGkQipzU6GnXx9c9A8UCr3sCpEsx+t6U4E7ySAV7jUY5sT0Sn\nzhDMmulP5+/dn6Gu1/0t/MFR9Uj10FMux6xM/D5cf6+yTns/kEu8i+bK/6sb1WO4\nh9F3AxjTU42FDohI9Z6vIqrItf1BaY+XT4EbqHezvaJaUNdOZck7XvF3k/kjEj+R\n9QZXCGD6hJ21Ftim35HS4OPs1JnRCvX3S5EcJVW+p6dBXeABMFYVqpR8cq1m7hsU\ndzM+QjVa7nwbsKb01Ed9vVucTO7q8C1Y8zFZpv69+RnNy+FlhpiTtkHSrnwJJs9N\nCs1kbjfqbxyh0XQ4uR9eWd+d+XkFk/vCG5gUB6agL6Ll7psp3xu12YFINp+2qNBr\n9Uw3Xvk/0KJB8Lai7fsNGQvu5s4c82o+2n0/pTaLDqzdDFfDPDyEZDVp5b7Ly9nz\nCw2qlCbSQwG50/S/gw1uxJcCAwEAAQ==\n-----END PUBLIC KEY-----\n",
+ "max_cost_usd": 5.0
+}
