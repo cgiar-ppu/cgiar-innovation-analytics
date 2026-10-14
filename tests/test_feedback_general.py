@@ -170,6 +170,24 @@ async def test_screenshot_over_5_mb_is_rejected(http, initialized_db):
     assert r.status_code == 200, "exactly 5 MB is allowed"
 
 
+async def test_oversized_upload_is_refused_from_its_content_length_before_spooling(http, initialized_db):
+    """A declared body over the limit gets 413 before the route (or the form
+    parser) runs: even an unauthenticated caller gets 413, not 401."""
+    from synapsis.routes.feedback import MAX_GENERAL_REQUEST_BYTES
+    from unittest.mock import patch
+
+    big = PNG + b"\0" * (MAX_GENERAL_REQUEST_BYTES + 1)
+    with patch("starlette.formparsers.MultiPartParser.parse",
+               side_effect=AssertionError("the body must not be parsed")):
+        r = await http.post("/api/feedback/general", data=form(),
+                            files={"screenshot": ("huge.png", big, "image/png")})
+        assert r.status_code == 413
+        r = await http.post("/api/feedback/general", headers=ALICE, data=form(),
+                            files={"screenshot": ("huge.png", big, "image/png")})
+        assert r.status_code == 413
+    assert await rows(initialized_db) == []
+
+
 async def test_foreign_or_unknown_chat_ids_are_dropped_not_stored(http, initialized_db):
     await seed_chat(initialized_db, session_id="chat-b", owner="sso:bob", answers=1)
     r = await http.post("/api/feedback/general", headers=ALICE,

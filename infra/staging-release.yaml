@@ -399,7 +399,7 @@ Resources:
       UnhealthyThresholdCount: 3
       TargetGroupAttributes:
         - Key: stickiness.enabled
-          Value: 'true'
+          Value: 'false'  # single instance: no AWSALB cookies (SYN-2305 'no cookies'); only used when a new staging stack is created
         - Key: stickiness.type
           Value: lb_cookie
         - Key: stickiness.lb_cookie.duration_seconds

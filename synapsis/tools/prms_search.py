@@ -234,10 +234,9 @@ def _resolve_eligible(filter_sql: str | None, filters: dict | None) -> tuple[set
     except _TimeoutError as exc:
         return None, str(exc)
     except PRMSAccessDenied as exc:
-        if exc.financial:
+        if exc.external_view:
             return None, (
-                f"filter_sql not available in this external view: {exc} "
-                f"{prms_access_policy.FINANCIAL_GUIDANCE}"
+                f"filter_sql not available in this external view: {exc} {exc.guidance}"
             )
         return None, f"filter SQL error: {exc}"
     except sqlite3.Error as exc:
@@ -264,6 +263,10 @@ def _format_hits(
     extra_meta: list[str] | None = None,
 ) -> str:
     lines: list[str] = [header, ""]
+    # External (restricted) roles: currency amounts in titles are withheld,
+    # the same rule as prms_query's text values. Redact before shortening so
+    # a cut never leaves part of an amount behind.
+    redact = prms_access_policy.is_restricted(prms_access_policy.caller_role())
     if not hits:
         lines.append("No matching results above the configured thresholds.")
     else:
@@ -271,7 +274,10 @@ def _format_hits(
         lines.append(" | ".join(cols))
         lines.append(" | ".join("---" for _ in cols))
         for h in hits:
-            title = (h.title or "")[:70]
+            title = h.title or ""
+            if redact:
+                title = prms_access_policy.redact_amounts(title)
+            title = title[:70]
             lines.append(" | ".join([
                 str(h.result_code),
                 title,

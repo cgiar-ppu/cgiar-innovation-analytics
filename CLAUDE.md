@@ -12,7 +12,7 @@ CGIAR Innovation Analytics Platform — a modular AI-powered analytics platform 
 
 ### Four Modules (Planned)
 
-1. **Conversational Data Interrogation** — Natural language access to the PRMS database (197 tables). Users ask questions about innovations, partners, geographies; the agent translates to SQL and returns sourced answers with PRMS-validated vs AI-inferred attribution.
+1. **Conversational Data Interrogation** — Natural language access to the PRMS database (197 tables). Users ask questions about innovations, partners, geographies; the agent translates to SQL and returns sourced answers with Factual (PRMS) vs AI-inferred attribution.
 2. **Self-Serve Visualization Builder** — Users request charts through conversation and get interactive Recharts-based visualizations. Bar, line, area, pie, scatter, map, heatmap.
 3. **Scenario Planning** — Forward-looking "what if" analysis for portfolio decisions. Combines PRMS data with scaling readiness framework logic.
 4. **Partner Identification** — Find external partners for scaling specific innovations. Combines PRMS partner data with web search.

@@ -91,8 +91,8 @@ describe('InvitationManager', () => {
     const user = userEvent.setup()
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(<InvitationManager />)
-    expect(await screen.findByTestId('role-old@worldbank.example')).toHaveTextContent('Researcher')   // pre-role accounts
-    expect(screen.getByTestId('role-partner@fcdo.example')).toHaveTextContent('External')
+    expect((await screen.findAllByTestId('account-role')).find(e => e.dataset.accountEmail === 'old@worldbank.example')).toHaveTextContent('Researcher')   // pre-role accounts
+    expect(screen.getAllByTestId('account-role').find(e => e.dataset.accountEmail === 'partner@fcdo.example')).toHaveTextContent('External')
     await user.click(screen.getByRole('button', { name: 'Make external partner' }))
     expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/sign in again/))
     await waitFor(() => expect(posts.slice(-1)[0]!).toEqual({ url: '/api/auth/invitations/role', body: { email: 'old@worldbank.example', role: 'external' } }))

@@ -259,7 +259,8 @@ VOICE_USD_PER_MINUTE: float = _get_float_env("IA_VOICE_USD_PER_MINUTE", 0.10)
 # 30-s heartbeats) posted by the SPA to POST /api/telemetry. Same origin only:
 # no third-party script, no cookies, no CSP change. Schema modelled on
 # Umami's event model. See synapsis/database/telemetry.py.
-TELEMETRY_ENABLED: bool = os.getenv("IA_TELEMETRY_ENABLED", "true").lower() == "true"
+# Empty or unset = default on (an empty GitHub variable must not switch it off).
+TELEMETRY_ENABLED: bool = (os.getenv("IA_TELEMETRY_ENABLED") or "true").strip().lower() not in ("0", "false", "no", "off")
 # Per-user ingestion ceiling (events per minute); excess is dropped silently.
 TELEMETRY_MAX_EVENTS_PER_MINUTE: int = _get_int_env("IA_TELEMETRY_MAX_EVENTS_PER_MINUTE", 240)
 

@@ -11,7 +11,7 @@ Scenario types:
 - portfolio_focus:  Model portfolio-wide emphasis shifts
 
 All outputs are clearly labeled [SCENARIO-MODELED] to distinguish from
-[PRMS-VALIDATED] data directly from the PRMS database.
+[Factual · PRMS] data directly from the PRMS database.
 """
 
 import json
@@ -99,7 +99,10 @@ def _query_rows(conn: sqlite3.Connection, sql: str) -> list[dict]:
     cur = conn.cursor()
     cur.execute(sql)
     cols = [d[0] for d in cur.description]
-    return [dict(zip(cols, row)) for row in cur.fetchall()]
+    rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+    # External (restricted) roles: no currency amounts in any text value
+    # (defence in depth; the fixed queries here return names and counts).
+    return prms_access_policy.redact_for_role(rows, prms_access_policy.caller_role())
 
 
 def _query_scalar(conn: sqlite3.Connection, sql: str) -> Any:
@@ -117,7 +120,7 @@ def _query_scalar(conn: sqlite3.Connection, sql: str) -> Any:
 # L2-06 (2026-09-26): the baselines used to be raw ROW counts over every status,
 # phase and year (COUNT(*) with is_active=1 only) — "4,391 innovations" against
 # the canonical 1,852 and "1,836 IRL 7+" against ~850 — yet were labelled
-# [PRMS-VALIDATED] with no snapshot date. They are now built on ONE canonical
+# [Factual · PRMS] with no snapshot date. They are now built on ONE canonical
 # population, the same counting rules as the dashboard and the agent prompt:
 #
 #   * quality gate: W1/W2 'Quality Assessed' (source='Result', status_id=2) OR
@@ -1060,12 +1063,12 @@ def _format_reallocation_response(
     lines.append("")
     lines.append(
         "> **[SCENARIO-MODELED]** These projections are modeled estimates based on PRMS baseline data "
-        "and analytical assumptions. They are NOT PRMS-validated predictions."
+        "and analytical assumptions. They are NOT factual PRMS data."
     )
     lines.append("")
 
     # Baseline
-    lines.append("### Baseline (Current Portfolio) [PRMS-VALIDATED]")
+    lines.append("### Baseline (Current Portfolio) [Factual · PRMS]")
     lines.append(baseline_provenance())
     lines.append("")
     lines.append("| Metric | Value |")
@@ -1165,12 +1168,12 @@ def _format_irl_response(
     lines.append("")
     lines.append(
         "> **[SCENARIO-MODELED]** These projections are modeled estimates based on PRMS baseline data "
-        "and analytical assumptions. They are NOT PRMS-validated predictions."
+        "and analytical assumptions. They are NOT factual PRMS data."
     )
     lines.append("")
 
     # Baseline
-    lines.append("### Baseline (Current Portfolio) [PRMS-VALIDATED]")
+    lines.append("### Baseline (Current Portfolio) [Factual · PRMS]")
     lines.append(baseline_provenance())
     lines.append("")
     lines.append("| Metric | Value |")
@@ -1270,12 +1273,12 @@ def _format_scaling_response(
     lines.append("")
     lines.append(
         "> **[SCENARIO-MODELED]** These projections are modeled estimates based on PRMS baseline data "
-        "and analytical assumptions. They are NOT PRMS-validated predictions."
+        "and analytical assumptions. They are NOT factual PRMS data."
     )
     lines.append("")
 
     # Baseline
-    lines.append("### Baseline (Current Portfolio) [PRMS-VALIDATED]")
+    lines.append("### Baseline (Current Portfolio) [Factual · PRMS]")
     lines.append(baseline_provenance())
     lines.append("")
     lines.append("| Metric | Value |")
@@ -1391,12 +1394,12 @@ def _format_focus_response(
     lines.append("")
     lines.append(
         "> **[SCENARIO-MODELED]** These projections are modeled estimates based on PRMS baseline data "
-        "and analytical assumptions. They are NOT PRMS-validated predictions."
+        "and analytical assumptions. They are NOT factual PRMS data."
     )
     lines.append("")
 
     # Baseline
-    lines.append("### Baseline (Current Portfolio) [PRMS-VALIDATED]")
+    lines.append("### Baseline (Current Portfolio) [Factual · PRMS]")
     lines.append(baseline_provenance())
     lines.append("")
     lines.append("| Metric | Value |")
@@ -1527,7 +1530,7 @@ def _format_focus_response(
     "Models hypothetical changes (resource reallocation, innovation pipeline "
     "advancement, output scaling, portfolio focus shifts) against current PRMS "
     "baseline data. Returns structured comparison with sensitivity analysis. "
-    "Results are clearly labeled [SCENARIO-MODELED] distinct from [PRMS-VALIDATED] data.",
+    "Results are clearly labeled [SCENARIO-MODELED] distinct from [Factual · PRMS] data.",
     {
         "scenario_type": str,
         "description": str,

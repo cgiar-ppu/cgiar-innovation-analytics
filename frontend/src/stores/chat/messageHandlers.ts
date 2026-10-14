@@ -13,6 +13,8 @@ import type { ChatState } from './types'
 import { generateId } from '../../lib/utils'
 import { finalizeThinking, finalizeAll } from './streamingHelpers'
 import { isSuppressedSystemMessage } from './systemMessageFilter'
+import { isStaleRunEvent, mayBootstrapRun } from './runScope'
+import { NOTICE_SUBTYPE } from '../../lib/chatNotice'
 
 type Get = StoreApi<ChatState>['getState']
 type Set = StoreApi<ChatState>['setState']
@@ -73,18 +75,19 @@ export function createHandleServerMessage(set: Set, get: Get) {
     const msgRunId = (msg as { run_id?: string }).run_id
     const state = get()
 
-    // Accept run_id from the first non-completion event of a new turn.
-    // Completion events (session_complete, result) should not bootstrap
-    // the run_id — they could be stale broadcasts from previous turns.
-    if (msgRunId && !state.currentRunId
-        && msg.type !== 'session_complete' && msg.type !== 'result') {
-      set({ currentRunId: msgRunId })
-    }
-
-    // Reject stale events: only when currentRunId IS set and doesn't match
-    if (msgRunId && state.currentRunId && msgRunId !== state.currentRunId) {
+    // Reject stale events: another run than the current one, or (before the
+    // new turn's first event) a run retired when the user sent this message.
+    if (isStaleRunEvent(msgRunId, state.currentRunId)) {
       console.warn('[Chat] Ignoring stale message from run', msgRunId, 'current:', state.currentRunId)
       return
+    }
+
+    // Accept run_id from the first content event of a new turn. Completion /
+    // bookkeeping events (session_complete, result, task_status, cancelled,
+    // error, text_links) never bootstrap it: they can be late events of the
+    // previous turn (see runScope.ts).
+    if (mayBootstrapRun(msg.type, msgRunId, state.currentRunId)) {
+      set({ currentRunId: msgRunId })
     }
 
     switch (msg.type) {
@@ -307,6 +310,8 @@ export function createHandleServerMessage(set: Set, get: Get) {
       }
 
       case 'error': {
+        // Server refusals and turn errors are always shown in full (a notice),
+        // never folded into "1 system message" in the compact view.
         set((prev) => ({
           messages: [
             ...prev.messages,
@@ -315,6 +320,7 @@ export function createHandleServerMessage(set: Set, get: Get) {
               role: 'system',
               content: msg.message,
               timestamp: Date.now(),
+              subtype: NOTICE_SUBTYPE,
             },
           ],
           isBusy: false,

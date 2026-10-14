@@ -249,6 +249,14 @@ jobs:
             PARAMS="$PARAMS SubnetId2=${{ vars.SUBNET_ID_2 }}"
           fi
 
+          # MVP test-budget alert recipients (SYN-2306); empty = no alert topic
+          if [ -n "${{ vars.IA_BUDGET_ALERT_EMAIL_1 }}" ]; then
+            PARAMS="$PARAMS BudgetAlertEmail1=${{ vars.IA_BUDGET_ALERT_EMAIL_1 }}"
+          fi
+          if [ -n "${{ vars.IA_BUDGET_ALERT_EMAIL_2 }}" ]; then
+            PARAMS="$PARAMS BudgetAlertEmail2=${{ vars.IA_BUDGET_ALERT_EMAIL_2 }}"
+          fi
+
           # Only include HostedZoneId if explicitly set (empty = DNS records created manually)
           if [ -n "${{ vars.HOSTED_ZONE_ID }}" ]; then
             PARAMS="$PARAMS HostedZoneId=${{ vars.HOSTED_ZONE_ID }}"

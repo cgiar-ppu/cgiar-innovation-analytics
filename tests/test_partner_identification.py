@@ -225,8 +225,8 @@ class TestPRMSIntegration:
         result = run_partner_search(country="Kenya")
         assert not is_error(result)
         text = get_text(result)
-        assert "PRMS-Validated Partners" in text
-        assert "[PRMS-VALIDATED]" in text
+        assert "Partners documented in PRMS [Factual · PRMS]" in text
+        assert "[Factual · PRMS]" in text
         # KALRO should appear (they have 356 results in Kenya)
         assert "KALRO" in text
 
@@ -235,7 +235,7 @@ class TestPRMSIntegration:
         result = run_partner_search(initiative="Breed")
         assert not is_error(result)
         text = get_text(result)
-        assert "PRMS-Validated Partners" in text
+        assert "Partners documented in PRMS [Factual · PRMS]" in text
         # NARO should appear (top partner for breeding)
         assert "NARO" in text
 
@@ -247,7 +247,7 @@ class TestPRMSIntegration:
         )
         assert not is_error(result)
         text = get_text(result)
-        assert "PRMS-Validated Partners" in text
+        assert "Partners documented in PRMS [Factual · PRMS]" in text
         assert "Relevance Score" in text
 
     def test_search_by_topic(self):
@@ -263,7 +263,7 @@ class TestPRMSIntegration:
         result = run_partner_search(region="Southern Asia")
         assert not is_error(result)
         text = get_text(result)
-        assert "PRMS-Validated Partners" in text
+        assert "Partners documented in PRMS [Factual · PRMS]" in text
         # ICAR (Indian Council) should appear
         assert "ICAR" in text
 

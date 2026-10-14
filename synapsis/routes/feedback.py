@@ -60,6 +60,38 @@ router = APIRouter(tags=["feedback"])
 NO_STORE = {"Cache-Control": "no-store"}
 
 
+#: Largest request body accepted by ``POST /api/feedback/general``: the 5 MB
+#: screenshot plus the form fields and multipart framing.
+MAX_GENERAL_REQUEST_BYTES = store.MAX_ATTACHMENT_BYTES + 256 * 1024
+
+
+class FeedbackUploadLimitMiddleware:
+    """Refuse an oversized feedback upload from its Content-Length, BEFORE the
+    multipart body is spooled to disk (the per-file 5 MB check in the route
+    runs only after Starlette has written the whole part to a temp file).
+
+    Pure ASGI; touches only ``POST /api/feedback/general``. A body sent without
+    a Content-Length (chunked) is still bounded by the route's own check.
+    """
+
+    PATH = "/api/feedback/general"
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http" and scope.get("method") == "POST" and scope.get("path") == self.PATH:
+            declared = dict(scope.get("headers") or []).get(b"content-length", b"")
+            if declared.isdigit() and int(declared) > MAX_GENERAL_REQUEST_BYTES:
+                from starlette.responses import JSONResponse
+                await JSONResponse(
+                    {"detail": "The screenshot must be 5 MB or smaller"}, status_code=413,
+                    headers={"Connection": "close"},
+                )(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 def feedback_enabled() -> bool:
     return os.getenv("IA_FEEDBACK_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
 

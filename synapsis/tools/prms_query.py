@@ -201,8 +201,11 @@ def _execute_with_timeout(
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
             rows = cursor.fetchall()
 
-            # Convert to list of dicts
-            result_holder["rows"] = [dict(row) for row in rows]
+            # Convert to list of dicts. For restricted (external) roles,
+            # currency amounts inside text values are redacted: the authorizer
+            # works on columns and cannot see a budget typed into a narrative.
+            result_holder["rows"] = prms_access_policy.redact_for_role(
+                [dict(row) for row in rows], role, access_log_holder["log"])
             result_holder["columns"] = columns
             result_holder["count"] = len(rows)
         except Exception as exc:
@@ -243,6 +246,11 @@ def _execute_with_timeout(
             t for t in src.financial_denied if t not in access_log.financial_denied)
         access_log.financial_nulled.extend(
             c for c in src.financial_nulled if c not in access_log.financial_nulled)
+        access_log.internal_denied.extend(
+            t for t in src.internal_denied if t not in access_log.internal_denied)
+        access_log.internal_nulled.extend(
+            c for c in src.internal_nulled if c not in access_log.internal_nulled)
+        access_log.redacted_amounts += src.redacted_amounts
 
     if "error" in error_holder:
         exc = error_holder["error"]
@@ -446,10 +454,8 @@ def _format_results_text(
     "Operational tables of the PRMS web application that hold credentials or personal "
     "contact data (e.g. account passwords and e-mail addresses, access tokens, "
     "application settings) are not available: such queries are refused or those "
-    "columns come back empty, by design. For external partner accounts, budget and "
-    "financial figures (budget tables, project budgets, allocations, sources of funding) "
-    "are refused or come back empty in the same way: decline those questions politely "
-    "as not available in this external view, never as missing data.",
+    "columns come back empty, by design. If a result says a table or column is not "
+    "available in this view, follow the note it carries; otherwise report the data as usual.",
     {
         "sql": str,
         "question": str,
@@ -528,10 +534,9 @@ async def prms_query(args: dict[str, Any]) -> dict[str, Any]:
     except _TimeoutError as exc:
         return error_response(str(exc))
     except PRMSAccessDenied as exc:
-        if exc.financial:
+        if exc.external_view:
             return error_response(
-                f"Not available in this external view: {exc} "
-                f"{prms_access_policy.FINANCIAL_GUIDANCE}"
+                f"Not available in this external view: {exc} {exc.guidance}"
             )
         return error_response(
             f"Not available: {exc} Answer the user's question without it — the "

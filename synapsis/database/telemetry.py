@@ -229,10 +229,16 @@ async def _collect(days: int, now: Optional[float]) -> dict:
             "questions": questions, "cohorts": cohorts}
 
 
-def _visit_minutes(first: float, last: float, engaged_seconds: float) -> float:
-    """Session length of one visit: wall time between its first and last
-    event, but at least the engaged time reported by heartbeats."""
-    return max(last - first, engaged_seconds) / 60.0
+#: A gap between two events of one visit longer than this is idle time (a tab
+#: left open), not session time. Matches the client's 5-minute idle rule.
+MAX_ACTIVE_GAP_SECONDS = 300.0
+
+
+def _visit_minutes(active_seconds: float, engaged_seconds: float) -> float:
+    """Session length of one visit: time between its events with idle gaps
+    capped at MAX_ACTIVE_GAP_SECONDS, but at least the engaged time reported
+    by heartbeats."""
+    return max(active_seconds, engaged_seconds) / 60.0
 
 
 def _aggregate(data: dict) -> dict[tuple[str, str], dict]:
@@ -261,15 +267,18 @@ def _aggregate(data: dict) -> dict[tuple[str, str], dict]:
             c["clicks"] += 1
             key = name or "untagged"
             c["targets"][key] = c["targets"].get(key, 0) + 1
-        v = visits.setdefault((uid, visit_id), {"day": day, "uid": uid, "first": ts, "last": ts, "engaged": 0.0})
-        v["last"] = max(v["last"], ts)
+        v = visits.setdefault((uid, visit_id), {"day": day, "uid": uid, "first": ts, "last": ts,
+                                                "active": 0.0, "engaged": 0.0})
+        if ts > v["last"]:
+            v["active"] += min(ts - v["last"], MAX_ACTIVE_GAP_SECONDS)
+            v["last"] = ts
         if etype == "heartbeat" and value:
             v["engaged"] += float(value)
 
     for v in visits.values():
         c = cells[(v["day"], v["uid"])]
         c["visits"] += 1
-        c["session_minutes"].append(_visit_minutes(v["first"], v["last"], v["engaged"]))
+        c["session_minutes"].append(_visit_minutes(v["active"], v["engaged"]))
 
     for day, uid, role, n, cost in data["questions"]:
         c = cell(day, uid, role, data["cohorts"].get(uid, ""))

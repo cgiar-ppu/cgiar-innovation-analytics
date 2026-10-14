@@ -187,16 +187,32 @@ def _alert_key(window_start: float, fraction: float) -> str:
 
 
 async def claim_alert(window_start: float, fraction: float, payload: dict) -> bool:
-    """Record that ``fraction`` was crossed. True only for the first caller."""
+    """Record that ``fraction`` was crossed. True only for the first caller.
+
+    If the budget was raised mid-window (``payload["budget_usd"]`` above the
+    one recorded with the earlier alert), the same fraction of the NEW budget
+    is a new alert: the row is updated and the first caller gets True again.
+    """
     await init_budget_tables()
     now = time.time()
+    key = _alert_key(window_start, fraction)
+    value = json.dumps(payload, sort_keys=True)
     async with get_db() as db:
         cursor = await db.execute(
             "INSERT OR IGNORE INTO budget_state (key, value, updated) VALUES (?, ?, ?)",
-            (_alert_key(window_start, fraction), json.dumps(payload, sort_keys=True), now),
+            (key, value, now),
         )
+        claimed = (cursor.rowcount or 0) > 0
+        budget = payload.get("budget_usd")
+        if not claimed and isinstance(budget, (int, float)):
+            cursor = await db.execute(
+                "UPDATE budget_state SET value = ?, updated = ? WHERE key = ? "
+                "AND COALESCE(CAST(json_extract(value, '$.budget_usd') AS REAL), 0) < ?",
+                (value, now, key, float(budget)),
+            )
+            claimed = (cursor.rowcount or 0) > 0
         await db.commit()
-        return (cursor.rowcount or 0) > 0
+        return claimed
 
 
 async def crossed_alerts(window_start: float) -> list[dict]:

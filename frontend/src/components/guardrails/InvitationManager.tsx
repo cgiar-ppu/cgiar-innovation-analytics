@@ -206,7 +206,7 @@ export default function InvitationManager() {
     <div className="mt-3 space-y-3">
       {shown.map(account => <div key={account.email} className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] pt-3 text-sm">
         <div><p className="text-[var(--text)]">{account.name}{account.cohort ? <span className="ml-2 rounded bg-[var(--surface-1)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">{account.cohort}</span> : null}
-          <span className="ml-2 rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]" data-testid={`role-${account.email}`}>{ROLE_BADGE[account.role ?? 'researcher']}</span></p>
+          <span className="ml-2 rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]" data-testid="account-role" data-account-email={account.email}>{ROLE_BADGE[account.role ?? 'researcher']}</span></p>
           <p className="text-xs text-[var(--text-muted)]">{account.email} · {!account.enabled ? 'Revoked' : account.activated ? 'Active' : 'Awaiting activation'}</p></div>
         <div className="flex gap-3 text-xs">
           <button type="button" className="text-[var(--accent)]" onClick={() => { setMode('one'); setEmail(account.email); setName(account.name); setCohort(account.cohort || ''); setRole(account.role ?? 'researcher'); setLink(''); setBulk(null) }}>Reissue / reset</button>

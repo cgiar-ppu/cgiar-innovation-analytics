@@ -77,6 +77,25 @@ def test_defaults_match_the_agreed_test_plan():
     assert c.TELEMETRY_ENABLED is True
 
 
+@pytest.mark.parametrize("raw,expected", [
+    (None, True), ("", True), ("  ", True), ("true", True), ("1", True),
+    ("false", False), ("FALSE", False), ("0", False), ("off", False),
+])
+def test_empty_telemetry_flag_keeps_the_default(monkeypatch, raw, expected):
+    """V4 D6: an empty IA_TELEMETRY_ENABLED (unset GitHub variable) must not switch it off."""
+    import importlib
+    import synapsis.config as c
+    if raw is None:
+        monkeypatch.delenv("IA_TELEMETRY_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("IA_TELEMETRY_ENABLED", raw)
+    try:
+        assert importlib.reload(c).TELEMETRY_ENABLED is expected
+    finally:
+        monkeypatch.delenv("IA_TELEMETRY_ENABLED", raising=False)
+        importlib.reload(c)
+
+
 # ---------------------------------------------------------------------------
 # Window
 # ---------------------------------------------------------------------------
@@ -178,7 +197,8 @@ async def test_closed_window_stops_with_end_date(initialized_db):
         with pytest.raises(MvpPeriodClosed) as exc:
             await enforce_test_budget(role="researcher")
         await enforce_test_budget(role="admin")
-    assert exc.value.code == "test_ended" and "2026-02-01" in exc.value.user_message
+    # IA_TEST_END is inclusive: the message names the last open day, not the day after.
+    assert exc.value.code == "test_ended" and "ended on 2026-01-31" in exc.value.user_message
 
 
 async def test_not_started_window_refuses_with_start_date(initialized_db):
@@ -383,8 +403,43 @@ async def test_engagement_summary_and_csv(http, initialized_db):
     assert (await http.get("/api/admin/engagement.csv", headers=h)).status_code == 403
 
 
+async def test_idle_gap_in_a_visit_is_not_session_time(initialized_db):
+    """A tab left open for 4 h and then closed is a short session, not 240 minutes."""
+    from synapsis.database.telemetry import engagement_summary, record_events
+    now = time.time()
+    t0 = now - 5 * 3600
+    base = {"chat_session_id": None, "url_path": "/", "event_name": "", "value": None, "visit_id": "visit-idle01"}
+    await record_events([
+        {**base, "event_id": "idle-0001", "ts": t0, "event_type": "page_view"},
+        {**base, "event_id": "idle-0002", "ts": t0 + 4 * 3600, "event_type": "visit_end"},
+    ], user_id="u@example.org", role="researcher", env="t")
+    s = await engagement_summary(2, now=now)
+    assert s["totals"]["session_minutes_avg"] == 5.0  # one capped 5-minute gap
+
+
 def test_user_key_is_stable_and_keyed():
     from synapsis.database.telemetry import user_key
     assert user_key("a@x.org") == user_key("a@x.org") != user_key("b@x.org")
     import hashlib
     assert user_key("a@x.org")[2:] != hashlib.sha256(b"a@x.org").hexdigest()[:10]
+
+
+async def test_threshold_fires_again_after_the_budget_is_raised(initialized_db, budget10, caplog):
+    """Raising IA_TEST_BUDGET_USD mid-test re-arms the alerts for the new budget (once)."""
+    from synapsis.runtime_policy import test_budget_status
+    caplog.set_level(logging.WARNING, logger="synapsis_agent")
+
+    def lines():
+        return [r.getMessage().split()[1:4:2] for r in caplog.records
+                if "IA_TEST_BUDGET_THRESHOLD" in r.getMessage()]
+
+    await spend(5.5)
+    await test_budget_status()
+    assert lines() == [["pct=50", "budget=10.00"]]
+    with patch("synapsis.config.TEST_BUDGET_USD", 20.0):
+        await test_budget_status()          # 27 %: nothing new
+        assert lines() == [["pct=50", "budget=10.00"]]
+        await spend(5.0, session="sess0002")  # 52.5 % of the new budget
+        await test_budget_status()
+        await test_budget_status()
+    assert lines() == [["pct=50", "budget=10.00"], ["pct=50", "budget=20.00"]]
