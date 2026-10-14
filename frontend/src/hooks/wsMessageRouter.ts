@@ -17,7 +17,8 @@ import { useSessionsStore } from '../stores/sessions'
 import { takePendingNewChat, clearPendingNewChat } from '../lib/chatCommands'
 
 /** Error codes that mean the server refused to open a new chat (Lane D). */
-const NEW_CHAT_REFUSALS = new Set(['rate_limited', 'capacity', 'daily_limit'])
+// test_budget / test_ended: MVP test budget used up or test window closed (SYN-2306).
+const NEW_CHAT_REFUSALS = new Set(['rate_limited', 'capacity', 'daily_limit', 'test_budget', 'test_ended'])
 
 /**
  * Context passed to the router so it can access connection-scoped state

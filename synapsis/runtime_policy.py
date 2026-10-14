@@ -9,7 +9,10 @@ builder:
   the full stage list) — enforced in ``switch_model``, ``retry_with_model``,
   resume and new clients, and reported by ``/api/config``;
 - the per-question spend ceiling (SDK ``max_budget_usd``);
-- the soft daily spend cap per user (admins exempt).
+- the soft daily spend cap per user (admins exempt);
+- the MVP test budget (SYN-2306): one deployment-wide USD budget over a test
+  window, a per-chat-session cap, threshold log lines at 50/75/90 %, and a
+  graceful stop at the cap or at the end of the window.
 
 The caller's identity comes from the per-connection context
 (``synapsis.auth.context``) that ``ws_chat`` / ``/api/query`` set from the
@@ -56,6 +59,20 @@ class ModelNotAllowedError(PolicyError):
 
 class DailyBudgetExceeded(PolicyError):
     code = "daily_limit"
+
+
+class MvpBudgetExhausted(PolicyError):
+    """Global test budget used up (or the test window is closed)."""
+
+    code = "test_budget"
+
+
+class MvpPeriodClosed(MvpBudgetExhausted):
+    code = "test_ended"
+
+
+class SessionBudgetExceeded(PolicyError):
+    code = "session_limit"
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +218,205 @@ async def enforce_daily_budget(user_id: Optional[str] = None, role: Optional[str
     if spent >= cap:
         _config.logger.info("Daily budget reached for %s: spent $%.4f >= $%.2f", uid, spent, cap)
         raise DailyBudgetExceeded(DAILY_LIMIT_ERROR.format(limit=cap, contact=support_contact()))
+
+
+# ---------------------------------------------------------------------------
+# MVP test budget (SYN-2306)
+# ---------------------------------------------------------------------------
+#
+# Who is stopped:
+#   * global test budget / window: every NON-admin caller. Admin spend still
+#     COUNTS toward the budget, but admins are not stopped, so the team can
+#     still diagnose, demo and export after the cap (documented choice; set
+#     IA_TEST_BUDGET_USD=0 to switch the global cap off entirely).
+#   * per-session cap: non-admins only (like the daily cap).
+# All checks fail OPEN on a database error (logged): these are cost guards,
+# not security boundaries, and a broken read must not take the tool down
+# during a demo.
+
+THRESHOLD_LOG_TAG = "IA_TEST_BUDGET_THRESHOLD"
+EXHAUSTED_LOG_TAG = "IA_TEST_BUDGET_EXHAUSTED"
+
+
+def session_budget_usd(role: Optional[str] = None) -> Optional[float]:
+    """Per-chat-session cap for the role (None = exempt / disabled)."""
+    r = role if role is not None else current_role()
+    if r == "admin":
+        return None
+    value = _config.SESSION_BUDGET_USD
+    return value if value and value > 0 else None
+
+
+def test_budget_usd() -> Optional[float]:
+    value = _config.TEST_BUDGET_USD
+    return value if value and value > 0 else None
+
+
+def _environment() -> str:
+    try:
+        from synapsis.routes.usage import _environment_label
+        return _environment_label()
+    except Exception:
+        return _config.ENVIRONMENT_LABEL or "local"
+
+
+async def test_budget_status(now: Optional[float] = None, *, check_alerts: bool = True) -> dict:
+    """The ``test_budget`` block of ``/api/admin/usage``.
+
+    ``{enabled, budget_usd, spent_usd, remaining_usd, pct, state, window,
+    thresholds, alerts, session_budget_usd, voice, basis}`` where ``state`` is
+    ``not_started`` | ``open`` | ``exhausted`` | ``ended`` | ``disabled``.
+    With ``check_alerts`` the call also logs (once) any newly crossed
+    threshold, so a monitor polling the endpoint and the log agree.
+    """
+    import time as _time
+    from synapsis.database.budget import crossed_alerts, iso, spent_between, test_window
+
+    now = now if now is not None else _time.time()
+    budget = test_budget_usd()
+    window = await test_window(now)
+    spent = await spent_between(window["start"], window["end"])
+    total = spent["total_usd"]
+    if budget is None:
+        state = "disabled"
+    elif now < window["start"]:
+        state = "not_started"
+    elif now >= window["end"]:
+        state = "ended"
+    elif total >= budget:
+        state = "exhausted"
+    else:
+        state = "open"
+    pct = round(100.0 * total / budget, 2) if budget else None
+    if check_alerts and budget is not None:
+        await _log_crossed_thresholds(window, total, budget)
+    return {
+        "enabled": budget is not None,
+        "budget_usd": budget,
+        "spent_usd": round(total, 4),
+        "remaining_usd": round(max(0.0, budget - total), 4) if budget is not None else None,
+        "pct": pct,
+        "state": state,
+        "window": {
+            "start": iso(window["start"]),
+            "end": iso(window["end"]),
+            "start_source": window["start_source"],
+            "end_source": window["end_source"],
+            "days_left": round(max(0.0, (window["end"] - now) / 86400.0), 1),
+        },
+        "thresholds": [round(t * 100) for t in _config.BUDGET_ALERT_THRESHOLDS],
+        "alerts": await crossed_alerts(window["start"]) if budget is not None else [],
+        "session_budget_usd": session_budget_usd("researcher"),
+        "questions": spent["questions"],
+        "voice": {
+            "minutes": round(spent["voice_minutes"], 1),
+            "usd": round(spent["voice_usd"], 4),
+            "usd_per_minute": _config.VOICE_USD_PER_MINUTE,
+        },
+        "basis": (
+            "Model cost as reported by the Claude Agent SDK per question (list "
+            "prices) since the window start, plus voice minutes x usd_per_minute. "
+            "Admin usage counts toward the budget; only non-admins are stopped."
+        ),
+    }
+
+
+async def _log_crossed_thresholds(window: dict, spent: float, budget: float) -> None:
+    """Emit ONE distinctive log line per crossed threshold per window."""
+    from synapsis.database.budget import claim_alert, iso
+
+    win = f"{iso(window['start'])[:10]}..{iso(window['end'])[:10]}"
+    env = _environment()
+    for fraction in [*_config.BUDGET_ALERT_THRESHOLDS, 1.0]:
+        if spent < fraction * budget:
+            break
+        payload = {"fraction": fraction, "pct": round(fraction * 100), "spent_usd": round(spent, 2),
+                   "budget_usd": budget}
+        try:
+            first = await claim_alert(window["start"], fraction, payload)
+        except Exception:
+            _config.logger.warning("Could not record budget alert %.2f", fraction, exc_info=True)
+            continue
+        if not first:
+            continue
+        tag = EXHAUSTED_LOG_TAG if fraction >= 1.0 else THRESHOLD_LOG_TAG
+        _config.logger.warning(
+            "%s pct=%d spent=%.2f budget=%.2f window=%s env=%s",
+            tag, round(fraction * 100), spent, budget, win, env,
+        )
+
+
+async def check_test_budget_thresholds() -> None:
+    """Called after each recorded question: log newly crossed thresholds.
+
+    Never raises (the answer has already been delivered).
+    """
+    if test_budget_usd() is None:
+        return
+    try:
+        await test_budget_status(check_alerts=True)
+    except Exception:
+        _config.logger.warning("Test budget threshold check failed", exc_info=True)
+
+
+async def enforce_test_budget(role: Optional[str] = None) -> None:
+    """Refuse a new question for non-admins when the test budget is used up
+    or the test window is closed (graceful stop with a clear message)."""
+    from synapsis.constants import (
+        TEST_BUDGET_EXHAUSTED_ERROR,
+        TEST_PERIOD_ENDED_ERROR,
+        TEST_PERIOD_NOT_STARTED_ERROR,
+    )
+
+    if test_budget_usd() is None:
+        return
+    r = role if role is not None else current_role()
+    try:
+        status = await test_budget_status(check_alerts=True)
+    except Exception:
+        _config.logger.warning("Test budget check failed; allowing the turn", exc_info=True)
+        return
+    if is_admin(r):
+        return
+    contact = support_contact()
+    state = status["state"]
+    if state == "exhausted":
+        raise MvpBudgetExhausted(TEST_BUDGET_EXHAUSTED_ERROR.format(contact=contact))
+    if state == "ended":
+        end = (status["window"]["end"] or "")[:10]
+        raise MvpPeriodClosed(TEST_PERIOD_ENDED_ERROR.format(end=end, contact=contact))
+    if state == "not_started":
+        start = (status["window"]["start"] or "")[:10]
+        raise MvpPeriodClosed(TEST_PERIOD_NOT_STARTED_ERROR.format(start=start, contact=contact))
+
+
+async def enforce_session_budget(session_id: Optional[str], role: Optional[str] = None) -> None:
+    """Refuse another question in a chat that already spent its cap
+    (non-admins). A new chat (no id yet) always passes."""
+    from synapsis.constants import SESSION_LIMIT_ERROR
+
+    r = role if role is not None else current_role()
+    cap = session_budget_usd(r)
+    if cap is None or not session_id:
+        return
+    try:
+        from synapsis.database.budget import spent_in_session
+        spent = await spent_in_session(session_id)
+    except Exception:
+        _config.logger.warning("Session budget check failed for %s; allowing the turn", session_id, exc_info=True)
+        return
+    if spent >= cap:
+        _config.logger.info("Session budget reached for %s: spent $%.4f >= $%.2f", session_id, spent, cap)
+        raise SessionBudgetExceeded(SESSION_LIMIT_ERROR.format(limit=cap))
+
+
+async def enforce_spend_limits(session_id: Optional[str] = None, user_id: Optional[str] = None,
+                               role: Optional[str] = None) -> None:
+    """All pre-question cost guards, cheapest refusal first: global test
+    budget/window, then this chat's cap, then the caller's daily cap."""
+    await enforce_test_budget(role)
+    await enforce_session_budget(session_id, role)
+    await enforce_daily_budget(user_id, role)
 
 
 def policy_summary(role: Optional[str]) -> dict:

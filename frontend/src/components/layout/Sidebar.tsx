@@ -46,6 +46,7 @@ export function Sidebar({ send }: SidebarProps) {
             <button
               key={tab.id}
               onClick={() => setSidebarTab(tab.id)}
+              data-track={`sidebar.${tab.id}`}
               className={`flex-1 flex items-center justify-center gap-1.5 py-3 text-xs font-medium transition-all relative
                 ${sidebarTab === tab.id
                   ? 'text-accent'

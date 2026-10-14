@@ -57,6 +57,7 @@ export function FileDownloadLink({ relativePath, filename, fullPath }: FileDownl
         no-underline cursor-pointer align-middle whitespace-nowrap"
       onClick={withFreshToken}
       onAuxClick={withFreshToken}
+      data-track="file.download"
     >
       <Download size={11} className="flex-shrink-0" />
       <span className="truncate max-w-[200px]">{filename}</span>

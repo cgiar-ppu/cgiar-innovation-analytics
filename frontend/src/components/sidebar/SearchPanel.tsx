@@ -92,6 +92,7 @@ export function SearchPanel({ send, onClose }: Props) {
             <button
               key={`${result.session_id}-${i}`}
               onClick={() => handleResultClick(result.session_id)}
+              data-track="search.result"
               className="w-full text-left px-4 py-3.5 hover:bg-surface-2 transition-colors border-b border-border last:border-0"
             >
               <div className="flex items-center gap-2 mb-1">

@@ -593,6 +593,39 @@ async def test_daily_cap_also_applies_to_rest_query(runtime, auth_on):
 
 
 # ---------------------------------------------------------------------------
+# MVP test budget (SYN-2306): graceful stops on the chat socket
+# ---------------------------------------------------------------------------
+
+async def test_test_budget_stop_refuses_researcher_not_admin(runtime, auth_on):
+    from synapsis.database.usage import record_turn_usage
+    with patch("synapsis.config.TEST_BUDGET_USD", 2.0), patch("synapsis.config.TEST_START", "2026-01-01"), \
+            patch("synapsis.config.TEST_END", "2099-01-01"):
+        await record_turn_usage(user_id="someone@cgiar.org", role="researcher", session_id="x",
+                                model="claude-sonnet-5", turn_cost_usd=2.5)
+        ws = await run_ws([{"message": "anything left?"}], user="fresh@cgiar.org")
+        err = errors(ws)
+        assert err and err[0]["code"] == "test_budget" and "used up" in err[0]["message"]
+        assert CREATED == [] and ws.closed is None  # no CLI started, socket stays open
+
+        runtime.scripts.append([[result(0.01)]])
+        ws_admin = await run_ws([{"message": "hi"}], user="admin@cgiar.org", role="admin")
+        assert not errors(ws_admin)
+
+
+async def test_session_cap_refuses_next_question_in_that_chat(runtime, auth_on):
+    from synapsis.database import create_session
+    from synapsis.database.usage import record_turn_usage
+    await create_session("capchat1", title="t", user_id="researcher@cgiar.org")
+    await record_turn_usage(user_id="researcher@cgiar.org", role="researcher", session_id="capchat1",
+                            model="claude-sonnet-5", turn_cost_usd=3.2)
+    ws = await run_ws([{"type": "switch_session", "session_id": "capchat1"},
+                       {"message": "and one more?"}])
+    err = errors(ws)
+    assert err and err[-1]["code"] == "session_limit" and "start a new chat" in err[-1]["message"]
+    assert all(c.queries == [] for c in CREATED)
+
+
+# ---------------------------------------------------------------------------
 # /api/config contract and /api/admin/usage
 # ---------------------------------------------------------------------------
 

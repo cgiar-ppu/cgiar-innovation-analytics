@@ -17,6 +17,7 @@ export function SendButton({ disabled, onClick }: Props) {
         background: disabled ? 'var(--text-muted)' : 'var(--user-bubble)',
       }}
       aria-label="Send message"
+      data-track="chat.send"
     >
       <ArrowUp size={16} strokeWidth={2.5} />
     </button>

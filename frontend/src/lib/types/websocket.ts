@@ -33,7 +33,7 @@ export type ServerMessage =
   /** A non-recoverable error occurred on the server. */
   /**
    * `code` (Lane D, 2026-09-26): rate_limited, capacity, model_not_allowed,
-   * daily_limit, turn_budget, max_turns, stalled, stream_ended, provider_busy,
+   * daily_limit, test_budget, test_ended, session_limit, turn_budget, max_turns, stalled, stream_ended, provider_busy,
    * provider_auth, context_window, refusal, cli_disconnected, internal.
    */
   | { type: 'error'; message: string; code?: string }

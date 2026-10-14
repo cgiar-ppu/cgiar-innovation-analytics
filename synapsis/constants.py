@@ -211,6 +211,29 @@ DAILY_LIMIT_ERROR: str = (
     "please contact {contact}."
 )
 
+# MVP test budget (SYN-2306). Graceful stops: a clear sentence, never a crash.
+TEST_BUDGET_EXHAUSTED_ERROR: str = (
+    "The usage budget for this test period has been used up, so the assistant "
+    "is paused. Thank you for taking part. Your earlier chats stay available "
+    "to read. For questions, please contact {contact}."
+)
+
+TEST_PERIOD_ENDED_ERROR: str = (
+    "The test period for this assistant ended on {end}, so it no longer "
+    "answers new questions. Your earlier chats stay available to read. For "
+    "questions, please contact {contact}."
+)
+
+TEST_PERIOD_NOT_STARTED_ERROR: str = (
+    "The test period for this assistant starts on {start}. Please come back "
+    "then. For questions, please contact {contact}."
+)
+
+SESSION_LIMIT_ERROR: str = (
+    "This chat has reached its usage limit (${limit:.2f} per chat). Please "
+    "start a new chat to continue - this one stays available to read."
+)
+
 # ---------------------------------------------------------------------------
 # Memory categories
 # ---------------------------------------------------------------------------
