@@ -26,6 +26,8 @@ from typing import Any
 
 from claude_agent_sdk import tool
 
+from synapsis import prms_access_policy
+
 from synapsis.utils.responses import error_response, success_response
 from synapsis.prms_snapshot import get_snapshot_info
 from synapsis.prms_snapshot import resolve_db_path
@@ -80,10 +82,17 @@ PARTNERSHIP_ROLE_NAMES: dict[int, str] = {
 # ---------------------------------------------------------------------------
 
 def _get_connection() -> sqlite3.Connection:
-    """Get read-only PRMS database connection."""
+    """Get read-only PRMS database connection.
+
+    The PRMS access policy is installed for the caller's verified role (the
+    queries here are fixed and read no financial data; the policy is defence
+    in depth so a future query cannot hand budget figures to an external role).
+    """
     if not os.path.isfile(PRMS_DB_PATH):
         raise FileNotFoundError(f"PRMS database not found: {PRMS_DB_PATH}")
-    return sqlite3.connect(f"file:{PRMS_DB_PATH}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"file:{PRMS_DB_PATH}?mode=ro", uri=True)
+    prms_access_policy.install(conn, prms_access_policy.caller_role())
+    return conn
 
 
 #: Default PRMS quality gate (both funding windows): W1/W2 "Quality Assessed"

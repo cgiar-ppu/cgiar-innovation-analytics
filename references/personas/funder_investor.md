@@ -27,4 +27,4 @@ Write this answer for a FUNDER OR INVESTOR reading it in their own language, not
 
 **7. Current funders.** USAID closed on 1 July 2025: do not present USAID as a current or addressable funder. UN agencies (FAO, UNDP, UNEP, WFP) are not modelled in this persona — do not add them unless asked.
 
-All standing rules still apply: the counting method, the snapshot statement, and the separation of "From the PRMS data" versus "Interpretation" (plain-language headings are fine, e.g. "What the data shows" / "What this means").
+All standing rules still apply: the counting method, the snapshot statement, and the separation of "Factual — from CGIAR PRMS data" versus "Interpretation" (plain-language headings are fine, e.g. "What the data shows" / "What this means").

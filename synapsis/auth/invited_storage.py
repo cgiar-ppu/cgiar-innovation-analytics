@@ -30,24 +30,52 @@ async def init_invited_tables():
         columns = {row[1] for row in await (await db.execute("PRAGMA table_info(invited_accounts)")).fetchall()}
         if "cohort" not in columns:
             await db.execute("ALTER TABLE invited_accounts ADD COLUMN cohort TEXT NOT NULL DEFAULT ''")
+        # Access level, added 2026-10-14: 'researcher' (full analytic data, the
+        # behaviour every existing invited account keeps) or 'external' (partner
+        # view: no budget / financial figures, see synapsis/prms_access_policy.py).
+        if "role" not in columns:
+            await db.execute("ALTER TABLE invited_accounts ADD COLUMN role TEXT NOT NULL DEFAULT 'researcher'")
         await db.commit()
 
 
 DEFAULT_EXPIRY_DAYS = 7
 MAX_EXPIRY_DAYS = 30
 
+#: Roles an invitation can grant. Never 'admin': administrators come from SSO.
+INVITED_ROLES = ("researcher", "external")
+DEFAULT_INVITED_ROLE = "researcher"
+
+
+def _checked_role(role: str | None) -> str | None:
+    if role is None:
+        return None
+    if role not in INVITED_ROLES:
+        raise ValueError(f"Invited accounts can only be {' or '.join(INVITED_ROLES)}")
+    return role
+
 
 async def create_invitation(email: str, name: str, invited_by: str, cohort: str | None = None,
-                            expires_days: int = DEFAULT_EXPIRY_DAYS) -> str:
-    """One-use link for ``email``. ``cohort=None`` keeps an existing label; '' clears it."""
+                            expires_days: int = DEFAULT_EXPIRY_DAYS, role: str | None = None) -> str:
+    """One-use link for ``email``. ``cohort=None`` keeps an existing label; '' clears it.
+
+    ``role=None`` keeps an existing account's access level (a new account gets
+    ``DEFAULT_INVITED_ROLE``); 'researcher' / 'external' set it. Changing the
+    level of an account also ends its current sign-ins (credential version),
+    so an already-issued token can never keep the old level.
+    """
+    role = _checked_role(role)
     token = secrets.token_urlsafe(32)
     days = max(1, min(int(expires_days), MAX_EXPIRY_DAYS))
     async with get_db() as db:
         await db.execute("BEGIN IMMEDIATE")
-        await db.execute("INSERT OR IGNORE INTO invited_accounts (email,user_id,name,created_at,cohort) VALUES (?,?,?,?,?)",
-                         (email, "invited:" + str(uuid.uuid4()), name, time.time(), cohort or ""))
+        await db.execute("INSERT OR IGNORE INTO invited_accounts (email,user_id,name,created_at,cohort,role) VALUES (?,?,?,?,?,?)",
+                         (email, "invited:" + str(uuid.uuid4()), name, time.time(), cohort or "",
+                          role or DEFAULT_INVITED_ROLE))
         if cohort is not None:
             await db.execute("UPDATE invited_accounts SET cohort=? WHERE email=?", (cohort, email))
+        if role is not None:
+            await db.execute("""UPDATE invited_accounts SET role=?,credential_version=credential_version+1
+              WHERE email=? AND role<>?""", (role, email, role))
         # Reissue replaces only the outstanding invitation, not an active password.
         await db.execute("DELETE FROM account_invitations WHERE email=?", (email,))
         await db.execute("INSERT INTO account_invitations VALUES (?,?,?,?)",
@@ -80,8 +108,11 @@ async def accept_invitation(token: str, password: str) -> dict | None:
 
 
 def public_user(row: dict) -> dict:
+    role = row.get("role") or DEFAULT_INVITED_ROLE
+    if role not in INVITED_ROLES:  # never more than researcher from this table
+        role = DEFAULT_INVITED_ROLE
     return {"user_id": row["user_id"], "email": row["email"], "name": row["name"],
-            "role": "researcher", "credential_version": row["credential_version"]}
+            "role": role, "credential_version": row["credential_version"]}
 
 
 async def authenticate(email: str, password: str) -> dict | None:
@@ -112,7 +143,7 @@ def credential_is_current(user_id: str, version: int) -> bool:
 async def list_accounts() -> list[dict]:
     async with get_db() as db:
         rows = await (await db.execute("""SELECT a.email,a.name,a.enabled,
-          a.password_hash IS NOT NULL AS activated,i.expires_at,a.cohort
+          a.password_hash IS NOT NULL AS activated,i.expires_at,a.cohort,a.role
           FROM invited_accounts a LEFT JOIN account_invitations i ON i.email=a.email
           ORDER BY a.created_at DESC""")).fetchall()
     return [dict(r) for r in rows]
@@ -130,6 +161,18 @@ async def set_cohort(email: str, cohort: str) -> bool:
         cursor = await db.execute("UPDATE invited_accounts SET cohort=? WHERE email=?", (cohort, email))
         await db.commit()
         return cursor.rowcount == 1
+
+
+async def set_role(email: str, role: str) -> bool:
+    """Change an account's access level; ends its current sign-ins if it changed."""
+    role = _checked_role(role)
+    async with get_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        exists = await (await db.execute("SELECT 1 FROM invited_accounts WHERE email=?", (email,))).fetchone()
+        await db.execute("""UPDATE invited_accounts SET role=?,credential_version=credential_version+1
+          WHERE email=? AND role<>?""", (role, email, role))
+        await db.commit()
+    return bool(exists)
 
 
 async def revoke_cohort(cohort: str) -> int:

@@ -24,4 +24,4 @@ Write this answer for a SCIENTIST. Rigour and traceability come before fluency: 
 
 **6. Portfolio/bundle — citable, reproducible output.** Prefer a flat, documented data table over narrative. When asked for data, produce a structured export (CSV/Excel) with a field-definitions sheet or section, the snapshot/version and date of pull, the exact filters and counting method, and an evidence-tier column; if a field cannot be provided, say so rather than substituting a chart. Offer a citation-ready description of the source (CGIAR PRMS Reporting snapshot + this tool, access date). Suggested visuals: two-axis readiness × use plots, package diagrams with the bottleneck marked, distributions and comparator small multiples with uncertainty shown — not headline cards.
 
-All standing rules still apply: counting method, snapshot statement, result-code citations with their links and the Sources list, and the "From the PRMS data" / "Interpretation" separation.
+All standing rules still apply: counting method, snapshot statement, result-code citations with their links and the Sources list, and the "Factual — from CGIAR PRMS data" / "Interpretation" separation.
