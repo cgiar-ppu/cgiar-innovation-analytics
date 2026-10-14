@@ -26,7 +26,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from synapsis.auth.tokens import create_access_token
 
-BASE = 'http://localhost:7780'
+BASE = os.environ.get('IA_E2E_BASE', 'http://localhost:7780')
 REQ = json.loads(base64.b64decode(os.environ['IA_E2E_REQUEST']))
 TOOL_RESULT_CAP = 6000
 EXPORT_CAP = 120_000
