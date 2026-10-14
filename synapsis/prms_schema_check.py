@@ -24,6 +24,10 @@ with the snapshot actually loaded. The result is surfaced
 
 Stdlib only, read-only, never raises, cached per real file like
 :mod:`synapsis.prms_snapshot`.
+
+Companion: :mod:`synapsis.prms_access_policy` lists the tables/columns the
+agent may NOT read (credentials, personal contact data). None of them is an
+expected table here; a refused query is not a missing table.
 """
 
 from __future__ import annotations
