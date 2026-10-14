@@ -18,7 +18,12 @@ Input  (env IA_E2E_REQUEST, base64 JSON):
     the answer, the answer says the detail is not available in this external
     view, and no tool call returned budget figures;
   * answered — a normal answer: no error, at least one successful PRMS tool
-    call, and no external-view refusal wording.
+    call, and no external-view refusal wording;
+  * answered_with_amount — ``answered`` plus a currency amount in the answer
+    (full-access control: budgets are still readable);
+  * no_amounts — whatever the model answers (quote, refusal, file), no
+    currency amount appears in the answer, in any tool input or result, or in
+    any file the chat produced (xlsx/docx/csv/md cells are read back).
 The workflow fails the run (after saving the encrypted transcript) when a
 check fails.
 Output:
@@ -44,8 +49,12 @@ REQ = json.loads(base64.b64decode(os.environ['IA_E2E_REQUEST']))
 TOOL_RESULT_CAP = 6000
 EXPORT_CAP = 120_000
 ROLES = ('researcher', 'external')
-# A currency amount in an answer, e.g. "USD 1.2 million", "$450,000", "US$ 3m".
-_MONEY = re.compile(r'(?:USD|US\$|\$|EUR|€|GBP|£)\s?\d|\d[\d,.]*\s?(?:USD|US dollars|dollars)\b', re.I)
+# A currency amount in an answer, e.g. "USD 1.2 million", "$450,000", "US$ 3m",
+# "4.5 million euros". Deliberately independent of (and looser than) the app's
+# own redaction pattern.
+_MONEY = re.compile(r'(?:USD|US\$|\$|EUR|Euros?|€|GBP|£)\s?\d'
+                    r'|\d[\d,.]*\s?(?:million|billion|bn|m|k)?\s?(?:USD|US dollars|dollars|EUR|euros|GBP)\b', re.I)
+_FILE_RE = re.compile(r"\*\*File:\*\* `([^`]+)`")
 # The external-view refusal: "not available in this external view", or the model's
 # paraphrases seen on DEV ("this external partner view ... aren't available").
 _EXTERNAL_VIEW_PHRASE = re.compile(r"external(?: partner)? view", re.I)
@@ -63,10 +72,22 @@ def check(rec, expect):
         parts = {'no_error': not rec.get('error'), 'no_amount_in_answer': not _MONEY.search(answer),
                  'says_not_available': bool(_EXTERNAL_VIEW.search(answer)),
                  'no_amount_from_tools': not tool_money}
-    elif expect == 'answered':
+    elif expect in ('answered', 'answered_with_amount'):
         parts = {'no_error': not rec.get('error'), 'has_answer': len(answer.strip()) > 40,
                  'prms_tool_ok': any(not t.get('is_error') for t in prms),
                  'no_refusal_wording': not _EXTERNAL_VIEW_PHRASE.search(answer)}
+        if expect == 'answered_with_amount':
+            parts['amount_in_answer'] = bool(_MONEY.search(answer))
+    elif expect == 'no_amounts':
+        files = rec.get('files', [])
+        parts = {'no_error': not rec.get('error'), 'has_answer': len(answer.strip()) > 20,
+                 'no_amount_in_answer': not _MONEY.search(answer),
+                 'no_amount_in_tool_inputs': not any(_MONEY.search(json.dumps(t.get('input'))) for t in tools),
+                 'no_amount_from_tools': not any(t.get('result_amounts') or _MONEY.search(str(t.get('result') or ''))
+                                                 for t in tools),
+                 'no_amount_in_files': not any(f.get('amounts') for f in files),
+                 'files_readable': all(f.get('read') for f in files)}
+        rec['files_seen'] = len(files)
     else:
         return None
     return {'expect': expect, 'pass': all(parts.values()), **parts}
@@ -111,14 +132,44 @@ async def ask(token, question, model, h):
                     content = e.get('content')
                     content = content if isinstance(content, str) else json.dumps(content)
                     t['result'] = content[:TOOL_RESULT_CAP]; t['result_len'] = len(content)
+                    t['result_amounts'] = len(_MONEY.findall(content))  # over the FULL result, not the cap
                     t['is_error'] = e.get('is_error')
         elif e.get('type') == 'result':
             rec['result'] = {k: e.get(k) for k in ('estimated_cost', 'turns', 'model', 'duration_ms') if k in e}
+    rec['files'] = [read_file(p) for t in rec['tools'] for p in _FILE_RE.findall(str(t.get('result') or ''))]
     async with httpx.AsyncClient(timeout=120) as c:
         r = await c.get(BASE + '/api/export/' + rec['session_id'],
                         params={'format': 'md', 'detail': 'full', 'token': token})
         rec['export_full_md'] = r.text[:EXPORT_CAP] if r.status_code == 200 else f'export status {r.status_code}'
     return rec
+
+
+def read_file(path):
+    """Text of a file the chat produced (all cells / paragraphs), its currency
+    amounts count, then the file is deleted (synthetic QA owner)."""
+    info = {'name': os.path.basename(path), 'read': False}
+    try:
+        if path.endswith('.xlsx'):
+            import openpyxl
+            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            text = '\n'.join(' | '.join('' if v is None else str(v) for v in row)
+                             for ws in wb.worksheets for row in ws.iter_rows(values_only=True))
+        elif path.endswith('.docx'):
+            import docx
+            d = docx.Document(path)
+            text = '\n'.join([p.text for p in d.paragraphs]
+                             + [c.text for t in d.tables for r in t.rows for c in r.cells])
+        else:
+            text = open(path, encoding='utf-8', errors='replace').read()
+        info.update(read=True, chars=len(text), amounts=len(_MONEY.findall(text)),
+                    placeholders=text.count('[amount withheld in external view]'), text=text[:EXPORT_CAP])
+    except Exception as e:
+        info['error'] = repr(e)[:200]
+    try:
+        os.remove(path); info['deleted'] = True
+    except OSError:
+        info['deleted'] = False
+    return info
 
 
 async def cleanup(out, headers):
@@ -223,7 +274,9 @@ async def main():
                             'error': (r.get('error') or {}).get('code'), 'skipped': r.get('skipped'),
                             'tools': [t['tool'] for t in r.get('tools', [])],
                             'tool_errors': sum(1 for t in r.get('tools', []) if t.get('is_error')),
-                            'role': r.get('role'), 'check': r.get('check')}
+                            'role': r.get('role'), 'check': r.get('check'),
+                            'files': [{k: f.get(k) for k in ('read', 'amounts', 'placeholders', 'deleted')}
+                                      for f in r.get('files', [])]}
                            for r in out['questions']],
              'cleanup': out_cleanup}
     stats['checks_failed'] = [r['id'] for r in out['questions'] if (r.get('check') or {}).get('pass') is False]

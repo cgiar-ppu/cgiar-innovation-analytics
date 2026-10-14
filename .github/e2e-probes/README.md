@@ -14,3 +14,4 @@ uploaded either way and opens only with the private key matching
 | Probe | What it proves |
 |---|---|
 | `external-role-budget-refusal.json` | An `external` account asking for USD budgets / allocations is declined ("not available in this external view", no amounts), a normal innovation-use question still works, and a researcher still reads the budget tables. |
+| `external-view-freetext.json` | After the verification-round fixes: an `external` account gets no currency amount from internal project narratives (word-for-word quote), from a result description (amounts read "[amount withheld in external view]") or in an Excel export of `clarisa_projects` with all columns (the harness reads the produced file back); budget asks are still declined, a normal innovation-use question still works, and a researcher still gets budget amounts. |
