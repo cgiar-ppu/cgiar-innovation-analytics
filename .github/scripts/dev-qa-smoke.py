@@ -27,7 +27,8 @@ WHAT IT CHECKS (one JSON line on stdout; exit 1 if any check FAILS)
                     list is a superset; switch_model to an admin-only model refused
                     with model_not_allowed and the socket stays usable
   rate_limit        the per-user new-chat limit answers rate_limited and keeps the socket
-  admin_usage       /api/admin/usage 401 anonymous / 403 researcher / 200 admin
+  admin_usage       /api/admin/usage 401 anonymous / 403 researcher / 200 admin, and the
+                    SYN-2306 test_budget block (pct, state, window)
   removed_routes    Synapsis leftover routers answer 404 even for an admin
   security_headers  HSTS, nosniff, X-Frame-Options, Referrer-Policy, frame-ancestors, CSP
   citation_mapping  result code -> public PRMS report URL pattern for 3 known codes (incl.
@@ -46,7 +47,8 @@ WHAT IT CHECKS (one JSON line on stdout; exit 1 if any check FAILS)
                     serves contacts and drops leftovers and internals, /api/activity needs
                     a login, /openapi.json /docs /redoc are 404 for public callers (admin:
                     schema 200)
-  feedback          [Lane H] owner-only answer feedback, admin list + CSV, 404 for others
+  feedback          [Lane H] owner-only answer feedback, admin list + CSV, 404 for others;
+                    SYN-2303 "Give feedback" multipart + PNG, admin-only screenshot
   cohort_invites    [Lane H] bulk cohort invitation + cohort revoke (links never printed).
                     Opt-in (IA_QA_INVITES=1): a revoked invitation cannot be deleted, so
                     each run would leave one revoked row in the admin Invitation Manager.
@@ -71,6 +73,7 @@ import sys
 import time
 import traceback
 import zipfile
+import zlib
 
 import httpx
 import websockets
@@ -346,7 +349,13 @@ class QA:
         assert codes == [401, 403, 200], ('anonymous/researcher/admin', codes)
         body = (await self.get('/api/admin/usage?days=2', self.tok['admin'])).json()
         assert isinstance(body.get('daily'), list) and body.get('environment'), 'usage payload shape'
-        return {'status': codes, 'environment': body.get('environment')}
+        # SYN-2306: the MVP test budget block an external monitor polls.
+        tb = body.get('test_budget')
+        assert isinstance(tb, dict), 'usage payload has no test_budget block'
+        assert isinstance(tb.get('pct'), (int, float)) and tb.get('state') and isinstance(tb.get('window'), dict), \
+            ('test_budget shape', sorted(tb))
+        return {'status': codes, 'environment': body.get('environment'),
+                'test_budget': {'pct': tb.get('pct'), 'state': tb.get('state'), 'enabled': tb.get('enabled')}}
 
     async def c_removed_routes(self):
         bad = {}
@@ -572,7 +581,32 @@ class QA:
         assert any(i.get('session_id') == self.export_sid for i in listed.get('items', [])), 'admin list misses it'
         csv = await self.get('/api/admin/feedback?days=1&format=csv', self.tok['admin'])
         assert csv.status_code == 200 and 'text/csv' in csv.headers.get('content-type', ''), 'CSV export'
-        return 'owner write 200, foreign write 404, admin list + CSV 200, 401/403 for others'
+        general = await self._general_feedback()
+        return ('owner write 200, foreign write 404, admin list + CSV 200, 401/403 for others; '
+                'general: ' + general)
+
+    async def _general_feedback(self):
+        """SYN-2303 "Give feedback": multipart form + PNG screenshot, admin-only attachment."""
+        def chunk(kind, data):
+            return len(data).to_bytes(4, 'big') + kind + data + (zlib.crc32(kind + data) & 0xffffffff).to_bytes(4, 'big')
+        png = (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', bytes([0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]))
+               + chunk(b'IDAT', zlib.compress(b'\x00\xff\xff\xff')) + chunk(b'IEND', b''))
+        form = {'category': 'other', 'comment': '[QA] synthetic general feedback', 'page': '/'}
+        anon = await self.http.post(self.base + '/api/feedback/general', data=form)
+        assert anon.status_code == 401, ('anonymous general feedback', anon.status_code)
+        r = await self.http.post(self.base + '/api/feedback/general', headers=self.h(self.tok['a']), data=form,
+                                 files={'screenshot': ('qa.png', png, 'image/png')})
+        assert r.status_code == 200, ('general feedback', r.status_code)
+        fid = r.json().get('id')
+        assert fid is not None and r.json().get('has_attachment') is True, 'general feedback row/attachment'
+        self.cleanup_feedback.append((fid, self.tok['a']))
+        listed = (await self.get('/api/admin/feedback?days=1&channel=general', self.tok['admin'])).json()
+        item = next((i for i in listed.get('items', []) if i.get('id') == fid), None)
+        assert item and item.get('category') == 'other' and item.get('has_attachment'), 'admin general list'
+        codes = [(await self.get(f'/api/admin/feedback/{fid}/attachment', t)).status_code
+                 for t in (self.tok['a'], self.tok['admin'])]
+        assert codes == [403, 200], ('attachment researcher/admin', codes)
+        return 'multipart+PNG 200, anon 401, admin list (category, screenshot), attachment 403/200'
 
     async def c_cohort_invites(self):
         from synapsis import config
