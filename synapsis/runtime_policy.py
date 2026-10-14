@@ -383,7 +383,14 @@ async def enforce_test_budget(role: Optional[str] = None) -> None:
     if state == "exhausted":
         raise MvpBudgetExhausted(TEST_BUDGET_EXHAUSTED_ERROR.format(contact=contact))
     if state == "ended":
-        end = (status["window"]["end"] or "")[:10]
+        # The window end is exclusive (a bare IA_TEST_END date means the END of
+        # that day), so the last open day is one second earlier.
+        from datetime import datetime, timedelta
+        raw_end = status["window"]["end"] or ""
+        try:
+            end = (datetime.fromisoformat(raw_end) - timedelta(seconds=1)).date().isoformat()
+        except ValueError:
+            end = raw_end[:10]
         raise MvpPeriodClosed(TEST_PERIOD_ENDED_ERROR.format(end=end, contact=contact))
     if state == "not_started":
         start = (status["window"]["start"] or "")[:10]
