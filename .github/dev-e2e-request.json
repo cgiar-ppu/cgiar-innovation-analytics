@@ -1,5 +1,5 @@
 {
- "purpose": "External view after the verification-round fixes: budget asks declined, free-text amounts withheld in quotes and in an Excel export, innovation answers unchanged, researcher still reads budgets.",
+ "purpose": "Re-run of request #6 (stopped at the 5th question by the per-user new-chat rate limit; the harness now waits and retries) + clean-up of its four [QA] chats.",
  "questions": [
   {
    "id": "res_budget_control",
@@ -45,6 +45,18 @@
   }
  ],
  "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA6F1Ty74AL8fTi6ELoVnt\n43Lo8hZuW/ME10MgY+2qI/c+/rRjJ6CX4bWmsi6kMTNMgkVsTAwjGHjlNoJ7YUGS\nO0PKhQfWD42LlnoZJbVPXX0enWpR669lpcB4VJZe22KWAO+bf5L6OvB/XbCXxSiS\nU0Ee/dM1Kz5uwjKo0o6yb1tHwSPynowjIxu2yfg/Q3PbP/EIQ2eZ415RJ8TEgVSD\nJMnjFLcHrP7E6ZR9e3sKQ0/8u1UixhtgSrqP8ZO2GPqorKGIYBy5/zFMbtzo/ZyJ\nay6ToFGPUIwkUTL+fqGdoqQ8T1COqwR4isJGdZgtmQHuzX3KIzaWVHrDocX81I4H\nl3mNbRMKz2A6al/Alqfai5mkpaZ+PqNVX6QZHhrrqZZ8K/bMmG3ltremlxYnoV2m\n3yQJgKIEt9IcsZxONjJoMb5cS0AlDF9jQSgJtAAAr1AMRKpKHewMgburjbYJ2qGK\nWkXbfzKXwQYavfoa4HZx1b3MaNutiU88rZ7o6+qihkx3VocjqezkqI3bEtTx0CXy\nLHd0hwImMWXqG7awHBIP2zcmkqbL1AUQBNjKkG70CCNV+WXL0bTJrtxihaSrvU2d\nMgbFTQhxxL/zu5h1lXkAvA14EkFhX1ldLPetQasBBoKtiyeuypUK7vB99CNOqcTY\nNqpEX5Cm4vcUYoZsM5eefh0CAwEAAQ==\n-----END PUBLIC KEY-----\n",
- "max_cost_usd": 3.0,
- "sequence": 6
+ "max_cost_usd": 2.5,
+ "sequence": 7,
+ "cleanup_previous": {
+  "session_ids": [
+   "d2e44b8a",
+   "ab5b33f2",
+   "a8084094",
+   "605df276"
+  ],
+  "owner_epoch_range": [
+   1792010940,
+   1792011060
+  ]
+ }
 }
