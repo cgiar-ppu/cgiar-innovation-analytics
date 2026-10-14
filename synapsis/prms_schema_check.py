@@ -24,6 +24,10 @@ with the snapshot actually loaded. The result is surfaced
 
 Stdlib only, read-only, never raises, cached per real file like
 :mod:`synapsis.prms_snapshot`.
+
+Companion: :mod:`synapsis.prms_access_policy` lists the tables/columns the
+agent may NOT read (credentials, personal contact data). None of them is an
+expected table here; a refused query is not a missing table.
 """
 
 from __future__ import annotations
@@ -65,7 +69,8 @@ EXPECTED_TABLES: dict[str, str] = {
     "clarisa_innovation_readiness_level": "innovation readiness levels 0-9",
     "results_innovations_use": "Innovation Use details: the 0-9 innovation use level, new users added, use narrative",
     "clarisa_innovation_use_levels": "innovation use levels 0-9",
-    "results_innovations_use_measures": "Innovation Use quantities (e.g. hectares) and units",
+    "results_innovations_use_measures": "legacy Innovation Use quantities (2022-style) and units",
+    "result_ip_measure": "other quantitative measures of Innovation Use (hectares, kg …) as in the PRMS PDF",
     "result_actors": "use numbers by actor type (how many; women, men, youth) — current and 2030 target",
     "actor_type": "actor types (farmers, researchers, extension agents …)",
     "result_innov_section": "Current vs Future (2030 target) section of use data",

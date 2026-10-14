@@ -23,6 +23,8 @@ from synapsis.utils.responses import error_response, success_response
 from synapsis.prms_snapshot import get_snapshot_info
 from synapsis.prms_snapshot import resolve_db_path
 from synapsis.prms_schema_check import is_expected_table, missing_table_message
+from synapsis import prms_access_policy
+from synapsis.prms_access_policy import PRMSAccessDenied
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +129,10 @@ class _TimeoutError(Exception):
 
 
 def _execute_with_timeout(
-    db_path: str, sql: str, timeout: int = QUERY_TIMEOUT_SECONDS
+    db_path: str,
+    sql: str,
+    timeout: int = QUERY_TIMEOUT_SECONDS,
+    access_log: "prms_access_policy.AccessLog | None" = None,
 ) -> tuple[list[dict], list[str], int]:
     """Execute a SQL query with a timeout that really stops SQLite.
 
@@ -147,10 +152,16 @@ def _execute_with_timeout(
       times out (belt and braces for statements that sit in a single long step).
 
     The connection is opened read-only (``mode=ro`` URI) and always closed.
+
+    Every statement is compiled under the PRMS access policy
+    (``synapsis/prms_access_policy.py``): credential / personal-contact tables
+    are refused (``PRMSAccessDenied``) and a few contact columns read as NULL.
+    Pass *access_log* to learn which columns were blanked.
     """
     result_holder: dict[str, Any] = {}
     error_holder: dict[str, Any] = {}
     conn_holder: dict[str, sqlite3.Connection] = {}
+    access_log_holder: dict[str, Any] = {}
     deadline = time.monotonic() + timeout
 
     def _past_deadline() -> int:
@@ -170,6 +181,7 @@ def _execute_with_timeout(
             conn.set_progress_handler(_past_deadline, _PROGRESS_STEPS)
             conn.execute("PRAGMA query_only = ON;")
             conn.row_factory = sqlite3.Row
+            access_log_holder["log"] = prms_access_policy.install(conn)
 
             cursor = conn.execute(sql)
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
@@ -180,7 +192,10 @@ def _execute_with_timeout(
             result_holder["columns"] = columns
             result_holder["count"] = len(rows)
         except Exception as exc:
-            error_holder["error"] = exc
+            log = access_log_holder.get("log")
+            error_holder["error"] = (
+                prms_access_policy.translate_error(exc, log) if log is not None else exc
+            )
         finally:
             if conn is not None:
                 try:
@@ -205,6 +220,11 @@ def _execute_with_timeout(
             f"Query timed out after {timeout} seconds and was stopped. "
             "Try simplifying the query or adding more specific WHERE conditions."
         )
+
+    if access_log is not None and "log" in access_log_holder:
+        src = access_log_holder["log"]
+        access_log.denied.extend(t for t in src.denied if t not in access_log.denied)
+        access_log.nulled.extend(c for c in src.nulled if c not in access_log.nulled)
 
     if "error" in error_holder:
         exc = error_holder["error"]
@@ -404,7 +424,11 @@ def _format_results_text(
     "To read full result descriptions, select only the rows you need (about 15-20 "
     "descriptions per call). If a query fails because an expected PRMS table is "
     "missing from the loaded snapshot, the tool says so: report it as a data-loading "
-    "issue, never as proof that PRMS lacks the data.",
+    "issue, never as proof that PRMS lacks the data. "
+    "Operational tables of the PRMS web application that hold credentials or personal "
+    "contact data (e.g. account passwords and e-mail addresses, access tokens, "
+    "application settings) are not available: such queries are refused or those "
+    "columns come back empty, by design.",
     {
         "sql": str,
         "question": str,
@@ -473,12 +497,19 @@ async def prms_query(args: dict[str, Any]) -> dict[str, Any]:
 
     # Execute
     start_time = time.monotonic()
+    access_log = prms_access_policy.AccessLog()
     try:
         rows, columns, row_count = _execute_with_timeout(
-            PRMS_DB_PATH, limited_sql, QUERY_TIMEOUT_SECONDS
+            PRMS_DB_PATH, limited_sql, QUERY_TIMEOUT_SECONDS, access_log=access_log
         )
     except _TimeoutError as exc:
         return error_response(str(exc))
+    except PRMSAccessDenied as exc:
+        return error_response(
+            f"Not available: {exc} Answer the user's question without it — the "
+            "analytic PRMS tables (results, innovations, partners, geographies, "
+            "lookups) are all available."
+        )
     except sqlite3.OperationalError as exc:
         err_msg = str(exc)
         # Provide helpful hints for common errors
@@ -525,6 +556,9 @@ async def prms_query(args: dict[str, Any]) -> dict[str, Any]:
 
     # Format the response
     result_text = _format_results_text(rows, columns, total_count, limited_sql, tables_used)
+    note = prms_access_policy.nulled_note(access_log)
+    if note:
+        result_text += "\n\n" + note
 
     # Add metadata footer
     meta_lines = [

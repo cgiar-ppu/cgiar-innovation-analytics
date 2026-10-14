@@ -406,7 +406,9 @@ Every CGIAR output/outcome is a row in `result`. Key columns:
 - `results_innovations_dev` — innovation development details: `innovation_readiness_level_id` (IRL 0-9), `innovation_type_id`, `is_new_variety`, `number_of_varieties`, `innovation_characterization_id`
 - `results_innovations_use` — Innovation Use (type 2) details, one row per result (`results_id` → `result.id`): `innovation_use_level_id` → `clarisa_innovation_use_levels.id` (a lookup id 1-10 — report `clarisa_innovation_use_levels.level`, the 0-9 use level), `new_users_added`, `use_expansion_narrative`, `readiness_level_explanation`
 - `result_actors` — use numbers by actor type (`result_id` → `result.id`; `actor_type_id` → `actor_type`; `how_many`, `women`, `women_youth`, `men`, `men_youth`; `section_id` → `result_innov_section`: 1 = Current, 2 = Future 2030 target)
-- `results_innovations_use_measures` — quantities such as hectares (`quantity`, `unit_of_measure`); joins via `result_innovation_use_id` → `results_innovations_use.result_innovation_use_id` (NOT `result.id`)
+- `results_by_institution_type` — organisations using (`results_id` → `result.id`; `institution_roles_id = 5`; `how_many`; same `section_id` split)
+- `result_ip_measure` — other quantitative measures of use such as hectares or kg (`result_id` → `result.id`; `quantity`, `unit_of_measure`; `section_id` split) — what the PRMS PDF prints
+- `results_innovations_use_measures` — LEGACY 2022-style quantities (carried-over copies for 2025); joins via `result_innovation_use_id` → `results_innovations_use.result_innovation_use_id` (NOT `result.id`)
 - `results_ip_result_core_innovation` — links innovation packages to their core innovation
 - `results_ip_result_complementary_innovation` — complementary innovations within packages
 - `results_ip_stakeholders` — stakeholders for innovation packages
