@@ -35,6 +35,12 @@ Output:
     the workflow reads it out in chunks, publishes it as a short-lived artifact
     and deletes the file. Only the holder of the private key can read it.
 Every chat it creates is titled "[QA] ..." and deleted at the end.
+
+Optional ``tool_probes`` ([{"id", "role", "sql", "expect": "no_amounts" |
+"has_amounts"}]) call the prms_query tool directly in the container as that
+role, at no model cost: the exact text the model would receive, reduced to
+counts (MCP tool results are not streamed to the chat, so the question
+checks cannot see them).
 """
 import asyncio, base64, json, os, re, time, zlib
 
@@ -55,6 +61,8 @@ ROLES = ('researcher', 'external')
 _MONEY = re.compile(r'(?:USD|US\$|\$|EUR|Euros?|€|GBP|£)\s?\d'
                     r'|\d[\d,.]*\s?(?:million|billion|bn|m|k)?\s?(?:USD|US dollars|dollars|EUR|euros|GBP)\b', re.I)
 _FILE_RE = re.compile(r"\*\*File:\*\* `([^`]+)`")
+# A produced file linked in the answer (MCP tool results are not streamed to the chat).
+_ANSWER_FILE_RE = re.compile(r"(/workspace/outputs/[^\s)\]`'\"]+\.(?:xlsx|docx|csv|md|pdf|html))")
 # The external-view refusal: "not available in this external view", or the model's
 # paraphrases seen on DEV ("this external partner view ... aren't available").
 _EXTERNAL_VIEW_PHRASE = re.compile(r"external(?: partner)? view", re.I)
@@ -153,7 +161,9 @@ async def ask(token, question, model, h):
                     t['is_error'] = e.get('is_error')
         elif e.get('type') == 'result':
             rec['result'] = {k: e.get(k) for k in ('estimated_cost', 'turns', 'model', 'duration_ms') if k in e}
-    rec['files'] = [read_file(p) for t in rec['tools'] for p in _FILE_RE.findall(str(t.get('result') or ''))]
+    paths = [p for t in rec['tools'] for p in _FILE_RE.findall(str(t.get('result') or ''))]
+    paths += [p for p in _ANSWER_FILE_RE.findall(rec['answer']) if p not in paths]
+    rec['files'] = [read_file(p) for p in dict.fromkeys(paths)]
     async with httpx.AsyncClient(timeout=120) as c:
         r = await c.get(BASE + '/api/export/' + rec['session_id'],
                         params={'format': 'md', 'detail': 'full', 'token': token})
@@ -187,6 +197,29 @@ def read_file(path):
     except OSError:
         info['deleted'] = False
     return info
+
+
+async def tool_probe(probe):
+    """Call the prms_query tool directly, in this container, as a synthetic
+    identity of ``probe['role']``: what the model would receive for that SQL.
+    Only counts leave the container (amounts, placeholders, NULL note)."""
+    import contextvars, importlib
+    from synapsis.auth.context import set_current_user_id
+    pq = importlib.import_module('synapsis.tools.prms_query')
+    ctx = contextvars.copy_context()
+    ctx.run(set_current_user_id, 'dev-e2e-probe-' + probe['role'], probe['role'])
+    res = await asyncio.create_task(pq.prms_query.handler({'sql': probe['sql'], 'question': 'e2e probe'}), context=ctx)
+    text = ''.join(c.get('text', '') for c in res.get('content', []))
+    body = text.split('\n---\nSQL executed')[0]  # the SQL echo is the requester's text
+    amounts = len(_MONEY.findall(body))
+    rec = {'id': probe['id'], 'role': probe['role'], 'is_error': bool(res.get('is_error')),
+           'chars': len(body), 'amounts': amounts,
+           'placeholders': body.count('[amount withheld in external view]'),
+           'null_note': 'returned empty (NULL) on purpose' in body}
+    expect = probe.get('expect')
+    if expect:
+        rec['pass'] = (not rec['is_error']) and ((amounts == 0) if expect == 'no_amounts' else (amounts > 0))
+    return rec, body
 
 
 async def cleanup(out, headers):
@@ -278,6 +311,15 @@ async def main():
         rec['check'] = check(rec, q.get('expect'))
         spent += float((rec.get('result') or {}).get('estimated_cost') or 0)
         out['questions'].append(rec)
+    out['tool_probes'] = []
+    for probe in REQ.get('tool_probes', []):
+        assert probe['role'] in ROLES, 'unknown role ' + repr(probe['role'])
+        try:
+            rec, body = await tool_probe(probe)
+            rec['text'] = body[:EXPORT_CAP]
+        except Exception as e:
+            rec = {'id': probe['id'], 'role': probe['role'], 'error': repr(e)[:300], 'pass': False}
+        out['tool_probes'].append(rec)
     pub = serialization.load_pem_public_key(REQ['public_key_pem'].encode())
     key = AESGCM.generate_key(256); nonce = os.urandom(12)
     ct = AESGCM(key).encrypt(nonce, zlib.compress(json.dumps(out).encode(), 9), None)
@@ -302,7 +344,9 @@ async def main():
                                       for f in r.get('files', [])]}
                            for r in out['questions']],
              'cleanup': out_cleanup}
+    stats['tool_probes'] = [{k: v for k, v in r.items() if k != 'text'} for r in out['tool_probes']]
     stats['checks_failed'] = [r['id'] for r in out['questions'] if (r.get('check') or {}).get('pass') is False]
+    stats['checks_failed'] += [r['id'] for r in out['tool_probes'] if r.get('pass') is False]
     print(json.dumps({'dev_chat_e2e': stats}))
 
 
