@@ -55,6 +55,9 @@ DENIED_PREFIXES: tuple[str, ...] = ("/proc", "/sys", "/dev", "/etc", "/opt", "/r
 #: File suffixes that are never readable (databases, secrets).
 DENIED_SUFFIXES: tuple[str, ...] = (
     ".db", ".sqlite", ".sqlite3", ".db-wal", ".db-shm", ".db-journal",
+    # SQLite side files of *.sqlite / *.sqlite3 databases (WAL mode, rollback journal)
+    ".sqlite-wal", ".sqlite-shm", ".sqlite-journal",
+    ".sqlite3-wal", ".sqlite3-shm", ".sqlite3-journal",
     ".pem", ".key", ".p12", ".pfx",
 )
 

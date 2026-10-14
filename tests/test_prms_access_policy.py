@@ -317,7 +317,8 @@ def test_the_snapshot_file_itself_is_not_readable_with_read_glob_grep():
     keep the agent away from the database file (any *.sqlite) as well."""
     from synapsis.hooks import sandbox
 
-    for name in ("prdb.sqlite", "prdb.sqlite-wal", "prms_corpus.sqlite"):
+    for name in ("prdb.sqlite", "prdb.sqlite-wal", "prdb.sqlite-shm", "prdb.sqlite-journal",
+                 "prms_corpus.sqlite", "x.sqlite3-wal"):
         assert sandbox.path_denial(Path("/app/data") / name)
     assert sandbox.path_denial(Path(os.path.realpath(pq.PRMS_DB_PATH))) or not str(
         pq.PRMS_DB_PATH).endswith((".sqlite", ".db"))
