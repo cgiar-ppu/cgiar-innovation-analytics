@@ -81,6 +81,49 @@ async def ask(token, question, model, h):
     return rec
 
 
+async def cleanup(out, h):
+    # Clean-up: delete the [QA] chats. A DELETE can race the server's orphan reaper
+    # (client_registry.cleanup_session_client KeyError -> 500, seen 14 Oct), so
+    # tolerate errors and retry once; the result is reported, never fatal.
+    deleted = []
+    await asyncio.sleep(3)
+    async with httpx.AsyncClient(timeout=60) as c:
+        for rec in out['questions']:
+            if not rec.get('session_id'):
+                continue
+            status = None
+            for attempt in range(2):
+                try:
+                    status = (await c.delete(BASE + '/api/sessions/' + rec['session_id'], headers=h)).status_code
+                except httpx.HTTPError as e:
+                    status = type(e).__name__
+                if status in (200, 204, 404):
+                    break
+                await asyncio.sleep(3)
+            deleted.append(status)
+        # Optional: remove [QA] chats left by an earlier run whose clean-up failed.
+        # The earlier synthetic owner id is 'dev-e2e-qa-<epoch>'; try each epoch in
+        # the given range — DELETE is owner-only, so only the real owner succeeds.
+        prev = REQ.get('cleanup_previous') or {}
+        leftovers = {}
+        if prev.get('session_ids'):
+            lo, hi = prev['owner_epoch_range']
+            assert 0 <= hi - lo <= 120, 'owner_epoch_range too wide'
+            for sid in prev['session_ids']:
+                leftovers[sid] = 'not found'
+                for ts in range(lo, hi + 1):
+                    tok = create_access_token('dev-e2e-qa-' + str(ts), 'Synthetic E2E researcher QA', 'researcher',
+                                              auth_source='sso', lifetime_seconds=120)
+                    try:
+                        st = (await c.delete(BASE + '/api/sessions/' + sid,
+                                             headers={'Authorization': 'Bearer ' + tok})).status_code
+                    except httpx.HTTPError as e:
+                        st = type(e).__name__
+                    if st == 200:
+                        leftovers[sid] = 'deleted'; break
+    return {'this_run': deleted, 'previous': leftovers}
+
+
 async def main():
     owner = 'dev-e2e-qa-' + str(int(time.time()))
     token = create_access_token(owner, 'Synthetic E2E researcher QA', 'researcher',
@@ -97,6 +140,11 @@ async def main():
             body = r.json() if r.status_code == 200 else {'status': r.status_code}
             out['kpis'][label] = {'kpis': body.get('kpis'), 'kpi_errors': body.get('kpi_errors'),
                                   'snapshot': body.get('snapshot')}
+        try:
+            r = await c.get(BASE + '/api/prms/snapshot', headers=h)
+            out['prms_snapshot'] = r.json() if r.status_code == 200 else {'status': r.status_code}
+        except Exception as e:
+            out['prms_snapshot'] = {'error': repr(e)[:200]}
     spent = 0.0
     for q in REQ['questions']:
         if spent >= float(REQ.get('max_cost_usd', 5)):
@@ -104,22 +152,18 @@ async def main():
         rec = await ask(token, q, REQ.get('model'), h)
         spent += float((rec.get('result') or {}).get('estimated_cost') or 0)
         out['questions'].append(rec)
-    deleted = []
-    async with httpx.AsyncClient(timeout=60) as c:
-        for rec in out['questions']:
-            if rec.get('session_id'):
-                r = await c.delete(BASE + '/api/sessions/' + rec['session_id'], headers=h)
-                deleted.append(r.status_code)
-    out['cleanup_status_codes'] = deleted
-
     pub = serialization.load_pem_public_key(REQ['public_key_pem'].encode())
     key = AESGCM.generate_key(256); nonce = os.urandom(12)
     ct = AESGCM(key).encrypt(nonce, zlib.compress(json.dumps(out).encode(), 9), None)
     wrapped = pub.encrypt(key, padding.OAEP(mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None))
     blob = json.dumps({'k': base64.b64encode(wrapped).decode(), 'n': base64.b64encode(nonce).decode(),
                        'c': base64.b64encode(ct).decode()})
-    with open(REQ['blob'], 'w') as f:
+    with open(REQ['blob'], 'w') as f:  # written BEFORE clean-up so a clean-up error cannot lose it
         f.write(blob)
+    try:
+        out_cleanup = await cleanup(out, h)
+    except Exception as e:  # never lose the transcript summary over clean-up
+        out_cleanup = {'error': repr(e)[:300]}
     stats = {'model': REQ.get('model') or 'default', 'cost_usd': round(spent, 4), 'blob_chars': len(blob),
              'kpi_errors': {k: bool(v.get('kpi_errors')) for k, v in out['kpis'].items()},
              'questions': [{'id': r['id'], 'seconds': r.get('seconds'), 'turns': (r.get('result') or {}).get('turns'),
@@ -128,7 +172,7 @@ async def main():
                             'tools': [t['tool'] for t in r.get('tools', [])],
                             'tool_errors': sum(1 for t in r.get('tools', []) if t.get('is_error'))}
                            for r in out['questions']],
-             'cleanup': deleted}
+             'cleanup': out_cleanup}
     print(json.dumps({'dev_chat_e2e': stats}))
 
 

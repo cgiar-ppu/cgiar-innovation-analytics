@@ -8,6 +8,11 @@ on:
     paths-ignore:
       - .github/prms-publish-dev-request.json
       - .github/dev-e2e-request.json
+      # DEV-only data/E2E lanes: not part of the image, no redeploy needed.
+      - .github/scripts/publish-prms-dev.py
+      - .github/scripts/dev-chat-e2e.py
+      - .github/workflows/publish-prms-dev.yml
+      - .github/workflows/dev-chat-e2e.yml
   # Manual re-deploy of DEV only. The former `staging`/`prod` options were removed
   # (review L5-02): TST/PRD are deployed exclusively by the release lane
   # (release-promote.yml on feat/ia-release-20260914); no workflow or script
