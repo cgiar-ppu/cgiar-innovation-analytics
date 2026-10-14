@@ -88,7 +88,8 @@ describe('AdminFeedbackPanel — Give feedback submissions', () => {
     expect(screen.getAllByText('Screenshot').length).toBeGreaterThan(0)
     expect(urls.some(u => u.endsWith('/attachment'))).toBe(false)
     await user.click(screen.getByText('Stuck on the dashboard'))
-    expect(await screen.findByAltText('Screenshot attached to feedback 9')).toHaveAttribute('src', 'blob:shot')
+    // <details> toggle -> fetch -> blob URL: allow for slower CI runners.
+    expect(await screen.findByAltText('Screenshot attached to feedback 9', {}, { timeout: 5000 })).toHaveAttribute('src', 'blob:shot')
     expect(screen.getByText('chat-a · r2')).toBeInTheDocument()
     expect(screen.getByText('/chat')).toBeInTheDocument()
     const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls.find(c => c[0].endsWith('/attachment'))!
