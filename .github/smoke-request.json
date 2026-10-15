@@ -1,9 +1,16 @@
 {
  "stage": "prod",
- "sequence": 29,
+ "sequence": 30,
  "invitations": {
-  "op": "prepare",
+  "op": "set_role",
   "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAyCgLv0pgr6+lyzuQDMI6\nIxoiH+WQgcqtVPiexF8ZMKs+wTOJQPdQ1CP7owYMaROzjQPVUQgeousdNwodkYeh\nGXJoc1TeaQ/RSILIfXF/1koB7mYYtJpbQTNghIj+feHEo9B+yFTP9xvGVzlf3/Ch\ne22/8N2j60R+rj7muWblJrw7RjP3F0A4gVId9MXVe67JnnakJflPszvch+Zx3Ja7\nWHdTxzC0ETev8KnICBPZNbfQZhXRuB/w6+xnc/bA/rRWSXUdQLbKGskkwZcTRU9u\n4dCi3n0sdq4S1casbtx8b53kc0Fof8OwDfvGwiCM8tKClhITZmnSmcq+FSD0vurv\nfvi+YizbOnQyUvRJmIuxysY3nCl/jtcg3Yiiwzkjd75Pxg7rsqncAsAl6L+TyDAB\n/usSSeiYEqxoL/bkFutC/B66aCULCBBcW8qePTVL30sREgrmowZHkwRYvaJZN4O/\nVrcflykwK9H6oyVf4eNpFLaQxbRQ1o2GrUSFXtflW3+odngDOckKYVtoEqNLV6Kj\nRlyrdgiTrx9ok8IBLIqLQDfZvPHvRaKl2EtauYmPfppO9ZCNl+J9oNR4w+QQiTI5\n0ww9Fz7cvZPMWeFfUBSoBulnPMIsAjP0RQrgbEWAIq12AKWiXz5+kSh/LjptqCDg\nYYQPxGs4rbnoEwkQXZtqdmMCAwEAAQ==\n-----END PUBLIC KEY-----\n",
-  "list_all": true
+  "set_role": {
+   "sealed": {
+    "alg": "RSA-OAEP-SHA256+AES-256-GCM+zlib",
+    "wrapped_key": "IsQXDitSu+bDTuv8DzLRMwFqA8MkpSOBGRPzCX0RvKm5RqKxxIXewiFc/mnCuI0qMCHmuiR8FcovEWHrCdIwXsh+dkhKLNNcaASDeOUN0s688mQ6M+/+sBSaKWaPd1TPVhrc41rMy1mO7elhMP19lhQb50tOiwFXL8iWrRAyqovsPOyzFIPe6eqnLgYcCe67f/cGTYooDj5ATFWuGiJrWY7YrM0sJeFetzr36VxJNNswD6Hj0X4GEpTz2hzCkCS4QdOV0xiGU28B3IhvURN2MRGByUhkdEf7NLltgeMXPZB5DESW2j3AhNM3CMurXWBJrxXYbWAfA6xJVtJFOXrBo3N92vv56TbpU2ECBTTcOvEK0S5X9GaRgxLweR5hR5ovpniEToZ9arL6hQHqozO1LeZg0n3ivvoaSpC8O26ylE4gS7CoZDPJlcyWufdoyUOt0vVXk6SCHB9dtkbYFK/S6MYAwT8Fv86wUjfBVfDYqsLWzlV0p+rw2wptr8XVazWw",
+    "nonce": "LcW+bD99U2F2K1dF",
+    "ciphertext": "0gULn+mkrzCuBhy/wJ0A1ptQ0L0O/LdzgKL5XQoJOUbLf/q++osyoxfoL+4rtivS5ItRDbIErgJfcORtJ71UUEDlbDbwzsIrqfHfh+Hxq60c29G2KlXiBVZ1yWxM8OZs5RsM7hqqedgh2UGwnVDcc8+O5BQ1UxR/"
+   }
+  }
  }
 }
