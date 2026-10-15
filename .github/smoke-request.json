@@ -1,19 +1,22 @@
 {
  "stage": "prod",
- "sequence": 27,
+ "sequence": 28,
  "invitations": {
-  "op": "prepare",
+  "op": "invite",
   "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAyxTb+HgmpXePE+bfR0RD\nRij+cyn70Mhknyg2DD072rZgbL7ov0lxUsgfLzLEXWFCpwL5QNi/zl47hvmuJl7f\nflXFjYnBtenxNb7q3o7wVL6hHLGX7/v+53Golrfy2CmDmCz3XgRjavVkXRV023PE\n23WJH+fpfdACwymnVTdbeN24+YsygsSS7JdL7Py+uLYAS7JneTtMK1bdEf5RVw7f\nL8Ll3nuuktxlb6nG+9kvI19TuIyyUqDDkirOCAXWT2nhqXKqp9IyPVQuI06C2fYW\nFwV4NwJjYOMSgr0srBFKcJV0eqBeouUuTUyuOtnIiixScaX/zIcs/g2ihUJmBPqd\nIjUPKbGrF/DEmBCkvFbVjAcDg8Bso08U23EXDc/dnXlAdLRKQdMN2DS2F5LV58tV\nnVgvb+rNb/SK/ClJtHaMi/7+Pv9yxE2FKpj99G3oLmiCzVOkczZGvgThcnv9WEhO\nWCi+YqBda05V3F2bkKmCkOM7+rNlUE378RAEQJ8Pc75b8wDP+6F3acF3HJmJCkqm\nA2kvXWV9UJUnp4OOPIITze1DSWZKMeJujTyn028WFttXlt6QEoXZ9oH/pwRUjSBd\nZMva0Q45lM4/hWwgqmVInSyawzu3KXsjQalo47k1QwT1N4xO8YgW//sVyAQ1a6t7\nMgDFtd6AJibnaBn1lXxmKmUCAwEAAQ==\n-----END PUBLIC KEY-----\n",
-  "report_cohorts": [
-   "QA external 15-Oct",
-   "FCDO Oct-2026"
-  ],
-  "qa": {
-   "email": "qa-external-20261015@example.org",
-   "name": "QA external (synthetic, revoked after test)",
-   "cohort": "QA external 15-Oct",
-   "expires_in_days": 1,
-   "role": "external"
-  }
+  "invite": {
+   "cohort": "FCDO Oct-2026",
+   "expires_in_days": 14,
+   "role": "external",
+   "invitees_sealed": {
+    "alg": "RSA-OAEP-SHA256+AES-256-GCM+zlib",
+    "wrapped_key": "Nkt4nY1JSc/OL/4cnZcT2UGf5SrX8SqO0lQG1xvdloWM8QJb7yHzeHLboA/P+BGiDKtYSDudJvoJJLuXVhk34MpNdoxQRwdoKInbSdk/TKIkGQPqJDw53lonThQ/6P/vLG3UOZS2dFev6tNZyoHCeoNghlEJU91IHrRefpq/vh68Uty3Jhe7XPEWdV3s68mUL7Sc1LnAUhSbopT5MSPo7CpaGIXIKvIYUe8pN/uFvxrX+A2oDTDlcJhfpRid+egC/ZikgG7axFf1EDnx9+BNQj5FYPbQuAlzc3BulCzhB6tS4rZEfMjTTyzPLC1XbxG12yrJayvlgFcFGT4O2FVIrOppdcCWjuMBnFjStSMLyeafxTlvJGSxBxImNyHw0bNgR+IukT8PZxEw8BV15fzt8AoFxvj4ZWfSr+R66CMflM664nx3SRhOUOMvgmWb3524gPQJ75jkiozDtCi1p/zaxWqc24SIc3Yra/fJc5FHSsDmwnq+JVyjq+Xrx3f+TP+C",
+    "nonce": "WnE/7Lk0nechyqUS",
+    "ciphertext": "wsaryIB8H59oAZL+1WpPJRCHIIYeQDMQUHvoiltg17HqLoDwPSMYq2mHMsgceIBqBil4Ko/2V9WwAr4plIj/eNmq2uccn2cR6GegNAssxFc/HKN2GwMyOtTvJEgHFoM+uC+FP9LAuLBR1XnU8WmVperQILSJ+c2pCnZxSdg1EwGjh0fBEBXkcz7vkdQwSEY+Bb8eI2G/R5kp1Q1k"
+   }
+  },
+  "revoke_cohorts": [
+   "QA external 15-Oct"
+  ]
  }
 }
