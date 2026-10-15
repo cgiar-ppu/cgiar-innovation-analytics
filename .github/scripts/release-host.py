@@ -26,6 +26,21 @@ env={'AWS_REGION':'eu-central-1','LITESTREAM_S3_BUCKET':f'cgiar-ia-artifacts-{ac
  'SYNAPSIS_MODEL':cfg.get('model','claude-sonnet-4-6'),
  'SYNAPSIS_FALLBACK_MODEL':cfg.get('fallback','claude-opus-4-8'),
  'SYNAPSIS_AVAILABLE_MODELS':cfg.get('models','claude-sonnet-4-6,claude-opus-4-8[1m]')}
+# >>> mvp-env: MVP test settings (SYN-2306 caps/window, SYN-2305 telemetry, SYN-2303 feedback, SYN-2283 external
+# view) from promotion-request.json models_config (lower-case keys). Passed to the container ONLY when set to a
+# non-empty value, so an absent key keeps the code default (an EMPTY IA_TELEMETRY_ENABLED would switch telemetry
+# off on builds before the empty-means-default fix).
+MVP_ENV=(('test_budget_usd','IA_TEST_BUDGET_USD'),('test_start','IA_TEST_START'),('test_end','IA_TEST_END'),
+ ('session_budget_usd','IA_SESSION_BUDGET_USD'),('budget_alert_thresholds','IA_BUDGET_ALERT_THRESHOLDS'),
+ ('max_budget_usd_researcher','IA_MAX_BUDGET_USD_RESEARCHER'),('max_budget_usd_admin','IA_MAX_BUDGET_USD_ADMIN'),
+ ('daily_user_budget_usd','IA_DAILY_USER_BUDGET_USD'),
+ ('telemetry_enabled','IA_TELEMETRY_ENABLED'),('feedback_enabled','IA_FEEDBACK_ENABLED'),
+ ('external_block_policy_amounts','IA_EXTERNAL_BLOCK_POLICY_AMOUNTS'),('external_w12_only','IA_EXTERNAL_W12_ONLY'))
+for key,name in MVP_ENV:
+ value=cfg.get(key)
+ value='' if value is None else (str(value).lower() if isinstance(value,bool) else str(value)).strip()
+ if value: env[name]=value
+# <<< mvp-env
 assert env['IA_JWT_SECRET'] and env['ANTHROPIC_API_KEY'], 'Missing required target secrets'
 image=f'{account}.dkr.ecr.eu-central-1.amazonaws.com/cgiar-ia-service:{sha}'
 password=run(['aws','ecr','get-login-password','--region','eu-central-1'])
@@ -90,4 +105,12 @@ assert after['messages']>=before['messages']
 for path in ('/api/sessions','/api/auth/invitations'):
  try: urllib.request.urlopen('http://localhost:7780'+path,timeout=5);raise AssertionError('Anonymous access accepted: '+path)
  except urllib.error.HTTPError as e: assert e.code in (401,403)
+# MVP settings as the NEW container sees them (non-secret values; never fails the deploy, e.g. on a rollback SHA).
+probe=("import json,os\nfrom synapsis import config as c\nnames=('TEST_BUDGET_USD','TEST_START','TEST_END','SESSION_BUDGET_USD',"
+ "'MAX_BUDGET_USD_RESEARCHER','MAX_BUDGET_USD_ADMIN','DAILY_USER_BUDGET_USD','BUDGET_ALERT_THRESHOLDS','TELEMETRY_ENABLED')\n"
+ "out={n:getattr(c,n,None) for n in names}\nout.update({k:os.environ.get(k) for k in ('IA_FEEDBACK_ENABLED','IA_EXTERNAL_W12_ONLY','IA_EXTERNAL_BLOCK_POLICY_AMOUNTS')})\n"
+ "print(json.dumps(out,default=str))")
+try: applied=json.loads(run(['docker','exec',name,'python','-c',probe],stderr=sp.DEVNULL).splitlines()[-1])
+except Exception as e: applied={'probe_error':type(e).__name__}
+print(json.dumps({'mvp_env_passed':sorted(n for _,n in MVP_ENV if n in env),'mvp_settings_in_container':applied}))
 print(json.dumps({'sha':sha,'backup':str(backup),'before':{k:len(v) if isinstance(v,list) else v for k,v in before.items()},'after':{k:len(v) if isinstance(v,list) else v for k,v in after.items()},'auth_checks':'passed'}))
