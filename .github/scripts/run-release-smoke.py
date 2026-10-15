@@ -13,10 +13,15 @@ if request.get('all'):
  scripts=['.github/scripts/release-model-smoke.py','.github/scripts/release-chat-smoke.py','.github/scripts/release-smoke.py']
 if request.get('data'):
  scripts.append('.github/scripts/release-smoke.py')
+# One-off invitation round (release-invitations.py): links come back only encrypted to the requester's key.
+invite_env=''
+if request.get('invitations'):
+ scripts=['.github/scripts/release-invitations.py']
+ invite_env='-e IA_RELEASE_INVITE_REQUEST='+shlex.quote(base64.b64encode(json.dumps(request['invitations']).encode()).decode())+' '
 commands=['set -e']
 for script in scripts:
  encoded=base64.b64encode(Path(script).read_bytes()).decode()
- prefix='python3 -c ' if request.get('integrity') else 'docker exec cgiar-innovation-analytics python -c '
+ prefix='python3 -c ' if request.get('integrity') else 'docker exec '+invite_env+'cgiar-innovation-analytics python -c '
  commands.append(prefix+shlex.quote('import base64;exec(base64.b64decode('+repr(encoded)+'))'))
 command='\n'.join(commands)
 cid=ssm.send_command(InstanceIds=[instance],DocumentName='AWS-RunShellScript',Parameters={'commands':[command]},TimeoutSeconds=900)['Command']['CommandId']
