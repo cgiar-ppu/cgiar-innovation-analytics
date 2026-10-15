@@ -22,6 +22,9 @@ from claude_agent_sdk import tool
 from synapsis.utils.responses import error_response, success_response
 from synapsis.prms_snapshot import get_snapshot_info
 from synapsis.prms_snapshot import resolve_db_path
+from synapsis.prms_schema_check import is_expected_table, missing_table_message
+from synapsis import prms_access_policy
+from synapsis.prms_access_policy import PRMSAccessDenied
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +53,9 @@ _FORBIDDEN_SQL = re.compile(
     r"^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|ATTACH|DETACH|REPLACE|VACUUM|REINDEX|PRAGMA\s+(?!query_only|table_info|database_list))",
     re.IGNORECASE | re.MULTILINE,
 )
+
+# Single-quoted SQL string literals ('' is an escaped quote inside one).
+_SQL_STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
 
 # Detect if a LIMIT clause is already present (simple heuristic)
 _HAS_LIMIT = re.compile(r"\bLIMIT\s+\d+", re.IGNORECASE)
@@ -85,7 +91,10 @@ def _validate_sql(sql: str) -> str | None:
     # Reject semicolons in the middle (potential multi-statement injection)
     # Allow trailing semicolon
     core = stripped.rstrip(";").strip()
-    if ";" in core:
+    # A ';' inside a string literal (e.g. GROUP_CONCAT(x, '; ')) is text, not a
+    # statement separator. (sqlite3 also refuses to run two statements in one
+    # execute() call, and the connection is read-only.)
+    if ";" in _SQL_STRING_LITERAL.sub("''", core):
         return (
             "Multi-statement queries are not allowed. "
             "Please send a single SELECT statement."
@@ -119,8 +128,18 @@ class _TimeoutError(Exception):
     """Raised when a query exceeds the timeout."""
 
 
+#: Default for ``_execute_with_timeout(role=...)``: use the verified role of
+#: the calling request / chat connection (resolved in the caller's thread —
+#: the worker thread below does not inherit context variables).
+CALLER_ROLE: Any = object()
+
+
 def _execute_with_timeout(
-    db_path: str, sql: str, timeout: int = QUERY_TIMEOUT_SECONDS
+    db_path: str,
+    sql: str,
+    timeout: int = QUERY_TIMEOUT_SECONDS,
+    access_log: "prms_access_policy.AccessLog | None" = None,
+    role: Any = CALLER_ROLE,
 ) -> tuple[list[dict], list[str], int]:
     """Execute a SQL query with a timeout that really stops SQLite.
 
@@ -140,10 +159,23 @@ def _execute_with_timeout(
       times out (belt and braces for statements that sit in a single long step).
 
     The connection is opened read-only (``mode=ro`` URI) and always closed.
+
+    Every statement is compiled under the PRMS access policy
+    (``synapsis/prms_access_policy.py``): credential / personal-contact tables
+    are refused (``PRMSAccessDenied``) and a few contact columns read as NULL.
+    Pass *access_log* to learn which columns were blanked.
+
+    *role* selects the role-aware layer of the policy: by default the verified
+    role of the caller (``prms_access_policy.caller_role()``), so an
+    ``external`` account cannot read budget / financial tables and columns;
+    ``None`` applies the base policy only.
     """
+    if role is CALLER_ROLE:
+        role = prms_access_policy.caller_role()
     result_holder: dict[str, Any] = {}
     error_holder: dict[str, Any] = {}
     conn_holder: dict[str, sqlite3.Connection] = {}
+    access_log_holder: dict[str, Any] = {}
     deadline = time.monotonic() + timeout
 
     def _past_deadline() -> int:
@@ -163,17 +195,24 @@ def _execute_with_timeout(
             conn.set_progress_handler(_past_deadline, _PROGRESS_STEPS)
             conn.execute("PRAGMA query_only = ON;")
             conn.row_factory = sqlite3.Row
+            access_log_holder["log"] = prms_access_policy.install(conn, role)
 
             cursor = conn.execute(sql)
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
             rows = cursor.fetchall()
 
-            # Convert to list of dicts
-            result_holder["rows"] = [dict(row) for row in rows]
+            # Convert to list of dicts. For restricted (external) roles,
+            # currency amounts inside text values are redacted: the authorizer
+            # works on columns and cannot see a budget typed into a narrative.
+            result_holder["rows"] = prms_access_policy.redact_for_role(
+                [dict(row) for row in rows], role, access_log_holder["log"])
             result_holder["columns"] = columns
             result_holder["count"] = len(rows)
         except Exception as exc:
-            error_holder["error"] = exc
+            log = access_log_holder.get("log")
+            error_holder["error"] = (
+                prms_access_policy.translate_error(exc, log) if log is not None else exc
+            )
         finally:
             if conn is not None:
                 try:
@@ -199,6 +238,20 @@ def _execute_with_timeout(
             "Try simplifying the query or adding more specific WHERE conditions."
         )
 
+    if access_log is not None and "log" in access_log_holder:
+        src = access_log_holder["log"]
+        access_log.denied.extend(t for t in src.denied if t not in access_log.denied)
+        access_log.nulled.extend(c for c in src.nulled if c not in access_log.nulled)
+        access_log.financial_denied.extend(
+            t for t in src.financial_denied if t not in access_log.financial_denied)
+        access_log.financial_nulled.extend(
+            c for c in src.financial_nulled if c not in access_log.financial_nulled)
+        access_log.internal_denied.extend(
+            t for t in src.internal_denied if t not in access_log.internal_denied)
+        access_log.internal_nulled.extend(
+            c for c in src.internal_nulled if c not in access_log.internal_nulled)
+        access_log.redacted_amounts += src.redacted_amounts
+
     if "error" in error_holder:
         exc = error_holder["error"]
         if isinstance(exc, sqlite3.OperationalError) and "interrupt" in str(exc).lower():
@@ -215,7 +268,7 @@ def _execute_with_timeout(
     )
 
 
-def _get_total_count(db_path: str, sql: str) -> int | None:
+def _get_total_count(db_path: str, sql: str, role: Any = CALLER_ROLE) -> int | None:
     """Attempt to get the total row count for a query (before LIMIT).
 
     Returns None if it cannot be determined (e.g., query too complex).
@@ -226,7 +279,7 @@ def _get_total_count(db_path: str, sql: str) -> int | None:
     count_sql = f"SELECT COUNT(*) as total FROM ({count_sql})"
 
     try:
-        rows, _, _ = _execute_with_timeout(db_path, count_sql, timeout=15)
+        rows, _, _ = _execute_with_timeout(db_path, count_sql, timeout=15, role=role)
         if rows:
             return rows[0].get("total", None)
     except Exception:
@@ -242,9 +295,56 @@ def _get_total_count(db_path: str, sql: str) -> int | None:
 _TITLE_COLUMN_RE = re.compile(r"(^|[_\s])(title|name)s?($|[_\s])", re.IGNORECASE)
 TITLE_CELL_LIMIT = 250
 
+# Base per-cell limits: table view (<= 12 columns) / key-value view (> 12).
+TABLE_CELL_LIMIT = 80
+KV_CELL_LIMIT = 200
+# Marc Schut, 13 Oct 2026: every non-title cell was cut at 80 characters
+# whatever the query, so the agent could not read the use numbers inside
+# result descriptions (376-2,396 characters) — not even with SUBSTR() chunks,
+# because each chunk was cut to 80 again. Long cells now share a fixed text
+# budget: few long values (e.g. 18 descriptions) come back in full, many long
+# values (e.g. 5,000 rows) still fall back to the base limit, so the extra
+# output is bounded by LONG_TEXT_BUDGET characters (~12k tokens) per call.
+LONG_TEXT_BUDGET = 48_000
+MAX_CELL_LIMIT = 6_000
+# Rows printed in key/value form (> 12 columns).
+KV_MAX_ROWS = 20
+
+_UNLIMITED = 10**12
+
 
 def _cell_limit(column, default: int) -> int:
     return max(default, TITLE_CELL_LIMIT) if _TITLE_COLUMN_RE.search(str(column)) else default
+
+
+def _water_level(lengths: list[int], budget: int) -> int:
+    """Largest per-cell length T so that sum(min(len, T)) <= budget.
+
+    Short values are kept whole; the remaining budget is shared equally by
+    the longer ones. Returns ``_UNLIMITED`` when everything fits.
+    """
+    remaining = budget
+    ordered = sorted(lengths)
+    n = len(ordered)
+    for i, length in enumerate(ordered):
+        if length * (n - i) <= remaining:
+            remaining -= length
+            continue
+        return max(remaining // (n - i), 0)
+    return _UNLIMITED
+
+
+def _cell_text(v) -> str:
+    return str(v) if v is not None else "NULL"
+
+
+def _long_text_limit(cells: list[tuple[str, str]], base: int) -> int:
+    """Per-cell limit for the long cells of one output (never below *base*)."""
+    long_lengths = [len(s) for col, s in cells if len(s) > _cell_limit(col, base)]
+    if not long_lengths:
+        return base
+    level = _water_level(long_lengths, LONG_TEXT_BUDGET)
+    return max(base, min(MAX_CELL_LIMIT, level))
 
 
 def _format_results_text(
@@ -271,34 +371,56 @@ def _format_results_text(
         lines.append("No results found.")
         return "\n".join(lines)
 
-    # Format as a table if reasonable number of columns
-    if columns and len(columns) <= 12:
+    table_view = bool(columns) and len(columns) <= 12
+    base = TABLE_CELL_LIMIT if table_view else KV_CELL_LIMIT
+    shown_rows = rows if table_view else rows[:KV_MAX_ROWS]
+    cells = [
+        (str(k), _cell_text(v))
+        for row in shown_rows
+        for k, v in (((c, row.get(c, "")) for c in columns) if table_view else row.items())
+    ]
+    long_limit = _long_text_limit(cells, base)
+    shortened = 0
+
+    def _fit(column, s: str) -> str:
+        nonlocal shortened
+        limit = max(_cell_limit(column, base), long_limit)
+        if len(s) > limit:
+            shortened += 1
+            return s[:limit - 3] + "..."
+        return s
+
+    if table_view:
         # Header row
         lines.append(" | ".join(str(c) for c in columns))
         lines.append(" | ".join("---" for _ in columns))
-
         for row in rows:
-            vals = []
-            for c in columns:
-                v = row.get(c, "")
-                s = str(v) if v is not None else "NULL"
-                # Truncate long values (titles/names get more room — QA-4 D5)
-                limit = _cell_limit(c, 80)
-                if len(s) > limit:
-                    s = s[:limit - 3] + "..."
-                vals.append(s)
-            lines.append(" | ".join(vals))
+            lines.append(" | ".join(_fit(c, _cell_text(row.get(c, ""))) for c in columns))
     else:
         # Too many columns -- show as key-value blocks
-        for i, row in enumerate(rows[:20]):
+        for i, row in enumerate(shown_rows):
             lines.append(f"--- Row {i + 1} ---")
             for k, v in row.items():
-                s = str(v) if v is not None else "NULL"
-                limit = _cell_limit(k, 200)
-                if len(s) > limit:
-                    s = s[:limit - 3] + "..."
-                lines.append(f"  {k}: {s}")
+                lines.append(f"  {k}: {_fit(k, _cell_text(v))}")
             lines.append("")
+        if row_count > len(shown_rows):
+            lines.append(
+                f"NOTE: only the first {len(shown_rows)} of {row_count} rows are printed "
+                f"because the query returns {len(columns)} columns (more than 12). "
+                "Select 12 columns or fewer to see every row as a table."
+            )
+
+    if shortened:
+        lines.append("")
+        lines.append(
+            f"NOTE: {shortened} long text value(s) were shortened (they end in \"...\"; "
+            f"cut at {long_limit} characters, titles/names at least {TITLE_CELL_LIMIT}). "
+            "This is a display limit, not the stored text. Long values share a budget of "
+            f"about {LONG_TEXT_BUDGET:,} characters per call (up to {MAX_CELL_LIMIT:,} per value): "
+            "to read full text (e.g. result descriptions), query fewer rows or fewer long "
+            "columns — about 15-20 full descriptions fit in one call — and never treat a "
+            "shortened value as complete."
+        )
 
     return "\n".join(lines)
 
@@ -321,7 +443,19 @@ def _format_results_text(
     "Returns structured results with row data, total count, and tables used. "
     "By default results are capped at 5000 rows; pass an integer 'row_limit' to "
     "raise or lower that cap when you need the full result set (or fewer rows). "
-    "An explicit LIMIT clause in the SQL always takes precedence over row_limit.",
+    "An explicit LIMIT clause in the SQL always takes precedence over row_limit. "
+    "Long text: small result sets return text cells in full (a shared budget of about "
+    "48,000 characters per call, up to 6,000 per value); large result sets shorten "
+    "long cells (to 80 characters, titles/names 250), mark them with '...' and say so. "
+    "To read full result descriptions, select only the rows you need (about 15-20 "
+    "descriptions per call). If a query fails because an expected PRMS table is "
+    "missing from the loaded snapshot, the tool says so: report it as a data-loading "
+    "issue, never as proof that PRMS lacks the data. "
+    "Operational tables of the PRMS web application that hold credentials or personal "
+    "contact data (e.g. account passwords and e-mail addresses, access tokens, "
+    "application settings) are not available: such queries are refused or those "
+    "columns come back empty, by design. If a result says a table or column is not "
+    "available in this view, follow the note it carries; otherwise report the data as usual.",
     {
         "sql": str,
         "question": str,
@@ -390,18 +524,40 @@ async def prms_query(args: dict[str, Any]) -> dict[str, Any]:
 
     # Execute
     start_time = time.monotonic()
+    access_log = prms_access_policy.AccessLog()
+    role = prms_access_policy.caller_role()
     try:
         rows, columns, row_count = _execute_with_timeout(
-            PRMS_DB_PATH, limited_sql, QUERY_TIMEOUT_SECONDS
+            PRMS_DB_PATH, limited_sql, QUERY_TIMEOUT_SECONDS,
+            access_log=access_log, role=role,
         )
     except _TimeoutError as exc:
         return error_response(str(exc))
+    except PRMSAccessDenied as exc:
+        if exc.external_view:
+            return error_response(
+                f"Not available in this external view: {exc} {exc.guidance}"
+            )
+        return error_response(
+            f"Not available: {exc} Answer the user's question without it — the "
+            "analytic PRMS tables (results, innovations, partners, geographies, "
+            "lookups) are all available."
+        )
     except sqlite3.OperationalError as exc:
         err_msg = str(exc)
         # Provide helpful hints for common errors
         if "no such table" in err_msg:
-            table_match = re.search(r"no such table: (\w+)", err_msg)
+            table_match = re.search(r"no such table: (?:main\.)?(\w+)", err_msg)
             hint = ""
+            if table_match and is_expected_table(table_match.group(1)):
+                # Marc Schut, 13 Oct 2026: the table is documented and exists in
+                # PRMS but was dropped by the snapshot load. Say so — the old
+                # "might be named differently" hint sent the agent looking for
+                # another source and it invented one.
+                return error_response(
+                    f"SQL error: {err_msg}. "
+                    + missing_table_message(table_match.group(1))
+                )
             if table_match:
                 bad_table = table_match.group(1)
                 hint = (
@@ -429,10 +585,13 @@ async def prms_query(args: dict[str, Any]) -> dict[str, Any]:
     # Get total count if we may have limited the results
     total_count = None
     if row_count >= effective_limit:
-        total_count = _get_total_count(PRMS_DB_PATH, sql)
+        total_count = _get_total_count(PRMS_DB_PATH, sql, role=role)
 
     # Format the response
     result_text = _format_results_text(rows, columns, total_count, limited_sql, tables_used)
+    note = prms_access_policy.nulled_note(access_log)
+    if note:
+        result_text += "\n\n" + note
 
     # Add metadata footer
     meta_lines = [

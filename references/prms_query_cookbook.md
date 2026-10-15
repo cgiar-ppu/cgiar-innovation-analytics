@@ -422,6 +422,113 @@ Pick ONE geography definition and reuse it for EVERY query in the same answer �
 
 ---
 
+## Recipe 11: Innovation Use detail — 0-9 use level + use numbers (who, how many) ✅
+
+**When to use:** "what is the use level of …", "how many farmers / users / women use …", "current use reported", "use level 0-9 column", "Innovation Use numbers", ISSCA-style tables of Innovation Use results.
+
+**Where the data is (all PRMS tables; this is what the public PRMS result PDF prints under "Innovation use"):**
+| Need | Table / join |
+|---|---|
+| Use level 0-9 | `results_innovations_use` (`results_id` → `result.id`) → `clarisa_innovation_use_levels` on `id = innovation_use_level_id` → report **`.level`** (0-9) + `.name`. The `_id` is a lookup id = level + 1 — never print it as the level. |
+| Number of users (e.g. "171,561 farmers") | `result_actors` (`result_id` → `result.id`, `is_active = 1`) → `actor_type.name` (type 5 = "Other" → `other_actor_type`); total = `how_many` (= women + men); `women_youth` / `men_youth` are "of which youth" (never add them on top). **`section_id`: 1 = current use, 2 = target by 2030** (NULL on older rows = current) — never add the two. **Show the women/men split whenever `women`/`men` are filled.** |
+| Organisations using | `results_by_institution_type` (`results_id` → `result.id`) with **`institution_roles_id = 5`** (the role PRMS uses for Innovation Use organisations; the lookup calls it "Innovation Package Partners") and `how_many > 0`; type = `institution_types_id` → `clarisa_institution_types.code` (not `.id`), free text in `other_institution`; same `section_id` split |
+| Other quantitative measures (hectares, kg, …) | **`result_ip_measure`** (`result_id` → `result.id`, `is_active = 1`, `quantity` + `unit_of_measure`, same `section_id` split). This is what the PRMS PDF shows as "Other quantitative measures of innovation use". |
+| Legacy measures (do not use for 2023+) | `results_innovations_use_measures` is the old 2022-style table; for 2025 it only holds carried-over copies the PDF does not show. If you ever need it, join **`result_innovation_use_id = results_innovations_use.result_innovation_use_id`** (NOT `result.id`). |
+| Users added this period / narrative | `results_innovations_use.new_users_added` (NULL = not answered, not zero) / `use_expansion_narrative` (2026 cycle onward) |
+
+**"Reports use numbers" = at least one CURRENT number > 0** among people (`result_actors`), organisations (`results_by_institution_type`, role 5) or other measures (`result_ip_measure`). A row with `how_many` 0/NULL does not count; a 2030 target alone does not count as current use (report targets separately if asked).
+
+### SQL (template — 2025 QAed Innovation Use results: one row per result with use level and CURRENT use numbers)
+```sql
+WITH use_rows AS (
+  SELECT r.id, r.result_code, r.title,
+         CASE WHEN r.source = 'API' THEN 'W3/bilateral' ELSE 'W1/W2' END AS funding
+  FROM result r
+  WHERE r.result_type_id = 2 AND r.is_active = 1 AND r.reported_year_id = 2025
+    AND ((r.source = 'Result' AND r.status_id = 2) OR (r.source = 'API' AND r.status_id = 6))
+),
+people AS (      -- result_actors, CURRENT section, only rows that carry a number > 0
+  SELECT ra.result_id,
+         SUM(COALESCE(ra.how_many, COALESCE(ra.women, 0) + COALESCE(ra.men, 0))) AS users_current,
+         GROUP_CONCAT(
+           COALESCE(NULLIF(TRIM(ra.other_actor_type), ''), at.name, 'actors') || ': '
+           || COALESCE(ra.how_many, COALESCE(ra.women, 0) + COALESCE(ra.men, 0))
+           || CASE WHEN ra.women IS NULL AND ra.men IS NULL THEN ''
+                   ELSE ' (women ' || COALESCE(ra.women, 0)
+                        || CASE WHEN COALESCE(ra.women_youth, 0) > 0 THEN ' of which youth ' || ra.women_youth ELSE '' END
+                        || ', men ' || COALESCE(ra.men, 0)
+                        || CASE WHEN COALESCE(ra.men_youth, 0) > 0 THEN ' of which youth ' || ra.men_youth ELSE '' END
+                        || ')' END,
+           ' | ') AS users_by_actor_type
+  FROM result_actors ra
+  LEFT JOIN actor_type at ON at.actor_type_id = ra.actor_type_id
+  WHERE ra.is_active = 1 AND COALESCE(ra.section_id, 1) = 1
+    AND (COALESCE(ra.how_many, 0) > 0 OR COALESCE(ra.women, 0) + COALESCE(ra.men, 0) > 0)
+  GROUP BY ra.result_id
+),
+orgs AS (        -- organisations using: results_by_institution_type role 5, CURRENT, how_many > 0
+  SELECT o.results_id,
+         GROUP_CONCAT(o.how_many || ' ' || COALESCE(NULLIF(TRIM(o.other_institution), ''), it.name, 'organisations'), ' | ') AS orgs_current
+  FROM results_by_institution_type o
+  LEFT JOIN clarisa_institution_types it ON it.code = o.institution_types_id
+  WHERE o.is_active = 1 AND o.institution_roles_id = 5 AND COALESCE(o.how_many, 0) > 0
+    AND COALESCE(o.section_id, 1) = 1
+  GROUP BY o.results_id
+),
+measures AS (    -- "Other quantitative measures of innovation use" (as in the PRMS PDF), CURRENT
+  SELECT m.result_id,
+         GROUP_CONCAT(m.quantity || ' ' || COALESCE(m.unit_of_measure, ''), ' | ') AS other_measures_current
+  FROM result_ip_measure m
+  WHERE m.is_active = 1 AND m.quantity IS NOT NULL AND COALESCE(m.section_id, 1) = 1
+  GROUP BY m.result_id
+)
+SELECT u.result_code,
+       u.funding,
+       u.title,
+       iul.level AS use_level,               -- 0-9
+       iul.name  AS use_level_name,
+       p.users_current,
+       p.users_by_actor_type,
+       o.orgs_current,
+       m.other_measures_current,
+       CASE WHEN p.result_id IS NOT NULL OR o.results_id IS NOT NULL
+                 OR m.result_id IS NOT NULL THEN 1 ELSE 0 END AS reports_use_numbers
+FROM use_rows u
+LEFT JOIN results_innovations_use riu ON riu.results_id = u.id AND riu.is_active = 1
+LEFT JOIN clarisa_innovation_use_levels iul ON iul.id = riu.innovation_use_level_id
+LEFT JOIN people   p ON p.result_id  = u.id
+LEFT JOIN orgs     o ON o.results_id = u.id
+LEFT JOIN measures m ON m.result_id  = u.id
+ORDER BY u.result_code;
+```
+- One row per result: people, organisations and measures are aggregated in their own CTEs, so a result never fans out into several rows.
+- `users_current` is the **sum of reported actor counts** across actor types (a person could be counted under two types) — show `users_by_actor_type` next to it.
+- For 2030 targets, copy the three CTEs with `section_id = 2` (people/organisations) and `m.section_id = 2` (measures); never add targets to current use.
+- For other years change `reported_year_id`. For a Development ↔ Use pair, link the Innovation Development (type 7) to its Use result(s) via `linked_result` and read the use data from the **type-2** row; `result_actors` on a type-7 row describes the actors the innovation targets, not counted users.
+
+### Coverage — how many results report a use level / use numbers
+Keep the four CTEs above and replace the final `SELECT … ORDER BY` with:
+```sql
+SELECT COUNT(DISTINCT u.result_code)                                                  AS results,
+       COUNT(DISTINCT CASE WHEN iul.level IS NOT NULL THEN u.result_code END)         AS with_use_level,
+       COUNT(DISTINCT CASE WHEN p.result_id  IS NOT NULL THEN u.result_code END)      AS with_people_numbers,
+       COUNT(DISTINCT CASE WHEN o.results_id IS NOT NULL THEN u.result_code END)      AS with_organisation_numbers,
+       COUNT(DISTINCT CASE WHEN m.result_id  IS NOT NULL THEN u.result_code END)      AS with_other_measures,
+       COUNT(DISTINCT CASE WHEN p.result_id IS NOT NULL OR o.results_id IS NOT NULL
+                                OR m.result_id IS NOT NULL THEN u.result_code END)   AS with_any_current_number
+FROM use_rows u
+LEFT JOIN results_innovations_use riu ON riu.results_id = u.id AND riu.is_active = 1
+LEFT JOIN clarisa_innovation_use_levels iul ON iul.id = riu.innovation_use_level_id
+LEFT JOIN people   p ON p.result_id  = u.id
+LEFT JOIN orgs     o ON o.results_id = u.id
+LEFT JOIN measures m ON m.result_id  = u.id;
+```
+- Expected (2025 QAed Innovation Use, identical on the corrected 2026-09-13 and 2026-10-14 snapshots): **403** results (346 W1/W2 + 57 bilateral) · use level **401** (distribution 0-9: 67, 15, 25, 48, 50, 52, 21, 19, 45, 59) · current numbers: people **228**, organisations **184**, other measures **81**, any **324** (2030 targets: people 43, organisations 48, measures 15). If you get **0** for use level, the table is missing from the loaded snapshot (data-loading problem) — say so; do not conclude PRMS lacks use levels.
+- 53 of the 57 bilateral results carry level 0 "No use" even when they report users (a PRMS bilateral-upload issue, also printed in the PDF) — split W1/W2 vs bilateral when presenting level distributions.
+- Spot checks (2025, verified against the PRMS PDFs): R25015 level 9, 70 SMEs (women 30 of which youth 14, men 40 of which youth 14) · R25028 level 9, 85 SMEs (women 40, men 45) · R24600 level 8, 171,561 farmers · R24797 level 9, 238,470 farmers (women 102,377, men 136,093) + 157 private companies · R22751 level 9, 160,000 hectares (`result_ip_measure`) · R3386 level 9, 4 national government organisations + 126,305 kilograms.
+
+---
+
 ## Anti-Patterns ❌
 
 ### DO NOT answer a single-year question with the all-years dedup CTE (the 2026-06-15 incident)
@@ -454,6 +561,15 @@ WITH cand AS (
 )
 ```
 The correct pattern: build the candidate set across ALL result types first, then filter to result_type_id = 7 at the end.
+
+### DO NOT join `results_innovations_use_measures` to `result.id`
+`results_innovations_use_measures.result_innovation_use_id` points at `results_innovations_use.result_innovation_use_id`. Joining it to `result.id` silently matches unrelated results (the 13-Oct-2026 "only 72 results database-wide / 0 of 403" answer). Use Recipe 11. And for 2023+ "other quantitative measures" use `result_ip_measure` (`result_id` → `result.id`) — the legacy table only holds carried-over copies the PRMS PDF does not show.
+
+### DO NOT read `innovation_use_level_id` / `innovation_readiness_level_id` as the 0-9 level
+They are lookup ids (use level id = level + 1; readiness ids 11-20). Join the lookup and report its `level`.
+
+### DO NOT count a result as "reporting use numbers" because it has a row
+`result_actors` / `results_by_institution_type` rows with `how_many` 0 or NULL, rows of the 2030-target section (`section_id = 2`), and `results_by_institution_type` rows with a role other than 5 are not reported use. Count a result only when a CURRENT number > 0 exists (Recipe 11 coverage query) — counting any active row gave 233 / 185 / 323 instead of 228 / 184 / 324 on 14 Oct 2026.
 
 ---
 

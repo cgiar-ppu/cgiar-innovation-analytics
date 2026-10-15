@@ -1,12 +1,14 @@
 import { useEffect } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import TopBar from './TopBar';
 import VoiceGuide from '../voice/VoiceGuide';
 import { ToastProvider } from '../common/Toast';
 import { WebSocketProvider } from '../../contexts/WebSocketContext';
 import DisclaimerFooter from '../guardrails/DisclaimerFooter';
 import { useAppConfigStore } from '../../stores/appConfig';
-import { useAuthStore } from '../../stores/auth';
+import { getAuthToken, useAuthStore } from '../../stores/auth';
+import { useSessionsStore } from '../../stores/sessions';
+import { startTelemetry, trackPageView } from '../../lib/telemetry';
 
 export default function Layout() {
   const config = useAppConfigStore((s) => s.config);
@@ -16,6 +18,20 @@ export default function Layout() {
   useEffect(() => {
     void useAppConfigStore.getState().load();
   }, [userId]);
+
+  // First-party, cookieless usage events (SYN-2305): same-origin only.
+  const { pathname } = useLocation();
+  useEffect(
+    () =>
+      startTelemetry({
+        getToken: getAuthToken,
+        getChatSessionId: () => useSessionsStore.getState().activeSessionId ?? null,
+      }),
+    [userId],
+  );
+  useEffect(() => {
+    trackPageView();
+  }, [pathname, userId]);
 
   return (
     <WebSocketProvider>

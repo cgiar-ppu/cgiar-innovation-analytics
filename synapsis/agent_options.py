@@ -22,7 +22,7 @@ from synapsis.tools import synapsis_mcp
 from synapsis.hooks import audit_logger, audit_logger_post
 from synapsis.hooks.sandbox import build_sandbox_hooks
 from synapsis.agents import build_system_prompt, load_all_agents
-from synapsis.runtime_policy import sdk_fallback_model, turn_budget_usd  # Lane D: role-aware cost policy
+from synapsis.runtime_policy import current_role, sdk_fallback_model, turn_budget_usd  # Lane D: role-aware cost policy
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +223,10 @@ async def build_agent_options(
     all_agents = await load_all_agents()
     owner_id = _current_owner()
 
-    sp = _write_system_prompt_file(build_system_prompt(all_agents))
+    # The caller's verified role shapes the prompt: external partner accounts
+    # get the "budget and financial figures are not available" rules (the PRMS
+    # tools enforce the same restriction at query level).
+    sp = _write_system_prompt_file(build_system_prompt(all_agents, role=current_role()))
     opts = ClaudeAgentOptions(
         tools=list(IA_BUILTIN_TOOLS),
         allowed_tools=list(ALLOWED_TOOLS),

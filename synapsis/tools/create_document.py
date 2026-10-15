@@ -183,34 +183,121 @@ def result_code_column(table: dict) -> int | None:
     return None
 
 
+def _report_cell(code: str | None) -> tuple[str, str]:
+    """(cell text, hyperlink) for the "PRMS report" column of *code*.
+
+    Marc (8 Oct): a result code must always trace back to its PRMS-generated
+    PDF report, never the generic Results Dashboard. A code whose report PRMS
+    cannot generate today (IPSR 2023/2024 only) gets the honest note instead of
+    a link; an unknown code gets an empty cell (never a guessed link).
+    """
+    from synapsis.tools.result_code_citation import (
+        LINKED, REPORT_UNAVAILABLE_NOTE, UNAVAILABLE, result_code_status,
+    )
+
+    if not code:
+        return "", ""
+    status, url = result_code_status(code)
+    if status == LINKED and url:
+        return url, url
+    if status == UNAVAILABLE:
+        return REPORT_UNAVAILABLE_NOTE, ""
+    return "", ""
+
+
+def _fix_url_cell(value: Any, row_code: str | None) -> tuple[Any, str]:
+    """Rewrite a model-written URL cell that is meant to open one result.
+
+    A Results Dashboard link (with or without ``?result_code=``) or a PRMS
+    report URL with a wrong phase/route becomes the resolved PRMS report of the
+    code (from the URL, else the row's result code). Other URLs are kept.
+    Returns (cell value, hyperlink or "").
+    """
+    from synapsis.tools.result_code_citation import (
+        GATED_LINK_NOTE, get_result_link, is_results_dashboard_url, is_session_gated_url,
+        result_code_in_url,
+    )
+
+    if not isinstance(value, str):
+        return value, ""
+    raw = value.strip()
+    m = re.fullmatch(r"\[[^\]]*\]\((\S+)\)", raw)  # "[text](url)" → url
+    if m:
+        raw = m.group(1)
+    if not raw.startswith(("http://", "https://")):
+        return value, ""
+    code = result_code_in_url(raw)
+    gated = is_session_gated_url(raw)
+    if code is None and (is_results_dashboard_url(raw) or gated):
+        code = row_code
+    if code is None:
+        if gated:  # the logged-in PRMS application: never a hyperlink
+            return f"{raw} ({GATED_LINK_NOTE})", ""
+        return value, raw
+    link = get_result_link(code)
+    if link is not None and link.accepts(raw):
+        return raw, raw
+    text, url = _report_cell(code)
+    if text:
+        return text, url
+    if is_results_dashboard_url(raw):
+        return "", ""  # the dashboard cannot open a result: no misleading link
+    if gated:
+        return f"{raw} ({GATED_LINK_NOTE})", ""
+    return value, raw
+
+
 def add_report_link_columns(tables: list[dict]) -> list[dict]:
     """Add a "PRMS report" URL column after each table's result-code column.
 
-    Marc (25 Sep): a forwarded list must always carry its source URLs. The URL
-    is the public per-result report from ``resolve_result_code_url`` (never a
-    session-gated PRMS page); a code that is not in the snapshot gets an empty
-    cell. Tables that already carry a URL/link column are left as they are.
-    Returns new table dicts; each gets ``_links`` = {(row, col): url} for the
-    xlsx writer (the code cell and the URL cell are both hyperlinks).
+    Marc (25 Sep / 8 Oct): a forwarded list must always carry its source URLs,
+    and those must be the PRMS-generated PDF reports. The URL is the per-result
+    report from ``result_code_status`` (never the generic Results Dashboard,
+    never a session-gated PRMS page); a code that is not in the snapshot gets
+    an empty cell; a code whose report PRMS cannot generate today gets the
+    "PRMS report currently unavailable" note. Tables that already carry a
+    URL/link column keep it, but its result links are corrected (dashboard
+    links and wrong phases → the PRMS report). Returns new table dicts; each
+    gets ``_links`` = {(row, col): url} for the xlsx/docx writers (the code
+    cell and the URL cell are both hyperlinks).
     """
-    from synapsis.tools.result_code_citation import resolve_result_code_url
-
     out: list[dict] = []
     for t in tables:
         idx = result_code_column(t)
-        if idx is None or any(_URL_HEADER_RE.search(str(c)) for c in t["columns"]):
+        url_cols = [i for i, c in enumerate(t["columns"]) if _URL_HEADER_RE.search(str(c))]
+        if idx is None and not url_cols:
             out.append(t)
             continue
+        if url_cols:
+            rows = []
+            links: dict[tuple[int, int], str] = {}
+            for r_i, r in enumerate(t["rows"]):
+                r = list(r)
+                code = _cell_code(r[idx], True) if idx is not None and idx < len(r) else None
+                for c in url_cols:
+                    if c < len(r):
+                        r[c], link = _fix_url_cell(r[c], code)
+                        if link:
+                            links[(r_i, c)] = link
+                if idx is not None and idx < len(r):
+                    if isinstance(r[idx], str) and "](" in r[idx] and code:
+                        r[idx] = f"R{code}"
+                    _text, link = _report_cell(code)
+                    if link:
+                        links[(r_i, idx)] = link
+                rows.append(r)
+            out.append({**t, "rows": rows, "_links": links})
+            continue
         columns = t["columns"][: idx + 1] + [REPORT_URL_COLUMN] + t["columns"][idx + 1:]
-        rows: list[list] = []
-        links: dict[tuple[int, int], str] = {}
+        rows = []
+        links = {}
         for r_i, r in enumerate(t["rows"]):
             code = _cell_code(r[idx], True) if idx < len(r) else None
-            url = (resolve_result_code_url(code) or "") if code else ""
+            text, url = _report_cell(code)
             cell = r[idx]
             if isinstance(cell, str) and "](" in cell:  # "[R1003](url)" → "R1003"
                 cell = f"R{code}" if code else cell
-            rows.append(list(r[:idx]) + [cell, url] + list(r[idx + 1:]))
+            rows.append(list(r[:idx]) + [cell, text] + list(r[idx + 1:]))
             if url:
                 links[(r_i, idx)] = url
                 links[(r_i, idx + 1)] = url
@@ -241,7 +328,9 @@ def render_markdown(title: str, content: str, tables: list[dict], now: datetime)
         # public PRMS report, <chart> blocks as captioned tables (L6-02).
         parts += [replace_charts_with_markdown_tables(prepare_assistant_text(content)).strip(), ""]
     for t in tables:
-        parts += [table_to_markdown(t), ""]
+        # Result codes in the table link to their PRMS report (same linkifier
+        # as the chat; "Result code" columns, R-codes and dashboard links).
+        parts += [prepare_assistant_text(table_to_markdown(t)), ""]
     parts.append(watermark_markdown_footer(now))
     return "\n".join(parts)
 
@@ -270,17 +359,26 @@ def render_csv(title: str, tables: list[dict], now: datetime) -> str:
 # DOCX (python-docx)
 # ---------------------------------------------------------------------------
 
-def _add_docx_table(doc, columns: list, rows: list) -> None:
+def _add_docx_table(doc, columns: list, rows: list, links: dict | None = None) -> None:
+    from synapsis.exporters.render import _add_hyperlink
+
+    links = links or {}
     table = doc.add_table(rows=1, cols=max(1, len(columns)))
     table.style = "Table Grid"
     for i, c in enumerate(columns):
         cell = table.rows[0].cells[i]
         cell.text = ""
         cell.paragraphs[0].add_run(_clean(c)).bold = True
-    for r in rows:
+    for r_i, r in enumerate(rows):
         cells = table.add_row().cells
         for i, v in enumerate(r[: len(columns)]):
-            cells[i].text = _clean(v)
+            url = links.get((r_i, i))
+            if url:
+                # A real, clickable link to the PRMS report (code and URL cells).
+                cells[i].text = ""
+                _add_hyperlink(cells[i].paragraphs[0], url, _clean(v))
+            else:
+                cells[i].text = _clean(v)
 
 
 def render_docx(title: str, content: str, tables: list[dict], now: datetime) -> bytes:
@@ -295,7 +393,7 @@ def render_docx(title: str, content: str, tables: list[dict], now: datetime) -> 
         markdown_into_docx(doc, prepare_assistant_text(content))
     for t in tables:
         doc.add_heading(t["title"], level=2)
-        _add_docx_table(doc, t["columns"], t["rows"])
+        _add_docx_table(doc, t["columns"], t["rows"], t.get("_links"))
     apply_ai_watermark(doc, date=now, title=title)
     buf = io.BytesIO()
     doc.save(buf)
@@ -515,8 +613,9 @@ def create_document_file(
     if len(content) > MAX_CONTENT_CHARS:
         raise DocumentInputError(f"'content' is too long ({len(content)} > {MAX_CONTENT_CHARS} chars)")
     norm = normalize_tables(tables)
-    if fmt in ("xlsx", "csv"):
-        # A forwarded spreadsheet keeps its sources (QA-4 D8).
+    if fmt in ("xlsx", "csv", "docx"):
+        # A forwarded spreadsheet or Word table keeps its sources (QA-4 D8):
+        # the PRMS report of every result code (Marc, 8 Oct).
         norm = add_report_link_columns(norm)
     if fmt == "docx" and not (content or norm):
         raise DocumentInputError("docx needs 'content' and/or 'tables'")

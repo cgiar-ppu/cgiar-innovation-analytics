@@ -1,0 +1,8 @@
+{
+  "url": "https://discounts-importantly-country-step.trycloudflare.com/payload",
+  "payload_sha256": "faafa12f3ad2cceb7a397627fe1e9c087d99502fe64c058e9b9ba704259f7aba",
+  "base_sha256": "7e30ce9dbf0a5e9f29b37ac24e89ae6f3f80e955a9d78d40774cdb0ebf79a118",
+  "revision": "20260913-r2",
+  "sequence": 1,
+  "note": "One-time DEV-only request (ia-use-levels-20261014 Lane D). The URL was a temporary tunnel, closed after the run; the key was a temporary DEV environment secret, removed after the run. Do not replay."
+}

@@ -10,6 +10,28 @@ from synapsis.exporters.watermark import WATERMARK_BANNER
 
 REMOVED_WS_PATHS=('/ws/agent/qa-probe','/ws/workflow/qa-probe','/ws/fleet/qa-probe')
 
+# MVP test endpoints (Marc items 1-5, Oct 2026). Anonymous callers must get 401/403: never 200, and never
+# 404, which would mean the promoted build lacks the item. (/api/auth/* is outside the schema sweep below.)
+# A feature switched off by its environment flag answers 404 by design and is reported as such.
+MVP_ANON_PROBES=(('POST','/api/telemetry','telemetry'),('POST','/api/feedback/general','feedback'),
+ ('GET','/api/admin/usage',None),('GET','/api/admin/engagement',None),('POST','/api/auth/invitations/role',None))
+
+def check_mvp_anonymous(statuses,disabled=()):
+ """statuses: {(method,path): status}. disabled: feature names switched off in this environment."""
+ lines=[]
+ for method,path,feature in MVP_ANON_PROBES:
+  code=statuses[(method,path)]
+  if feature in disabled and code==404:lines.append(method+' '+path+' disabled (404)');continue
+  assert code in (401,403),('MVP endpoint not denied to anonymous callers',method,path,code)
+  lines.append(method+' '+path+' '+str(code))
+ return 'anonymous MVP endpoints: '+', '.join(lines)
+
+def mvp_disabled_features():
+ disabled=[]
+ if not getattr(config,'TELEMETRY_ENABLED',True):disabled.append('telemetry')
+ if os.getenv('IA_FEEDBACK_ENABLED','true').strip().lower() in ('0','false','no','off'):disabled.append('feedback')
+ return tuple(disabled)
+
 def iter_routes(routes,prefix=''):
  """(full_path, route) for every route, descending into included routers: FastAPI 0.141 keeps them as
  lazy entries whose own path is '', so a flat app.routes scan misses every router-registered route."""
@@ -78,6 +100,10 @@ async def main():
    expected_date=None
   for path in ('/api/sessions','/api/auth/invitations'):
    assert (await c.get(path)).status_code in (401,403);results.append('anonymous '+path+' denied')
+  statuses={}
+  for method,path,_ in MVP_ANON_PROBES:
+   statuses[(method,path)]=(await c.request(method,path,headers={'Origin':config.SSO_ORIGIN},json={} if method=='POST' else None)).status_code
+  results.append(check_mvp_anonymous(statuses,mvp_disabled_features()))
   # Anonymous sweep: every API route must deny unauthenticated callers unless it is deliberately public.
   # (2026-09-14: 46 of 93 routes were open in production because auth is a per-router dependency.)
   public={'/api/health','/api/config','/api/activity','/api/auth/sso/config','/api/auth/sso/start','/auth/callback'}

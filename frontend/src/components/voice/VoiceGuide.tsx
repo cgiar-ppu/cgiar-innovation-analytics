@@ -111,7 +111,7 @@ export default function VoiceGuide() {
       ? <button disabled title={UNAVAILABLE_MESSAGE} className="fixed bottom-12 right-5 z-40 flex items-center gap-2 rounded-full bg-surface-2 px-4 py-3 text-text-muted shadow-lg cursor-not-allowed opacity-80" aria-label={UNAVAILABLE_MESSAGE}>
         <AudioLines size={19} /> Voice unavailable
       </button>
-      : <button onClick={() => setOpen(true)} className="fixed bottom-12 right-5 z-40 flex items-center gap-2 rounded-full bg-accent px-4 py-3 text-white shadow-lg hover:brightness-110 focus-visible:outline focus-visible:outline-2" aria-label="Open voice guide">
+      : <button onClick={() => setOpen(true)} data-track="voice.open" className="fixed bottom-12 right-5 z-40 flex items-center gap-2 rounded-full bg-accent px-4 py-3 text-white shadow-lg hover:brightness-110 focus-visible:outline focus-visible:outline-2" aria-label="Open voice guide">
         <AudioLines size={19} /> {running ? 'Voice is on' : 'Voice guide'}
       </button>)}
     {open && <section role="region" aria-label="Voice guide" className="fixed z-40 bottom-10 right-3 sm:right-5 w-[calc(100%-1.5rem)] sm:w-[390px] max-h-[calc(100dvh-6rem)] flex flex-col rounded-2xl border border-border bg-surface-1 text-text-primary shadow-2xl overflow-hidden" style={{ background: 'var(--bg)' }}>
@@ -126,14 +126,14 @@ export default function VoiceGuide() {
           <p className="text-sm text-text-muted">Ask how the app works, explore data definitions, move between chats, or send an analysis question.</p>
           <div className="grid grid-cols-2 gap-2">{examples.map(text => <div key={text} className="rounded-xl border border-border p-2 text-xs text-text-muted">“{text}”</div>)}</div>
           <p className="text-xs text-text-muted leading-relaxed">Starting voice shares your audio and relevant chat or methodology excerpts with {service?.provider || 'OpenAI'}. Voice recording is off. Questions sent to Chat are saved there as usual. Calls end after {minutes} minutes.</p>
-          <button onClick={start} disabled={unavailable} title={unavailable ? UNAVAILABLE_MESSAGE : undefined} className="w-full rounded-xl bg-accent py-3 text-sm font-medium text-white flex gap-2 justify-center disabled:opacity-50 disabled:cursor-not-allowed"><Mic size={17} />{unavailable ? 'Voice unavailable' : status === 'error' ? 'Retry voice' : 'Start voice conversation'}</button>
+          <button onClick={start} data-track="voice.start" disabled={unavailable} title={unavailable ? UNAVAILABLE_MESSAGE : undefined} className="w-full rounded-xl bg-accent py-3 text-sm font-medium text-white flex gap-2 justify-center disabled:opacity-50 disabled:cursor-not-allowed"><Mic size={17} />{unavailable ? 'Voice unavailable' : status === 'error' ? 'Retry voice' : 'Start voice conversation'}</button>
         </>}
         {running && <>
           <div className="rounded-xl bg-accent/10 px-3 py-2 text-xs"><span className="text-text-muted">Current chat</span><p className="font-medium truncate">{title || (activeId ? 'Untitled chat' : 'No chat selected')}</p></div>
           <div className="flex flex-wrap gap-2">
             <button disabled={!isLive} onClick={() => { client.current?.mute(!muted); setMuted(!muted) }} className="rounded-lg border border-border px-3 py-2 text-xs flex items-center gap-1.5 disabled:opacity-50">{muted ? <Mic size={15} /> : <MicOff size={15} />}{muted ? 'Unmute' : 'Mute'}</button>
             <button disabled={!isLive} onClick={() => { client.current?.pauseActions(!paused); setPaused(!paused) }} className="rounded-lg border border-border px-3 py-2 text-xs flex items-center gap-1.5 disabled:opacity-50">{paused ? <Play size={15} /> : <Pause size={15} />}{paused ? 'Resume actions' : 'Pause actions'}</button>
-            <button onClick={() => client.current?.end()} disabled={status === 'closing'} className="rounded-lg bg-red-500/10 text-red-600 px-3 py-2 text-xs flex items-center gap-1.5"><Square size={14} />{feedbackPhase === 'asking' ? 'End now' : 'End voice'}</button>
+            <button onClick={() => client.current?.end()} data-track="voice.end" disabled={status === 'closing'} className="rounded-lg bg-red-500/10 text-red-600 px-3 py-2 text-xs flex items-center gap-1.5"><Square size={14} />{feedbackPhase === 'asking' ? 'End now' : 'End voice'}</button>
           </div>
           <VoiceFeedbackPrompt phase={feedbackPhase} onSubmit={(rating, text) => client.current ? client.current.rateSession(rating, text, true) : Promise.resolve({ ok: false })} onSkip={() => client.current?.end({ skipFeedback: true })} />
           {muted && <p className="text-xs text-text-muted">Mute keeps the paid connection open. End voice to disconnect.</p>}

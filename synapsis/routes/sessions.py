@@ -9,6 +9,7 @@ Session management and chat history endpoints.
 - DELETE /api/history               — Clear all history
 """
 
+import asyncio
 import json
 import re
 import time
@@ -77,7 +78,31 @@ async def _fetch_messages(db: aiosqlite.Connection, session_id: str) -> list[dic
         (session_id,),
     )
     rows = await cursor.fetchall()
-    return [{"type": r["type"], **json.loads(r["data"])} for r in rows]
+    messages = [{"type": r["type"], **json.loads(r["data"])} for r in rows]
+    return await asyncio.to_thread(_relink_answers, messages)
+
+
+def _relink_answers(messages: list[dict]) -> list[dict]:
+    """Re-apply the result-code link rule to stored answers when a chat is reopened.
+
+    Chats saved before 2026-09-26 (and every chat saved by a release older than
+    the per-result resolver) carry links to the generic CGIAR Results Dashboard
+    or bare codes. ``linkify_result_codes`` is idempotent, so current answers
+    come back unchanged, while old ones now point at the PRMS-generated PDF
+    report of each result (Marc Schut, 8 Oct). Never fails the history call.
+    """
+    try:
+        from synapsis.tools.result_code_citation import linkify_result_codes
+    except Exception:  # noqa: BLE001 - history must load even without the resolver
+        return messages
+    for m in messages:
+        key = {"text": "content", "result": "result_text"}.get(m.get("type"))
+        if key and isinstance(m.get(key), str) and m[key]:
+            try:
+                m[key] = linkify_result_codes(m[key])
+            except Exception:  # noqa: BLE001
+                pass
+    return messages
 
 
 @router.get("/sessions")

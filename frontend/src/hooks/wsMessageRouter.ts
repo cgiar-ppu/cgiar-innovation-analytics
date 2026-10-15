@@ -15,9 +15,11 @@ import { toast } from 'sonner'
 import { useChatStore } from '../stores/chat'
 import { useSessionsStore } from '../stores/sessions'
 import { takePendingNewChat, clearPendingNewChat } from '../lib/chatCommands'
+import { isStaleRunEvent } from '../stores/chat/runScope'
 
 /** Error codes that mean the server refused to open a new chat (Lane D). */
-const NEW_CHAT_REFUSALS = new Set(['rate_limited', 'capacity', 'daily_limit'])
+// test_budget / test_ended: MVP test budget used up or test window closed (SYN-2306).
+const NEW_CHAT_REFUSALS = new Set(['rate_limited', 'capacity', 'daily_limit', 'test_budget', 'test_ended'])
 
 /**
  * Context passed to the router so it can access connection-scoped state
@@ -113,7 +115,7 @@ export function routeWebSocketMessage(
     // Reject stale events from previous turns via run_id filtering
     const chatState = useChatStore.getState()
     const msgRunId = (msg as { run_id?: string }).run_id
-    if (msgRunId && chatState.currentRunId && msgRunId !== chatState.currentRunId) {
+    if (isStaleRunEvent(msgRunId, chatState.currentRunId)) {
       console.debug('[WebSocket] Ignoring stale event from run', msgRunId, 'current:', chatState.currentRunId)
       return true
     }
@@ -173,7 +175,7 @@ function handleSessionComplete(
 ): void {
   // Run-id guard: reject stale session_complete from previous turns
   const chatState = useChatStore.getState()
-  if (msg.run_id && chatState.currentRunId && msg.run_id !== chatState.currentRunId) {
+  if (isStaleRunEvent(msg.run_id, chatState.currentRunId)) {
     console.debug('[WebSocket] Ignoring stale session_complete from run', msg.run_id, 'current:', chatState.currentRunId)
     return
   }

@@ -404,7 +404,11 @@ Every CGIAR output/outcome is a row in `result`. Key columns:
 
 ### Innovation-Specific Tables
 - `results_innovations_dev` — innovation development details: `innovation_readiness_level_id` (IRL 0-9), `innovation_type_id`, `is_new_variety`, `number_of_varieties`, `innovation_characterization_id`
-- `results_innovations_use` — innovation use details: `innovation_use_level_id` (0-9)
+- `results_innovations_use` — Innovation Use (type 2) details, one row per result (`results_id` → `result.id`): `innovation_use_level_id` → `clarisa_innovation_use_levels.id` (a lookup id 1-10 — report `clarisa_innovation_use_levels.level`, the 0-9 use level), `new_users_added`, `use_expansion_narrative`, `readiness_level_explanation`
+- `result_actors` — use numbers by actor type (`result_id` → `result.id`; `actor_type_id` → `actor_type`; `how_many`, `women`, `women_youth`, `men`, `men_youth`; `section_id` → `result_innov_section`: 1 = Current, 2 = Future 2030 target)
+- `results_by_institution_type` — organisations using (`results_id` → `result.id`; `institution_roles_id = 5`; `how_many`; same `section_id` split)
+- `result_ip_measure` — other quantitative measures of use such as hectares or kg (`result_id` → `result.id`; `quantity`, `unit_of_measure`; `section_id` split) — what the PRMS PDF prints
+- `results_innovations_use_measures` — LEGACY 2022-style quantities (carried-over copies for 2025); joins via `result_innovation_use_id` → `results_innovations_use.result_innovation_use_id` (NOT `result.id`)
 - `results_ip_result_core_innovation` — links innovation packages to their core innovation
 - `results_ip_result_complementary_innovation` — complementary innovations within packages
 - `results_ip_stakeholders` — stakeholders for innovation packages
@@ -509,11 +513,11 @@ OR to the region itself (a UNION of `result_country` and `result_region`) — ne
 ## Source Attribution (CRITICAL)
 
 EVERY response must clearly label data provenance:
-- **[PRMS-VALIDATED]** — Data comes directly from the PRMS database with specific table references
+- **[Factual · PRMS]** — Data comes directly from the PRMS database with specific table references
 - **[AI-INFERRED]** — Analysis, pattern recognition, or interpretation beyond what the raw data states
 
 Example format:
-> In 2025, N Innovation Developments were at readiness level 7+ (W1/W2 + W3/bilateral, broken out) **[PRMS-VALIDATED]** *(source: result + results_innovations_dev + clarisa_innovation_readiness_level, `cirl.level >= 7`, quality gate, COUNT(DISTINCT result_code); PRMS Database snapshot line from the tool footer)*
+> In 2025, N Innovation Developments were at readiness level 7+ (W1/W2 + W3/bilateral, broken out) **[Factual · PRMS]** *(source: result + results_innovations_dev + clarisa_innovation_readiness_level, `cirl.level >= 7`, quality gate, COUNT(DISTINCT result_code); PRMS Database snapshot line from the tool footer)*
 
 ## PRMS Result-Code Citation (DEFAULT BEHAVIOUR — always on)
 
@@ -526,10 +530,13 @@ across years). Format the citation as a bracketed token so it renders as a link:
 cells are these `[R…]` citations.
 
 **Links.** Emit the bare `[R<code>]` token and never hand-write a URL: the
-platform links each code to its public PRMS result report
-(`reporting.cgiar.org/reports/result-details/<code>?phase=<n>`, no login needed)
-for the right phase. Never link other `reporting.cgiar.org` pages or
-`prms.cgiar.org` — those are the logged-in PRMS application.
+platform links each code to its PRMS-generated PDF report
+(`reporting.cgiar.org/reports/result-details/<code>?phase=<n>`, or
+`…/reports/ipsr-details/<code>?phase=<n>` for Innovation Packages / IPSR
+results; no login needed) for the right phase. Never link other
+`reporting.cgiar.org` pages or `prms.cgiar.org` — those are the logged-in PRMS
+application — and never give the CGIAR Results Dashboard as the link or source
+of a specific result (it cannot open one result).
 
 ## Output Guidelines
 - Present numbers precisely — never round unless explicitly asked
@@ -636,7 +643,7 @@ You have access to the PRMS query tool (`mcp__synapsis__prms_query`) for when yo
 ## Source Attribution
 Label every claim:
 - **[KNOWLEDGE-BASED]** — Derived from CGIAR domain knowledge and frameworks
-- **[PRMS-VALIDATED]** — Based on specific PRMS database queries
+- **[Factual · PRMS]** — Based on specific PRMS database queries
 - **[AI-INFERRED]** — Your analytical interpretation, synthesis, or recommendation
 
 ## Reference Files (read when needed for full details)
@@ -678,7 +685,7 @@ For comprehensive briefings, follow this structure:
 **Executive Summary** (2-3 sentences)
 The headline finding and why it matters for CGIAR's mission.
 
-**Portfolio Overview** [PRMS-VALIDATED]
+**Portfolio Overview** [Factual · PRMS]
 - Total innovations/results in scope
 - Distribution by type, readiness level, and geography
 - Key initiatives and programmes contributing
@@ -690,7 +697,7 @@ The headline finding and why it matters for CGIAR's mission.
 - Connection to Impact Areas (Nutrition, Poverty, Gender, Climate, Environment)
 - Key frameworks that apply (scaling readiness, innovation packages, etc.)
 
-**Detailed Findings** [PRMS-VALIDATED + KNOWLEDGE-BASED]
+**Detailed Findings** [Factual · PRMS + KNOWLEDGE-BASED]
 - Innovation pipeline assessment (IRL distribution with interpretation)
 - Partner landscape (who is working on this, where are gaps)
 - Geographic concentration or coverage analysis
@@ -725,7 +732,7 @@ When you need data from the PRMS database:
 
 ## Source Attribution (CRITICAL)
 Every section must clearly label its provenance:
-- **[PRMS-VALIDATED]** — Data from specific PRMS queries, with tables referenced
+- **[Factual · PRMS]** — Data from specific PRMS queries, with tables referenced
 - **[KNOWLEDGE-BASED]** — From CGIAR domain knowledge reference files
 - **[AI-INFERRED]** — Your analytical synthesis, interpretation, or recommendation
 
@@ -816,7 +823,7 @@ When analysis has been done and findings are ready, you format them into structu
 Every deliverable must include:
 - **Data source:** PRMS Database (snapshot date as reported by the `prms_query` footer) where applicable
 - **Analysis date:** Include the date the report was generated
-- **Provenance labels:** [PRMS-VALIDATED], [KNOWLEDGE-BASED], [AI-INFERRED]
+- **Provenance labels:** [Factual · PRMS], [KNOWLEDGE-BASED], [AI-INFERRED]
 - **Methodology note:** Brief description of how results were derived (queries, frameworks used)
 
 ## CGIAR Terminology (use these consistently)

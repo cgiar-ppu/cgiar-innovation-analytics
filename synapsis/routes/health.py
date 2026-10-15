@@ -31,6 +31,7 @@ from synapsis.config import (
     INVITED_LOGIN_ENABLED,
 )
 from synapsis.agents import SUBAGENTS
+from synapsis.prms_schema_check import check_schema
 from synapsis.auth.middleware import get_current_user, get_optional_user, resolve_role
 from synapsis.runtime_policy import (
     allowed_models_for_role,
@@ -88,6 +89,10 @@ async def health(user=Depends(get_optional_user)):
             "workspace": str(WORKSPACE),
             "auth_method": AUTH_METHOD,
             "available_models": allowed_models_for_role("admin"),
+            # PRMS data health (Marc Schut, 13 Oct 2026): expected tables
+            # missing from the loaded snapshot. ``status`` above stays "ok" —
+            # the app runs; this says whether its data is complete.
+            "prms_data": check_schema(),
         })
     return body
 
@@ -103,6 +108,11 @@ async def activity(_user=Depends(get_current_user)):
     from synapsis.server import get_activity_stats
     stats = get_activity_stats()
     return stats
+
+
+def _feedback_enabled() -> bool:
+    from synapsis.routes.feedback import feedback_enabled
+    return feedback_enabled()
 
 
 @router.get("/config")
@@ -144,6 +154,8 @@ async def get_config(user=Depends(get_optional_user)):
         "sso_enabled": SSO_ENABLED,
         "password_login_enabled": PASSWORD_LOGIN_ENABLED,
         "invited_login_enabled": INVITED_LOGIN_ENABLED,
+        # IA_FEEDBACK_ENABLED kill-switch: the "Give feedback" button hides itself.
+        "feedback_enabled": _feedback_enabled(),
     }
     if user is None:
         # QA-4 D15: the login page needs none of these; they only describe the

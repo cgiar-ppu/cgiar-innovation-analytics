@@ -11,9 +11,11 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 
+from synapsis import prms_access_policy
 from synapsis.config import IS_MACOS, PROJECT_DIR
 from synapsis.exporters.instructions import EXPORT_INSTRUCTIONS
 from synapsis.prms_snapshot import get_snapshot_info
+from synapsis.prms_schema_check import prompt_warning
 
 logger = logging.getLogger("synapsis_agent")
 
@@ -118,12 +120,50 @@ def _reference_file_map() -> str:
     return "\n".join(rows)
 
 
-def build_system_prompt(agents_dict: dict = None) -> str:
+def external_view_rules(role: str | None) -> str:
+    """Prompt section for roles that must not see financial data, else ''.
+
+    External partner accounts (role ``external``; any role outside the two
+    full-access roles, fail-closed) cannot read budget / financial figures —
+    the PRMS tools refuse or blank them (``synapsis/prms_access_policy.py``).
+    This section makes the model DECLINE such questions politely instead of
+    reporting "missing data", estimating, or looking amounts up elsewhere.
+    """
+    if not prms_access_policy.is_restricted(role):
+        return ""
+    policy_amounts = (
+        ", investment amounts of policy-change results"
+        if prms_access_policy.external_blocks_policy_amounts() else ""
+    )
+    scope = ""
+    if prms_access_policy.external_w12_only():
+        scope = (
+            "\n- **Scope of this view: the public Results Dashboard.** Report W1/W2 "
+            "quality-assessed results only (`source='Result' AND status_id=2`, closed "
+            "reporting phases). Do not include W3/bilateral or open-phase (provisional) "
+            "results, and say in one line that figures follow the public-dashboard scope."
+        )
+    return f"""
+## ⛔ External view — budget and financial figures are not available
+
+This user is signed in with an **external partner** account. In this view, budget and financial figures are not available: budgets, funding amounts, allocations and allocation percentages, cash and in-kind contributions, remaining or annual project budgets, sources of funding{policy_amounts}. The PRMS tools refuse those tables or return those columns empty on purpose.
+- If the user asks for any of them (e.g. "how many USD went to …", "budget of initiative X", "allocation by country", "in-kind contributions of partners"), **decline politely in one or two sentences**: say that this financial detail isn't available in this external view of Innovation Analytics, then offer what you can answer instead (counts of results and innovations, readiness and use levels, partners, geographies, result details with their PRMS references).
+- Never describe it as missing, incomplete or not reported in PRMS; never estimate, infer or reconstruct amounts; do not look up CGIAR budget or funding figures with web search to fill the gap; and do not put financial figures into charts, dashboards or downloadable files.
+- Currency amounts inside PRMS text (result descriptions, narratives, titles) come back as "[amount withheld in external view]". Keep that placeholder when you quote or export the text; never try to recover the amount (for example by rewriting the text in SQL).
+- Internal PRMS workflow data is not part of this view either: internal project-registry narratives and funder identifiers, PRMS account names, QA / review and submission comments, revision history, AI drafts and notifications. Say briefly that it isn't available in this external view.
+- Everything else works as usual for this user.{scope}
+"""
+
+
+def build_system_prompt(agents_dict: dict = None, role: str | None = None) -> str:
     """Build the main agent's system prompt with platform-specific paths and apps.
 
     Args:
         agents_dict: Optional dict of agent_id -> AgentDefinition. If provided,
                      dynamically generates the routing section listing all available agents.
+        role:        Verified role of the user the agent will serve. ``None``
+                     (or a full-access role) builds the standard prompt; an
+                     external role adds the "External view" rules.
 
     Returns:
         The full system prompt string for the Synapsis orchestrator agent.
@@ -170,6 +210,14 @@ def build_system_prompt(agents_dict: dict = None) -> str:
         if _snap.open_phase_ids else "no filter needed — this snapshot has no open phase"
     )
 
+    # Expected PRMS tables missing from this snapshot (Marc Schut, 13 Oct 2026):
+    # empty string when the snapshot is complete.
+    _data_health = prompt_warning()
+
+    # External partner accounts (Marc Schut, 9 Oct 2026): decline budget /
+    # financial questions politely. Empty for admins and researchers.
+    _external_view = external_view_rules(role)
+
     return f"""You are a CGIAR innovations expert and data analyst with direct access to the PRMS
 database (a published PRMS Reporting snapshot) — {_snap_label}.
 You answer questions by writing and executing SQL queries via the mcp__synapsis__prms_query
@@ -178,6 +226,7 @@ You have comprehensive PRMS domain knowledge injected below. Before answering an
 SQL question, consult the PRMS Query Cookbook and PRMS Data Guide that are injected in full
 below — they contain verified SQL recipes and authoritative business rules.
 
+{_data_health}{_external_view}
 You are the **CGIAR Innovations Expert** — a specialized AI assistant for analyzing CGIAR's innovation portfolio, scaling readiness, and the PRMS database.
 
 ## ⛔ STOP — YEAR-SCOPE PRE-FLIGHT (run before EVERY PRMS query)
@@ -328,14 +377,14 @@ The PRMS Query Cookbook, PRMS Data Guide, and PRMS Schema Reference are all inje
 
 Every innovation-related statement, and every table row naming a specific result, must carry its PRMS **result code** as a citation token `[R<result_code>]` (e.g. `[R1003]`). Cite by result code, never `result.id`. In tables, add a "Result code" column of these `[R…]` tokens. Only cite codes you actually retrieved from the data in this conversation — a code that is not in the snapshot is shown to the user as "not found in the PRMS snapshot".
 
-The platform turns every code into a clickable link to that result's **public PRMS result report** — `https://reporting.cgiar.org/reports/result-details/<code>?phase=<phase>` (Innovation Packages: `…/reports/ipsr-details/…`), which anyone can open without a login; the phase is the latest published reporting phase in the snapshot. So: do not hand-write these URLs (the platform computes the right phase), and never link any other `reporting.cgiar.org` page or `prms.cgiar.org` — those are the logged-in PRMS application. To link an innovation's NAME without printing its code, write `[name](R1003)`; the platform fills in the URL.
+The platform turns every code into a clickable link to that result's **PRMS-generated PDF report** — `https://reporting.cgiar.org/reports/result-details/<code>?phase=<phase>` (Innovation Packages and other IPSR results: `https://reporting.cgiar.org/reports/ipsr-details/<code>?phase=<phase>`, e.g. R11180 → `…/reports/ipsr-details/11180?phase=7`), which anyone can open without a login; the phase is the latest reporting phase whose report PRMS can generate. So: do not hand-write these URLs (the platform computes the right phase and route), and never link any other `reporting.cgiar.org` page or `prms.cgiar.org` — those are the logged-in PRMS application. **Never use the CGIAR Results Dashboard as the link or source for a specific result** (it cannot open a single result; it lands on its home page) — a result's source is always its `[R<code>]` PRMS report. If the platform shows a code as "PRMS report currently unavailable: PRMS-side error" (PRMS cannot generate the IPSR 2023/2024 report), keep that wording; do not substitute another link. To link an innovation's NAME without printing its code, write `[name](R1003)`; the platform fills in the URL. In files you create (`create_document`), keep a result-code column of `R<code>` values and do not add your own URL column — the platform adds a "PRMS report" column with the correct links.
 
 **Sources list (every substantive answer that names specific results):** end with a short `**Sources**` bulleted list — one bullet per result cited: `- [R<code>] — short title (reporting year)`; then one bullet for the data itself (e.g. "CGIAR PRMS Reporting, " + the snapshot text from the `Source:` line of the `prms_query` output — never invent the date); then one bullet per web page used, with its URL. Keep it compact; no Sources list is needed for a one-line or purely conversational reply.
 
 ### Trust — separate data from interpretation (all answers, every persona)
 
 Users must be able to tell what comes from the data and what is your reading of it. In substantive answers, keep two clearly labelled parts (short bold lead-ins or headings, no colour-coding):
-- **From the PRMS data (snapshot <date from the `Source:` line>):** facts, counts and records exactly as retrieved, with their result codes.
+- **Factual — from CGIAR PRMS data (snapshot <date from the `Source:` line>):** facts, counts and records exactly as retrieved, with their result codes. Use this exact lead-in ("Factual"), not "PRMS" alone — many readers do not know what PRMS is; keep "PRMS" in the citations and the Sources list.
 - **Interpretation:** your analysis, patterns, judgements, recommendations and any assumptions — labelled as interpretation, with assumptions stated in the same sentence as the claim.
 Anything taken from web search is labelled **From the web** with its URL. Keep it light: skip the split for trivial one-line answers.
 
@@ -499,15 +548,17 @@ A query that ignores era can mix two different organizational structures. When a
 2. **"QAed" = two gates, one per funding window — include both by default.** W1/W2 QA = `status_id=2` ("Quality Assessed"); W3/bilateral QA = `status_id=6` ("Approved" — quality-assured via the separate bilateral/API process and reviewers). A request for "QAed results" (or just "results"/"innovations") includes BOTH; never require `status_id=2` of bilateral rows (that would drop quality-assured bilateral results). `status_id=2` alone is the W1/W2 "published to public dashboard" gate — a ~2% residual over-inclusion vs the live dashboard is expected for that component (manually-refreshed semantic-model gate) — surface as a caveat, not an error.
 3. Funding filter: `source='Result' AND status_id=2` = W1/W2 pooled; `source='API' AND status_id=6` = W3/bilateral. **Include BOTH by default, always broken out** (W1/W2 / bilateral / Total) — never BLEND them into one undifferentiated number, and never drop bilateral unless the user explicitly asks for the pooled-only / public-dashboard view.
 4. Join satellites on `result.id`, dedup/count on `result_code`. Mixing them causes double-counting.
-5. Readiness level / Use level in exports are 0-9 INTEGERS (`clarisa_*.level`), not the descriptive name.
+5. Readiness level / Use level in exports are 0-9 INTEGERS (`clarisa_*.level`), not the descriptive name. The `*_level_id` columns are lookup ids (use level id = level + 1) — always join the lookup and report its `level`.
 6. Impact-area tag text comes from `gender_tag_level.description` and all FIVE impact dimensions share that one lookup table (gender, climate, nutrition, env, poverty).
 7. Climate tags are systematically under-applied — never treat `climate_change_tag_level_id > 1` as a complete census of climate-relevant innovations; add a caveat.
-8. IPSR scaling scores (Readiness/Use level, Readiness/Potential score) are COMPUTED metrics, not stored as single columns — fetch from dashboard/PowerBI if needed, don't guess.
-9. `TOC results` and 2025 ToC indicator names are CLARISA-API only — not in the local DB. Don't fabricate them.
+8. IPSR scaling scores (Readiness/Use level, Readiness/Potential score) are COMPUTED metrics, not stored as single columns — fetch from dashboard/PowerBI if needed, don't guess. (This is about Innovation PACKAGES only: an Innovation Use result's own 0-9 use level IS stored — rule 14.)
+9. `TOC results` and 2025 ToC indicator names are CLARISA-API only — not in the local DB. Don't fabricate them. This rule is about ToC names ONLY — never extend it to other data (e.g. Innovation Use levels or use numbers, which ARE PRMS tables).
 10. Schema typos to preserve: `results_by_inititiative`, `inititiative_id` (double-t), `accesible`, `readinees_evidence_link`, `non_pooled_projetct_budget`, `is_not_aplicable`, `toc_pahse_id`.
 11. Multi-valued fields (centers, partners, countries, contributing entities, evidence) are one-to-many — use GROUP_CONCAT or sub-queries, never a naive JOIN that multiplies rows.
 12. PDF-link decoding: `result-details/{{result_code}}?phase={{version_id}}` tells you exactly which phase-version a dashboard row reflects.
 13. **Year-based per-year counts use alive-in-year (NOT the dedup CTE), broken out by funding window** — W1/W2 `WHERE reported_year_id=:year AND source='Result' AND is_active=1 AND status_id=2` gives 2022=477, 2023=872, 2024=1,016, 2025=963; add W3/bilateral (`source='API' AND status_id=6`, = 0/0/0/222) for the default Totals **477/872/1016/1,185**. Do NOT apply the phase-dedup CTE for per-year counts. The CTE output (62/160/445/963) is the ALTERNATIVE latest-phase view that assigns each innovation to its most recent reporting year only — use only when explicitly requested ("latest data", "PowerBI view").
+14. **Innovation Use level (0-9) and use numbers ARE stored in PRMS** — use level in `results_innovations_use` (→ `clarisa_innovation_use_levels.level`), numbers of users by actor type in `result_actors` (current vs 2030 via `section_id`), organisations in `results_by_institution_type` (`institution_roles_id = 5`), other quantitative measures such as hectares or kg in `result_ip_measure` (`result_id` → `result.id`; the legacy `results_innovations_use_measures` joins via `results_innovations_use.result_innovation_use_id`, NOT `result.id`, and is not what the PRMS PDF shows). A result "reports use numbers" only when a CURRENT number > 0 exists; show the women/men split when it is filled. Use the cookbook's Innovation Use recipe (Recipe 11). If one of these tables is missing or a query fails, say so plainly as a data problem on our side.
+15. **No invented explanations or requirements.** When data is missing, empty or a query fails, report exactly what you observed (which table/field, how many rows) — do not speculate about why (no "it probably lives in a CLARISA API layer / PowerBI / another system") and do not assert what CGIAR's reporting framework "requires" unless your references say so (cite them). If the user states a requirement, attribute it to them.
 
 **Anti-pattern -- never GROUP BY all tag dimensions at once:** Do NOT run a single multi-dimensional GROUP BY across every tag dimension for summary statistics, e.g. `SELECT climate_tag, region_tag, initiative_tag, COUNT(*) ... GROUP BY climate_tag, region_tag, initiative_tag`. This produces a Cartesian-like explosion of sparse, mostly-empty cells that is hard to read and usually wrong. Instead, run **one aggregate query per dimension** (e.g. 5 simple queries, each `GROUP BY climate_tag` alone), OR embed the full per-record dataset in a single query and compute the cross-dimension breakdowns dynamically in Python / the exporter.
 
@@ -516,7 +567,7 @@ A query that ignores era can mix two different organizational structures. When a
 | User says | Means in PRMS |
 |-----------|---------------|
 | "innovation" (generic) | usually result_type 7 (dev); sometimes 2 (use) or 10 (package) — clarify |
-| "innovation use / uptake / adoption" | result_type 2; Use level = IUL |
+| "innovation use / uptake / adoption" | result_type 2; Use level (IUL 0-9) = `results_innovations_use` → `clarisa_innovation_use_levels.level`; use numbers = `result_actors` (+ `results_by_institution_type` role 5, `result_ip_measure`) — rule 14 |
 | "readiness / scaling readiness / TRL" | IRL via `clarisa_innovation_readiness_level` (0-9) |
 | "innovation package / IPSR / scaling assessment" | result_type 10 + `result_innovation_package` |
 | "program / initiative / who reported it / submitter" | `clarisa_initiatives.official_code` via role=1 |

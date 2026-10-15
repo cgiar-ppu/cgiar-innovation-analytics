@@ -48,6 +48,7 @@ export function FileList() {
       <div className="flex gap-2 p-3">
         <button
           onClick={() => fileInputRef.current?.click()}
+          data-track="files.upload"
           className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-white text-xs font-medium
             shadow-sm hover:shadow-md transition-all"
           style={{ background: 'var(--user-bubble)' }}
@@ -71,6 +72,7 @@ export function FileList() {
           <button
             key={file.name}
             onClick={() => handleDownload(file.name)}
+            data-track="files.download"
             className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-surface-2 transition-colors text-left rounded-xl my-0.5"
           >
             <FileText size={14} className="text-accent mt-0.5 flex-shrink-0" />

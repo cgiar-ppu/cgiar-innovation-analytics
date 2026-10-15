@@ -15,7 +15,7 @@
 import type { Session, FileInfo, AppConfig, HealthStatus, ChatMessage, SearchResult, TTSVoice, TTSSettings } from './types'
 import { isSuppressedSystemMessage } from '../stores/chat/systemMessageFilter'
 import { getAuthToken } from '../stores/auth'
-import type { AdminUsage } from './types/usage'
+import type { AdminEngagement, AdminUsage } from './types/usage'
 
 const BASE = ''
 
@@ -264,6 +264,14 @@ export const api = {
 
   /** Admin-only usage summary (per-day turns, users, cost by role/model, voice). */
   getAdminUsage: (days = 14) => get<AdminUsage>(`/api/admin/usage?days=${days}`),
+  /** Admin-only engagement read-out: questions, clicks, session length per day/user/cohort (SYN-2305). */
+  getAdminEngagement: (days = 14) => get<AdminEngagement>(`/api/admin/engagement?days=${days}`),
+  /** Admin-only engagement CSV (one row per day x user), as a Blob for download. */
+  getAdminEngagementCsv: async (days = 14): Promise<Blob> => {
+    const res = await fetch(`${BASE}/api/admin/engagement.csv?days=${days}`, { headers: authHeaders() })
+    if (!res.ok) throw new Error(`GET /api/admin/engagement.csv: ${res.status}`)
+    return res.blob()
+  },
 
   /** Returns the list of all chat sessions. */
   getSessions: (keep?: string | null) =>

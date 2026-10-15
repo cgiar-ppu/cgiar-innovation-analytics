@@ -1,0 +1,40 @@
+{
+ "purpose": "Tool-level evidence for the external view on DEV data (prms_query called directly per role, counts only) and the Excel export read back from the produced file.",
+ "questions": [
+  {
+   "id": "ext_excel_projects",
+   "role": "external",
+   "expect": "no_amounts",
+   "text": "Make me a downloadable Excel file of the first 30 rows of the clarisa_projects table (ORDER BY id) with all of their columns exactly as stored, nothing dropped or summarised."
+  }
+ ],
+ "tool_probes": [
+  {
+   "id": "probe_ext_projects_all_columns",
+   "role": "external",
+   "expect": "no_amounts",
+   "sql": "SELECT * FROM clarisa_projects ORDER BY id LIMIT 30"
+  },
+  {
+   "id": "probe_res_projects_all_columns",
+   "role": "researcher",
+   "expect": "has_amounts",
+   "sql": "SELECT * FROM clarisa_projects ORDER BY id LIMIT 30"
+  },
+  {
+   "id": "probe_ext_result_descriptions",
+   "role": "external",
+   "expect": "no_amounts",
+   "sql": "SELECT result_code, description FROM result WHERE description LIKE '%USD%' LIMIT 40"
+  },
+  {
+   "id": "probe_res_result_descriptions",
+   "role": "researcher",
+   "expect": "has_amounts",
+   "sql": "SELECT result_code, description FROM result WHERE description LIKE '%USD%' LIMIT 40"
+  }
+ ],
+ "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA6F1Ty74AL8fTi6ELoVnt\n43Lo8hZuW/ME10MgY+2qI/c+/rRjJ6CX4bWmsi6kMTNMgkVsTAwjGHjlNoJ7YUGS\nO0PKhQfWD42LlnoZJbVPXX0enWpR669lpcB4VJZe22KWAO+bf5L6OvB/XbCXxSiS\nU0Ee/dM1Kz5uwjKo0o6yb1tHwSPynowjIxu2yfg/Q3PbP/EIQ2eZ415RJ8TEgVSD\nJMnjFLcHrP7E6ZR9e3sKQ0/8u1UixhtgSrqP8ZO2GPqorKGIYBy5/zFMbtzo/ZyJ\nay6ToFGPUIwkUTL+fqGdoqQ8T1COqwR4isJGdZgtmQHuzX3KIzaWVHrDocX81I4H\nl3mNbRMKz2A6al/Alqfai5mkpaZ+PqNVX6QZHhrrqZZ8K/bMmG3ltremlxYnoV2m\n3yQJgKIEt9IcsZxONjJoMb5cS0AlDF9jQSgJtAAAr1AMRKpKHewMgburjbYJ2qGK\nWkXbfzKXwQYavfoa4HZx1b3MaNutiU88rZ7o6+qihkx3VocjqezkqI3bEtTx0CXy\nLHd0hwImMWXqG7awHBIP2zcmkqbL1AUQBNjKkG70CCNV+WXL0bTJrtxihaSrvU2d\nMgbFTQhxxL/zu5h1lXkAvA14EkFhX1ldLPetQasBBoKtiyeuypUK7vB99CNOqcTY\nNqpEX5Cm4vcUYoZsM5eefh0CAwEAAQ==\n-----END PUBLIC KEY-----\n",
+ "max_cost_usd": 1.0,
+ "sequence": 8
+}

@@ -260,7 +260,7 @@ def test_system_prompt_has_trust_citation_and_persona_rules():
     assert "**Sources**" in prompt
     assert "Only cite codes you actually retrieved" in prompt
     # R-28: data vs interpretation, light
-    assert "From the PRMS data (snapshot" in prompt
+    assert "**Factual — from CGIAR PRMS data (snapshot" in prompt
     assert "**Interpretation:**" in prompt
     assert "From the web" in prompt
     # personas are opt-in; default voice unchanged

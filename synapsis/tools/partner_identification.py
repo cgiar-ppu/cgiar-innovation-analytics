@@ -9,7 +9,7 @@ Approach:
    (initiatives, countries, regions, innovation types, result types)
 2. Enrich with web search for potential new partners not yet in PRMS
 3. Return structured results with clear source attribution:
-   - [PRMS-VALIDATED] for partners with documented PRMS history
+   - [Factual · PRMS] for partners with documented PRMS history
    - [WEB-SOURCED] for suggested partners found via search
 
 The tool handles sparse data gracefully -- if PRMS has no partners for a
@@ -25,6 +25,8 @@ import time
 from typing import Any
 
 from claude_agent_sdk import tool
+
+from synapsis import prms_access_policy
 
 from synapsis.utils.responses import error_response, success_response
 from synapsis.prms_snapshot import get_snapshot_info
@@ -80,10 +82,17 @@ PARTNERSHIP_ROLE_NAMES: dict[int, str] = {
 # ---------------------------------------------------------------------------
 
 def _get_connection() -> sqlite3.Connection:
-    """Get read-only PRMS database connection."""
+    """Get read-only PRMS database connection.
+
+    The PRMS access policy is installed for the caller's verified role (the
+    queries here are fixed and read no financial data; the policy is defence
+    in depth so a future query cannot hand budget figures to an external role).
+    """
     if not os.path.isfile(PRMS_DB_PATH):
         raise FileNotFoundError(f"PRMS database not found: {PRMS_DB_PATH}")
-    return sqlite3.connect(f"file:{PRMS_DB_PATH}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"file:{PRMS_DB_PATH}?mode=ro", uri=True)
+    prms_access_policy.install(conn, prms_access_policy.caller_role())
+    return conn
 
 
 #: Default PRMS quality gate (both funding windows): W1/W2 "Quality Assessed"
@@ -112,7 +121,10 @@ def _query_rows(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[
     cur = conn.cursor()
     cur.execute(sql, params)
     cols = [d[0] for d in cur.description]
-    return [dict(zip(cols, row)) for row in cur.fetchall()]
+    rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+    # External (restricted) roles: no currency amounts in any text value
+    # (defence in depth; the fixed queries here return names and counts).
+    return prms_access_policy.redact_for_role(rows, prms_access_policy.caller_role())
 
 
 def _query_scalar(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> Any:
@@ -340,7 +352,7 @@ def _enrich_partners(conn: sqlite3.Connection, partners: list[dict]) -> list[dic
 
         # Basic info
         partner_data = {
-            "source": "PRMS-VALIDATED",
+            "source": "Factual · PRMS",
             "institution_name": p["institution_name"],
             "acronym": p.get("acronym") or "",
             "website": p.get("website_link") or "",
@@ -548,7 +560,7 @@ def _format_prms_results(partners: list[dict], query_context: str) -> str:
         lines.append("or use web search to identify potential new partners.")
         return "\n".join(lines)
 
-    lines.append("## PRMS-Validated Partners")
+    lines.append("## Partners documented in PRMS [Factual · PRMS]")
     lines.append("")
     lines.append("Partners with documented CGIAR partnership history in the specified area:")
     lines.append(
@@ -589,7 +601,7 @@ def _format_prms_results(partners: list[dict], query_context: str) -> str:
             if p.get("scaling_ready_pct") is not None:
                 lines.append(f"   **Scaling Ready (IRL 7+):** {p['scaling_ready_pct']}%")
 
-        lines.append(f"   **Source:** [PRMS-VALIDATED]")
+        lines.append(f"   **Source:** [Factual · PRMS]")
         lines.append("")
 
     return "\n".join(lines)
@@ -608,7 +620,7 @@ def _format_prms_results(partners: list[dict], query_context: str) -> str:
     "geographic coverage, and innovation readiness levels. "
     "Supports filtering by topic/keyword, country, region, initiative, result type, "
     "innovation readiness level, and partner type. "
-    "All results clearly labeled [PRMS-VALIDATED] or [WEB-SOURCED].",
+    "All results clearly labeled [Factual · PRMS] or [WEB-SOURCED].",
     {
         "topic": str,
         "country": str,
@@ -637,7 +649,7 @@ async def partner_identification(args: dict[str, Any]) -> dict[str, Any]:
 
     Returns:
         Structured partner identification results with:
-        - PRMS-validated partners with partnership metrics and history
+        - Factual (PRMS) partners with partnership metrics and history
         - Relevance scores for ranking
         - Web search instructions for discovering new partners
         - Source attribution labels
@@ -751,7 +763,7 @@ async def partner_identification(args: dict[str, Any]) -> dict[str, Any]:
 **Query executed in:** {elapsed:.2f}s
 **Source:** {get_snapshot_info(PRMS_DB_PATH).citation}
 **Partners from PRMS:** {len(partners)}
-**Attribution:** All PRMS results are [PRMS-VALIDATED]. Web search suggestions are [WEB-SOURCED].
+**Attribution:** All PRMS results are [Factual · PRMS]. Web search suggestions are [WEB-SOURCED].
 """
 
     return success_response(result_text)

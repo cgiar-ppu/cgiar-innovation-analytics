@@ -20,6 +20,7 @@ import { api } from '../../lib/api'
 import { finalizeAll, registerSetState } from './streamingHelpers'
 import { createSessionCacheActions } from './sessionCache'
 import { createHandleServerMessage } from './messageHandlers'
+import { retireRun } from './runScope'
 import { onUserStateReset } from '../userStateReset'
 
 export type { ChatState, CachedSessionState } from './types'
@@ -45,6 +46,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Finalize any orphaned streaming content BEFORE clearing the buffers.
     // Without this, partially-streamed assistant text would be silently destroyed.
     finalizeAll(get())
+    // A new turn starts: late events of the previous run are stale (runScope.ts).
+    retireRun(get().currentRunId)
 
     set((prev) => ({
       messages: [

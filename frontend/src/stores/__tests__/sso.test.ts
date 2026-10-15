@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useAuthStore } from '../auth'
+import { useAuthStore, ACK_KEY_PREFIX } from '../auth'
 
 const session = { token: 'short-app-token', user: {
   user_id: 'existing@cgiar.org', email: 'existing@cgiar.org', name: 'Existing', role: 'admin',
@@ -16,7 +16,7 @@ describe('SSO session lifecycle', () => {
 
   it('consumes the callback marker and deduplicates simultaneous initialization', async () => {
     window.history.replaceState({}, '', '/?sso=complete')
-    localStorage.setItem('ia-disclaimer-ack:existing@cgiar.org', 'true')
+    localStorage.setItem(ACK_KEY_PREFIX + 'existing@cgiar.org', 'true')
     const fetcher = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => session })
     vi.stubGlobal('fetch', fetcher)
     await Promise.all([useAuthStore.getState().initialize(), useAuthStore.getState().initialize()])

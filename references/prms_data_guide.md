@@ -524,7 +524,11 @@ GROUP BY reported_year_id ORDER BY reported_year_id;
 |-------|------|-----|
 | `result` | 32,026 (27,811 active) | Central fact table. Every result anchored here. One row per `result_code` per phase. |
 | `results_innovations_dev` | 4,867 | Innovation Development (type 7) detail. Join `results_id → result.id`. |
-| `results_innovations_use` | 599 | Innovation Use (type 2) detail. Join `results_id → result.id`. |
+| `results_innovations_use` | ~1,000 | Innovation Use (type 2) detail — **the 0-9 use level** (`innovation_use_level_id` → `clarisa_innovation_use_levels.id`, report `.level`), `new_users_added`, `use_expansion_narrative`. Join `results_id → result.id`. |
+| `result_actors` | ~12,000 | **Use numbers** by actor type (`how_many`, `women`/`men` incl. youth, `*_youth` = of which youth). Join `result_id → result.id`; `section_id` 1 = current, 2 = 2030 target. |
+| `results_by_institution_type` | ~12,000 | Organisations using, by institution type (`how_many`, `section_id`); Innovation Use organisations = `institution_roles_id = 5`. Join `results_id → result.id`. |
+| `result_ip_measure` | — | **Other quantitative measures of use** (hectares, kg …) as printed in the PRMS PDF: `quantity`, `unit_of_measure`, `section_id`. Join `result_id → result.id`. |
+| `results_innovations_use_measures` | ~180 | LEGACY 2022-style use quantities (2025 rows are carried-over copies the PDF does not show). Join `result_innovation_use_id → results_innovations_use.result_innovation_use_id` (**not** `result.id`). |
 | `result_innovation_package` | — | IPSR / package-level (PK = `result.id`). |
 | `result_by_innovation_package` | — | IPSR component innovations. Join `result_innovation_package_id`. |
 | `version` | 7 | Phase/year/portfolio. Join `result.version_id`. |
@@ -538,7 +542,7 @@ GROUP BY reported_year_id ORDER BY reported_year_id;
 | `evidence` | 49,784 | evidence links + cross-cutting flags per result. Join `result_id`. |
 | `gender_tag_level` | 3 | SHARED lookup for ALL FIVE impact tags. |
 | `clarisa_innovation_readiness_level` | 10 | IRL (`level` 0-9; `id` 11-20). |
-| `clarisa_innovation_use_levels` | 10 | IUL (`level` 0-9). |
+| `clarisa_innovation_use_levels` | 10 | IUL (`level` 0-9; `id` = level + 1). |
 
 ### Key conventions (critical)
 - **`result.id`** = phase-specific row key → **join all satellites on this**.
@@ -557,7 +561,7 @@ The dashboard **Innovation Developments "Export table"** Excel has **41 columns*
 |---|--------------|-----------|
 | 0 | Result code | `result.result_code` |
 | 1 | Year | `result.reported_year_id` (= latest-phase year) |
-| 2 | PDF link | built: `reporting.cgiar.org/.../result-details/{result_code}?phase={version_id}` |
+| 2 | PDF link | built by the platform, not by you: `reporting.cgiar.org/reports/result-details/{result_code}?phase={version_id}` (IPSR results, e.g. Innovation Packages: `…/reports/ipsr-details/…`). In answers cite `[R<result_code>]` and the platform links the PRMS PDF report; never hand-build this URL and never link the Results Dashboard for a result |
 | 3 | Funding source | `result.source` ('Result' → "Pooled funding (W1/W2)") |
 | 4 | Submitter | `clarisa_initiatives.official_code` via `results_by_inititiative` role=1 |
 | 5 | Level | `result_level.name` (always "Output" for dev) |
@@ -565,7 +569,7 @@ The dashboard **Innovation Developments "Export table"** Excel has **41 columns*
 | 7 / 8 | Title / Description | `result.title` / `result.description` |
 | 9 | Lead contact person | `result.lead_contact_person` |
 | 10–14 | Gender / Climate change / Nutrition tag / Environmental biodiversity tag / Poverty tag level | `result.*_tag_level_id` → `gender_tag_level.description` |
-| 15 | Actors | `result_actors` → `actor_type.name` + counts |
+| 15 | Actors | `result_actors` → `actor_type.name` + counts (`how_many`; `section_id` 1 = current, 2 = 2030 target) |
 | 16 / 17 | Is KRS / KRS link | `result.is_krs` / `result.krs_url` |
 | 18 | Legacy ID | `result.legacy_id` |
 | 19 | Contributing CGIAR reporting entities | `results_by_inititiative` role≠1 → official_code (GROUP_CONCAT) |
@@ -585,7 +589,7 @@ The dashboard **Innovation Developments "Export table"** Excel has **41 columns*
 | 37 | Evidences explanation | `results_innovations_dev.evidences_justification` |
 | 38–40 | Evidence 1–3 | pivot `evidence` (is_active=1) by row-number per result_id |
 
-**Innovation Use export** is a UNION of type 2 + type 10; type-specific columns include *Use level* (`clarisa_innovation_use_levels.level` via `results_innovations_use.innovation_use_level_id`), *Users by actor* (`result_actors`), and IPSR-only fields (scaling ambition, components, experts) where readiness/use/potential scores are **computed**, not stored — fetch from the dashboard/PowerBI if a user needs them.
+**Innovation Use export** is a UNION of type 2 + type 10; type-specific columns include *Use level* (`clarisa_innovation_use_levels.level` via `results_innovations_use.innovation_use_level_id` — an id, level = id − 1), *Users by actor* (`result_actors`, current section only), *Organisations* (`results_by_institution_type`, role 5), *Other quantities* (`result_ip_measure`; the legacy `results_innovations_use_measures` joins via `results_innovations_use.result_innovation_use_id`), and IPSR-only fields (scaling ambition, components, experts) where readiness/use/potential scores are **computed**, not stored — fetch from the dashboard/PowerBI if a user needs them. The IPSR computation note applies to **packages (type 10) only**: an Innovation Use (type 2) result's own 0-9 use level and use numbers ARE stored — see `prms_query_cookbook` Recipe 11.
 
 ---
 
@@ -611,7 +615,9 @@ The dashboard's per-year counts **ARE reproducible from the SQLite DB alone** us
 
 ### Other standing caveats
 - **Climate tags** are systematically under-applied — never treat `climate_change_tag_level_id > 1` as a complete census of climate-relevant innovations.
-- **IPSR computed scores** (Readiness/Use level, Readiness/Potential score) are not stored as a single column — fetch from the dashboard/PowerBI dataflow.
+- **IPSR computed scores** (Readiness/Use level, Readiness/Potential score) of Innovation PACKAGES are not stored as a single column — fetch from the dashboard/PowerBI dataflow. This does NOT apply to Innovation Use (type 2) results: their 0-9 use level is stored in `results_innovations_use` (Recipe 11).
+- **Missing table = data-loading problem, say so.** Every table named in this guide exists in PRMS. If one is absent from the loaded snapshot (`no such table`, or the DATA HEALTH warning at the top of your instructions), tell the user the data is missing from the current snapshot because of a loading problem on our side; never infer that PRMS does not collect it or that it "lives in" another system (CLARISA API, PowerBI).
+- **Restricted by design (not missing data).** A few operational tables of the PRMS web application hold credentials or personal contact data and are not available to you: `global_parameters`, `token_report_bi`, `otp_challenges`, `webhook_endpoint`, `ad_users` (queries are refused), and the e-mail/password columns of `users`, `intellectual_property_experts`, `result_ip_expert`, `result_ip_expert_workshop_organized` (they come back empty). None of them is needed for portfolio analysis; if a user asks for them, say they are not available in this tool. Do not treat the empty columns as gaps in PRMS.
 - **Lead contact person** shows ~7% drift between export and DB (name-resolution order across phases).
 - **`reported_year_id` is NULL** for ~610 rows — they fall outside the four reporting years.
 - **Live dashboard not anonymously queryable** — it is an authenticated SPA. Per-year figures above are confirmed against the export, which the reference documents as the dashboard's own per-year output.

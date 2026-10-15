@@ -32,7 +32,7 @@ from synapsis.runtime_policy import (
     PolicyError,
     current_role,
     current_user_id,
-    enforce_daily_budget,
+    enforce_spend_limits,
     fallback_model_for_role,
     is_model_allowed,
 )
@@ -272,7 +272,7 @@ async def handle_retry(
         await send_json({"type": "error", "message": "No active chat to retry in."})
         return None
 
-    await enforce_daily_budget()
+    await enforce_spend_limits(session_id)
 
     # Cancel any in-flight managed task for this session
     await chat_run_manager.cancel(session_id)
@@ -429,9 +429,10 @@ async def handle_user_message(
         )
         raise ValueError(f"Invalid agent: {exc}") from None
 
-    # Soft daily spend cap per user (admins exempt): refuse politely before
-    # any work is done. Raises DailyBudgetExceeded -> error frame.
-    await enforce_daily_budget()
+    # Cost guards, refused politely before any work is done (admins exempt
+    # from the stops): MVP test budget/window, this chat's cap, the daily cap.
+    # Raises a PolicyError subclass -> error frame with its code.
+    await enforce_spend_limits(session_id)
 
     await record_activity(time.time())
 

@@ -61,6 +61,8 @@ app = FastAPI(title="CGIAR Innovation Analytics Platform", version="0.1.0",
 # (including errors and the SPA); GZip compresses the ~2 MB of JS/CSS.
 # CORS used to be "*" + credentials in every env; it is now the env's own
 # origin (CORS_ORIGINS, else IA_SSO_ORIGIN) — see synapsis/security_headers.py.
+from synapsis.routes.feedback import FeedbackUploadLimitMiddleware  # noqa: E402  (oversized uploads: 413 before spooling)
+app.add_middleware(FeedbackUploadLimitMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(CORSMiddleware, **cors_settings())
@@ -77,6 +79,8 @@ from synapsis.routes.usage import router as usage_router  # noqa: E402  (Lane D:
 app.include_router(usage_router)
 from synapsis.routes.feedback import router as feedback_router  # noqa: E402  (Lane H: answer/voice feedback)
 app.include_router(feedback_router)
+from synapsis.routes.telemetry import router as telemetry_router  # noqa: E402  (SYN-2305: first-party usage events)
+app.include_router(telemetry_router)
 app.include_router(files_router)
 app.include_router(sessions_router)
 app.include_router(query_router)
@@ -208,7 +212,12 @@ _novnc_dir = "/usr/share/novnc"
 if os.path.isdir(_novnc_dir):
     app.mount("/vnc", StaticFiles(directory=_novnc_dir), name="novnc")
 
-# -- Static assets (JS, CSS, images) --
+# -- Static assets (JS, CSS, images, self-hosted fonts) --
+# Python 3.12's mimetypes table has no .woff2 entry (served as
+# application/octet-stream with nosniff); register the proper font type.
+import mimetypes
+mimetypes.add_type("font/woff2", ".woff2")
+mimetypes.add_type("font/woff", ".woff")
 _static_dir = Path("static")
 if _static_dir.is_dir():
     app.mount("/assets", StaticFiles(directory=str(_static_dir / "assets")), name="assets")

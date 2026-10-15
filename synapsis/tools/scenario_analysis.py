@@ -11,7 +11,7 @@ Scenario types:
 - portfolio_focus:  Model portfolio-wide emphasis shifts
 
 All outputs are clearly labeled [SCENARIO-MODELED] to distinguish from
-[PRMS-VALIDATED] data directly from the PRMS database.
+[Factual · PRMS] data directly from the PRMS database.
 """
 
 import json
@@ -22,6 +22,8 @@ import sqlite3
 from typing import Any
 
 from claude_agent_sdk import tool
+
+from synapsis import prms_access_policy
 
 from synapsis.utils.responses import error_response, success_response
 from synapsis.prms_snapshot import get_snapshot_info, resolve_db_path
@@ -60,11 +62,36 @@ SENSITIVITY_BAND: float = 0.20            # +/-20% for optimistic/pessimistic
 # ---------------------------------------------------------------------------
 
 
+def _allocation_proxy_note() -> str:
+    """Assumption 1 of every scenario, worded for the caller's role.
+
+    External partner accounts get no budget figures at all, so their wording
+    does not refer to PRMS budget coverage.
+    """
+    if prms_access_policy.is_restricted(prms_access_policy.caller_role()):
+        return (
+            "1. Result counts used as proxy for resource allocation "
+            "(financial figures are not part of this external view) [DATA-LIMITATION]"
+        )
+    return (
+        "1. Result counts used as proxy for resource allocation "
+        "(budget data covers only 5.6% of results) [DATA-LIMITATION]"
+    )
+
+
+
 def _get_connection() -> sqlite3.Connection:
-    """Get read-only PRMS database connection."""
+    """Get read-only PRMS database connection.
+
+    The PRMS access policy is installed for the caller's verified role (the
+    queries here are fixed and read no financial data; the policy is defence
+    in depth so a future query cannot hand budget figures to an external role).
+    """
     if not os.path.isfile(PRMS_DB_PATH):
         raise FileNotFoundError(f"PRMS database not found: {PRMS_DB_PATH}")
-    return sqlite3.connect(f"file:{PRMS_DB_PATH}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"file:{PRMS_DB_PATH}?mode=ro", uri=True)
+    prms_access_policy.install(conn, prms_access_policy.caller_role())
+    return conn
 
 
 def _query_rows(conn: sqlite3.Connection, sql: str) -> list[dict]:
@@ -72,7 +99,10 @@ def _query_rows(conn: sqlite3.Connection, sql: str) -> list[dict]:
     cur = conn.cursor()
     cur.execute(sql)
     cols = [d[0] for d in cur.description]
-    return [dict(zip(cols, row)) for row in cur.fetchall()]
+    rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+    # External (restricted) roles: no currency amounts in any text value
+    # (defence in depth; the fixed queries here return names and counts).
+    return prms_access_policy.redact_for_role(rows, prms_access_policy.caller_role())
 
 
 def _query_scalar(conn: sqlite3.Connection, sql: str) -> Any:
@@ -90,7 +120,7 @@ def _query_scalar(conn: sqlite3.Connection, sql: str) -> Any:
 # L2-06 (2026-09-26): the baselines used to be raw ROW counts over every status,
 # phase and year (COUNT(*) with is_active=1 only) — "4,391 innovations" against
 # the canonical 1,852 and "1,836 IRL 7+" against ~850 — yet were labelled
-# [PRMS-VALIDATED] with no snapshot date. They are now built on ONE canonical
+# [Factual · PRMS] with no snapshot date. They are now built on ONE canonical
 # population, the same counting rules as the dashboard and the agent prompt:
 #
 #   * quality gate: W1/W2 'Quality Assessed' (source='Result', status_id=2) OR
@@ -1033,12 +1063,12 @@ def _format_reallocation_response(
     lines.append("")
     lines.append(
         "> **[SCENARIO-MODELED]** These projections are modeled estimates based on PRMS baseline data "
-        "and analytical assumptions. They are NOT PRMS-validated predictions."
+        "and analytical assumptions. They are NOT factual PRMS data."
     )
     lines.append("")
 
     # Baseline
-    lines.append("### Baseline (Current Portfolio) [PRMS-VALIDATED]")
+    lines.append("### Baseline (Current Portfolio) [Factual · PRMS]")
     lines.append(baseline_provenance())
     lines.append("")
     lines.append("| Metric | Value |")
@@ -1106,8 +1136,7 @@ def _format_reallocation_response(
     # Assumptions
     lines.append("### Key Assumptions")
     lines.append(
-        "1. Result counts used as proxy for resource allocation "
-        "(budget data covers only 5.6% of results) [DATA-LIMITATION]"
+        _allocation_proxy_note()
     )
     lines.append(f"2. Diminishing returns factor: {DIMINISHING_RETURNS_FACTOR}x for reallocated capacity")
     lines.append(f"3. Sensitivity band: +/-{SENSITIVITY_BAND * 100:.0f}% for optimistic/pessimistic bounds")
@@ -1139,12 +1168,12 @@ def _format_irl_response(
     lines.append("")
     lines.append(
         "> **[SCENARIO-MODELED]** These projections are modeled estimates based on PRMS baseline data "
-        "and analytical assumptions. They are NOT PRMS-validated predictions."
+        "and analytical assumptions. They are NOT factual PRMS data."
     )
     lines.append("")
 
     # Baseline
-    lines.append("### Baseline (Current Portfolio) [PRMS-VALIDATED]")
+    lines.append("### Baseline (Current Portfolio) [Factual · PRMS]")
     lines.append(baseline_provenance())
     lines.append("")
     lines.append("| Metric | Value |")
@@ -1212,8 +1241,7 @@ def _format_irl_response(
     # Assumptions
     lines.append("### Key Assumptions")
     lines.append(
-        "1. Result counts used as proxy for resource allocation "
-        "(budget data covers only 5.6% of results) [DATA-LIMITATION]"
+        _allocation_proxy_note()
     )
     lines.append(f"2. IRL 6->7 'valley of death' factor: {IRL_VALLEY_OF_DEATH_FACTOR}x advancement rate")
     lines.append(f"3. Sensitivity band: +/-{SENSITIVITY_BAND * 100:.0f}% for optimistic/pessimistic bounds")
@@ -1245,12 +1273,12 @@ def _format_scaling_response(
     lines.append("")
     lines.append(
         "> **[SCENARIO-MODELED]** These projections are modeled estimates based on PRMS baseline data "
-        "and analytical assumptions. They are NOT PRMS-validated predictions."
+        "and analytical assumptions. They are NOT factual PRMS data."
     )
     lines.append("")
 
     # Baseline
-    lines.append("### Baseline (Current Portfolio) [PRMS-VALIDATED]")
+    lines.append("### Baseline (Current Portfolio) [Factual · PRMS]")
     lines.append(baseline_provenance())
     lines.append("")
     lines.append("| Metric | Value |")
@@ -1326,8 +1354,7 @@ def _format_scaling_response(
     # Assumptions
     lines.append("### Key Assumptions")
     lines.append(
-        "1. Result counts used as proxy for resource allocation "
-        "(budget data covers only 5.6% of results) [DATA-LIMITATION]"
+        _allocation_proxy_note()
     )
     lines.append(
         f"2. Diminishing returns: scale_factor^{SCALING_EXPONENT} "
@@ -1367,12 +1394,12 @@ def _format_focus_response(
     lines.append("")
     lines.append(
         "> **[SCENARIO-MODELED]** These projections are modeled estimates based on PRMS baseline data "
-        "and analytical assumptions. They are NOT PRMS-validated predictions."
+        "and analytical assumptions. They are NOT factual PRMS data."
     )
     lines.append("")
 
     # Baseline
-    lines.append("### Baseline (Current Portfolio) [PRMS-VALIDATED]")
+    lines.append("### Baseline (Current Portfolio) [Factual · PRMS]")
     lines.append(baseline_provenance())
     lines.append("")
     lines.append("| Metric | Value |")
@@ -1467,8 +1494,7 @@ def _format_focus_response(
     # Assumptions
     lines.append("### Key Assumptions")
     lines.append(
-        "1. Result counts used as proxy for resource allocation "
-        "(budget data covers only 5.6% of results) [DATA-LIMITATION]"
+        _allocation_proxy_note()
     )
     if focus_area == "scaling_ready":
         lines.append(
@@ -1504,7 +1530,7 @@ def _format_focus_response(
     "Models hypothetical changes (resource reallocation, innovation pipeline "
     "advancement, output scaling, portfolio focus shifts) against current PRMS "
     "baseline data. Returns structured comparison with sensitivity analysis. "
-    "Results are clearly labeled [SCENARIO-MODELED] distinct from [PRMS-VALIDATED] data.",
+    "Results are clearly labeled [SCENARIO-MODELED] distinct from [Factual · PRMS] data.",
     {
         "scenario_type": str,
         "description": str,

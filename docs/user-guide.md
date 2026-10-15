@@ -110,7 +110,7 @@ A few practical suggestions to get the most out of the platform:
 - **Use scenario analysis for strategic planning.** When you are preparing for a planning meeting or exploring options, the "what if" feature is designed for exactly that. Frame your question as a hypothetical: "What would happen if..."
 
 - **Pay attention to data labels.** The platform clearly marks its responses:
-  - **[PRMS-VALIDATED]** means the data comes directly from the PRMS database — these are confirmed facts.
+  - **[Factual · PRMS]** means the data comes directly from the PRMS database — these are confirmed facts.
   - **[SCENARIO-MODELED]** means the numbers are projections based on a hypothetical scenario — useful for planning, but not actual data.
   - **[WEB-SOURCED]** (in partner searches) means a suggestion found via web research, not a documented PRMS partnership.
 

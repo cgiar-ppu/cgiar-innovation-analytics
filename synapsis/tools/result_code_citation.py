@@ -35,12 +35,38 @@ How a code becomes a URL (deterministic)
 The mapping is a lookup in the configured PRMS snapshot (``result`` ⋈
 ``version``), cached per snapshot file (path + mtime + size). A result code has
 one row per reporting phase; the link points at the **latest published phase**:
-the best row by (active, quality-assured [W1/W2 status 2 or W3/bilateral
-status 6], phase closed, phase year, version id, row id). A code that is not in
-the snapshot is never guessed at; when the snapshot itself is unavailable the
-resolver falls back to the public Results Dashboard link (never a gated one).
-Known PRMS-side exception: the IPSR 2023/2024 report is broken, so those phases
-are never linked (see ``PRMS_BROKEN_IPSR_REPORT_PHASES``).
+the best row by (public report works, active, quality-assured [W1/W2 status 2
+or W3/bilateral status 6], phase closed, phase year, version id, row id).
+
+THE LINK RULE (Marc Schut, 2026-10-08: result codes and URLs "should ALWAYS
+trace back to the automated PDFs that the PRMS produces, e.g. 11180 -->
+https://reporting.cgiar.org/reports/ipsr-details/11180?phase=7")
+-----------------------------------------------------------------------------
+A result code is only ever linked to its PRMS-generated PDF report page
+(``reporting.cgiar.org/reports/{result|ipsr}-details/<code>?phase=<n>``).
+The generic CGIAR Results Dashboard is NEVER used as a link for a result: it
+ignores ``?result_code=`` and opens its home page (verified 2026-09-26).
+
+1. Code in the snapshot with a working public report → that report, for the
+   best phase above (a working phase always beats a broken one).
+2. Code whose ONLY phases have a report PRMS currently fails to generate
+   (IPSR 2023/2024, ``PRMS_BROKEN_IPSR_REPORT_PHASES``; re-tested 2026-10-08,
+   still ``FUNCTION prdb.reportIPSRPathwaysByCode does not exist``) → NOT
+   linked; the code is shown with the honest note
+   ``PRMS report currently unavailable: PRMS-side error`` (first mention in a
+   message). Linking the error page would send readers to "Something went
+   wrong"; the dashboard would send them to a page without the result.
+3. Code NOT in the snapshot → never guessed; an explicit citation token shows
+   ``not found in the PRMS snapshot``.
+4. Snapshot unavailable → codes stay plain text (nothing to resolve the phase
+   with); never a dashboard link.
+
+Model-written URLs are normalised by the linkifier: a Results Dashboard link
+for a result (``?result_code=N``, or a dashboard link whose text is a code) and
+a hand-written PRMS report URL with a wrong/missing phase or the wrong
+``result``/``ipsr`` route are rewritten to the resolved report (or rule 2/3).
+A plain "CGIAR Results Dashboard" portal link that does not name a result is
+left alone. Session-gated PRMS application URLs are never emitted.
 """
 
 from __future__ import annotations
@@ -61,15 +87,21 @@ logger = logging.getLogger(__name__)
 # Public link targets (the ONLY allowed destinations)
 # ---------------------------------------------------------------------------
 
-#: The public CGIAR Results Dashboard landing page (Power BI portal). Used only
-#: as a last-resort fallback when no PRMS snapshot is configured.
+#: The public CGIAR Results Dashboard landing page (Power BI portal). It is a
+#: portfolio-level view and is NEVER emitted as the link for a result (it
+#: ignores ``?result_code=``). Kept to RECOGNISE such links in model output and
+#: in chats saved before 2026-09-26, which are rewritten to the PRMS report.
 PUBLIC_RESULTS_DASHBOARD: str = "https://www.cgiar.org/food-security-impact/results-dashboard"
 
-#: Legacy dashboard "deep link". The dashboard ignores the parameter (it lands
-#: on the home page), so it is only a fallback; old links of this shape found
-#: in a message are upgraded to the per-result report when the code is known.
-_LEGACY_DASHBOARD_TEMPLATE: str = (
-    "https://www.cgiar.org/food-security-impact/results-dashboard/?result_code={code}"
+#: Dashboard links in text: ``…/results-dashboard[/…][?…]`` on cgiar.org.
+_DASHBOARD_URL_RE = re.compile(
+    r"^https?://(?:www\.)?cgiar\.org/food-security-impact/results-dashboard(?:[/?#][^\s]*)?$",
+    re.IGNORECASE,
+)
+#: A hand-written PRMS report page, any phase (or none) and either route.
+_REPORT_URL_RE = re.compile(
+    r"^https?://(?:www\.)?reporting\.cgiar\.org/reports/(?:result|ipsr)-details/(\d{1,9})/?(?:[?#][^\s]*)?$",
+    re.IGNORECASE,
 )
 
 #: Public per-result report (verified anonymous 2026-09-26). ``code`` is the
@@ -86,17 +118,38 @@ PUBLIC_IPSR_REPORT_TEMPLATE: str = (
 #: Version ``app_module_id`` of the IPSR module (versions 2/5/7/9).
 _IPSR_APP_MODULE_ID = 2
 
-#: KNOWN PRMS-SIDE BUG (verified 2026-09-26, anonymous API + headless browser):
-#: the public IPSR report for the IPSR 2023 (version 2) and IPSR 2024
-#: (version 5) phases fails for every code tried with
-#: ``QueryFailedError: FUNCTION prdb.reportIPSRPat… does not exist`` and the
-#: page shows "Something went wrong". We never link those phases: a code that
-#: also exists in a later IPSR phase (7 = IPSR 2025, 9 = IPSR 2026, even as a
-#: row still being edited) is linked there — that report renders the same
-#: result code publicly; a code that exists ONLY in 2/5 gets the public
-#: Results Dashboard link instead (clickable, never an error page). Remove a
-#: phase from this set once PRMS fixes the report function.
+#: KNOWN PRMS-SIDE BUG (verified 2026-09-26 and re-tested 2026-10-08,
+#: anonymous API + headless browser): the public IPSR report for the IPSR 2023
+#: (version 2) and IPSR 2024 (version 5) phases fails for every code tried with
+#: ``QueryFailedError: FUNCTION prdb.reportIPSRPathwaysByCode does not exist``
+#: and the page shows "Something went wrong". We never link those phases: a
+#: code that also exists in a later IPSR phase (7 = IPSR 2025, 9 = IPSR 2026,
+#: even as a row still being edited) is linked there — that report renders the
+#: same result code publicly; a code that exists ONLY in 2/5 is shown unlinked
+#: with ``REPORT_UNAVAILABLE_NOTE`` (never the generic dashboard).
+#: Once PRMS fixes the report function, set ``IA_PRMS_BROKEN_REPORT_PHASES=``
+#: (empty) in the environment — no code change — or remove the phases here.
 PRMS_BROKEN_IPSR_REPORT_PHASES: frozenset[int] = frozenset({2, 5})
+
+#: Environment override for :data:`PRMS_BROKEN_IPSR_REPORT_PHASES`: unset →
+#: the default above; empty or ``none`` → no broken phases; ``"2,5"`` → those.
+BROKEN_PHASES_ENV = "IA_PRMS_BROKEN_REPORT_PHASES"
+
+
+def broken_report_phases() -> frozenset[int]:
+    """The IPSR phases whose public PRMS report is currently known to fail."""
+    raw = os.environ.get(BROKEN_PHASES_ENV)
+    if raw is None:
+        return PRMS_BROKEN_IPSR_REPORT_PHASES
+    raw = raw.strip().lower()
+    if raw in ("", "none", "-"):
+        return frozenset()
+    try:
+        return frozenset(int(x) for x in re.split(r"[\s,;]+", raw) if x)
+    except ValueError:
+        logger.warning("%s=%r is not a list of phase ids; using the default", BROKEN_PHASES_ENV, raw)
+        return PRMS_BROKEN_IPSR_REPORT_PHASES
+
 #: Result types that only exist in IPSR phases (fallback if the version table
 #: lacks ``app_module_id``): 10 Innovation Package, 11 Complementary innovation.
 _IPSR_RESULT_TYPES = (10, 11)
@@ -190,16 +243,36 @@ class ResultLink:
     module: str             # "result" | "ipsr"
     phase_name: str = ""
     quality_assured: bool = True
-    #: True when PRMS has no working public report for this code (only broken
-    #: IPSR phases): the link is the public Results Dashboard instead.
-    dashboard_fallback: bool = False
+    #: True when PRMS has no working public report for this code (it exists
+    #: only in broken IPSR phases): the code is shown with
+    #: ``REPORT_UNAVAILABLE_NOTE`` and is NOT linked.
+    report_unavailable: bool = False
+    #: Every (phase, module) with an active row whose public report works: a
+    #: hand-written link to one of these (e.g. the 2024 edition) is kept.
+    working_reports: frozenset = frozenset()
+
+    def accepts(self, url: str) -> bool:
+        """True if *url* is a working PRMS report page of THIS code (any of its phases)."""
+        if not is_public_prms_report_url(url):
+            return False
+        parsed = urlparse(url.strip())
+        m = _REPORT_URL_RE.match(url.strip())
+        if not m or normalize_result_code(m.group(1)) != self.code:
+            return False
+        module = "ipsr" if "/ipsr-details/" in parsed.path else "result"
+        phase = int(parse_qs(parsed.query).get("phase", ["0"])[0])
+        return (phase, module) in self.working_reports
 
     @property
-    def url(self) -> str:
-        if self.dashboard_fallback:
-            return _LEGACY_DASHBOARD_TEMPLATE.format(code=self.code)
+    def report_url(self) -> str:
+        """The PRMS report page for the chosen phase (even if PRMS fails it today)."""
         template = PUBLIC_IPSR_REPORT_TEMPLATE if self.module == "ipsr" else PUBLIC_RESULT_REPORT_TEMPLATE
         return template.format(code=self.code, phase=self.phase)
+
+    @property
+    def url(self) -> Optional[str]:
+        """The link to emit: the PRMS PDF report page, or None when PRMS cannot render it."""
+        return None if self.report_unavailable else self.report_url
 
 
 #: Test/ops override for the snapshot path (``None`` → the app's PRMS DB path).
@@ -254,10 +327,11 @@ def _is_qa(source, status_id) -> bool:
 
 
 @lru_cache(maxsize=2)
-def _load_index(file_key: tuple) -> dict[str, ResultLink]:
+def _load_index(file_key: tuple, broken_phases: frozenset = PRMS_BROKEN_IPSR_REPORT_PHASES) -> dict[str, ResultLink]:
     """Build {result_code: ResultLink} from the snapshot identified by *file_key*."""
     real = file_key[0]
     best: dict[str, tuple] = {}
+    working: dict[str, set] = {}
     with closing(sqlite3.connect(f"file:{real}?mode=ro", uri=True, timeout=5)) as conn:
         try:
             rows = conn.execute(_INDEX_SQL_WITH_MODULE).fetchall()
@@ -276,7 +350,7 @@ def _load_index(file_key: tuple) -> dict[str, ResultLink]:
             module = "ipsr" if int(app_module_id) == _IPSR_APP_MODULE_ID else "result"
         else:
             module = "ipsr" if type_id in _IPSR_RESULT_TYPES else "result"
-        report_works = not (module == "ipsr" and version in PRMS_BROKEN_IPSR_REPORT_PHASES)
+        report_works = not (module == "ipsr" and version in broken_phases)
         rank = (
             1 if report_works else 0,  # a working public page beats everything else
             1 if is_active in (1, "1", True) else 0,
@@ -286,6 +360,8 @@ def _load_index(file_key: tuple) -> dict[str, ResultLink]:
             version,
             int(row_id or 0),
         )
+        if report_works and is_active in (1, "1", True):
+            working.setdefault(code_s, set()).add((version, module))
         payload = (rank, version, module, phase_name or "", qa, not report_works)
         cur = best.get(code_s)
         if cur is None or rank > cur[0]:
@@ -293,7 +369,8 @@ def _load_index(file_key: tuple) -> dict[str, ResultLink]:
     return {
         code: ResultLink(
             code=code, phase=p[1], module=p[2], phase_name=p[3],
-            quality_assured=p[4], dashboard_fallback=p[5],
+            quality_assured=p[4], report_unavailable=p[5],
+            working_reports=frozenset(working.get(code, ())),
         )
         for code, p in best.items()
     }
@@ -305,7 +382,7 @@ def citation_index() -> Optional[dict[str, ResultLink]]:
     if key is None:
         return None
     try:
-        return _load_index(key)
+        return _load_index(key, broken_report_phases())
     except sqlite3.Error as exc:
         logger.warning("result-code citation index unavailable: %s", exc)
         return None
@@ -322,34 +399,82 @@ def get_result_link(result_code: str | int | None) -> Optional[ResultLink]:
     return index.get(code)
 
 
-def resolve_result_code_url(result_code: str | int | None) -> Optional[str]:
-    """Resolve a PRMS result code to its PUBLIC source URL.
+#: Status values returned by :func:`result_code_status`.
+LINKED, UNAVAILABLE, UNKNOWN, NO_SNAPSHOT = "linked", "report_unavailable", "unknown", "no_snapshot"
 
-    * Known code → the public PRMS result report for its latest published phase
-      (``reporting.cgiar.org/reports/result-details/<code>?phase=<version_id>``,
-      or ``ipsr-details`` for IPSR-module results).
-    * Code whose only phases have a broken PRMS report (IPSR 2023/2024, see
-      ``PRMS_BROKEN_IPSR_REPORT_PHASES``) → the public Results Dashboard link.
-    * Snapshot unavailable → the public Results Dashboard (graceful fallback).
-    * Malformed code, or a code that is NOT in the snapshot → ``None`` (never
-      guess a link for a code that does not exist).
 
-    The returned URL is guaranteed non-session-gated.
+def result_code_status(result_code: str | int | None) -> tuple[str, Optional[str]]:
+    """``(status, url)`` for a result code under THE LINK RULE (module docstring).
+
+    * ``("linked", url)``: the PRMS PDF report page for the code.
+    * ``("report_unavailable", None)``: the code is in the snapshot but PRMS
+      cannot currently generate any of its reports (broken IPSR phases only).
+    * ``("unknown", None)``: malformed, or not in the snapshot (never guessed).
+    * ``("no_snapshot", None)``: no snapshot to resolve against.
+
+    A returned URL is guaranteed to be a public PRMS report page — never the
+    generic Results Dashboard, never a session-gated PRMS application page.
     """
     code = normalize_result_code(result_code)
     if code is None:
-        return None
+        return UNKNOWN, None
     index = citation_index()
     if index is None:
-        url = _LEGACY_DASHBOARD_TEMPLATE.format(code=code)
-    else:
-        link = index.get(code)
-        if link is None:
-            return None
-        url = link.url
-    # Guard: a future template edit can never silently introduce a gated link.
+        return NO_SNAPSHOT, None
+    link = index.get(code)
+    if link is None:
+        return UNKNOWN, None
+    if link.report_unavailable:
+        return UNAVAILABLE, None
+    url = link.url
+    # Guards: a future template edit can never silently introduce a gated or
+    # non-report link.
     assert_no_session_gated_url(url)
-    return url
+    if not is_public_prms_report_url(url):  # pragma: no cover - defensive
+        raise ValueError(f"Refusing to emit a non-report citation URL: {url!r}")
+    return LINKED, url
+
+
+def resolve_result_code_url(result_code: str | int | None) -> Optional[str]:
+    """Resolve a PRMS result code to its PRMS-generated PDF report page, or None.
+
+    * Known code → ``reporting.cgiar.org/reports/result-details/<code>?phase=<version_id>``
+      (``ipsr-details`` for IPSR-module results) for its best working phase.
+    * Code whose only phases have a broken PRMS report (IPSR 2023/2024) → None;
+      callers show :data:`REPORT_UNAVAILABLE_NOTE` (see :func:`result_code_status`).
+    * Malformed code, code NOT in the snapshot, or no snapshot → None.
+
+    Never returns the generic Results Dashboard or a session-gated URL.
+    """
+    return result_code_status(result_code)[1]
+
+
+def result_code_in_url(url: str) -> Optional[str]:
+    """The result code a URL is meant to open, if it is a per-result link.
+
+    Recognises a Results Dashboard link with ``?result_code=N`` (any path under
+    ``/results-dashboard``) and a PRMS report page ``/reports/{result|ipsr}-details/N``
+    with any or no phase. Returns the bare code, or None.
+    """
+    u = (url or "").strip().strip("<>")
+    m = _REPORT_URL_RE.match(u)
+    if m:
+        return normalize_result_code(m.group(1))
+    if _DASHBOARD_URL_RE.match(u):
+        try:
+            q = parse_qs(urlparse(u).query)
+        except ValueError:
+            return None
+        for key in ("result_code", "resultCode", "code", "result"):
+            vals = q.get(key)
+            if vals:
+                return normalize_result_code(vals[0])
+    return None
+
+
+def is_results_dashboard_url(url: str) -> bool:
+    """True for any link into the generic CGIAR Results Dashboard."""
+    return bool(_DASHBOARD_URL_RE.match((url or "").strip().strip("<>")))
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +488,22 @@ UNKNOWN_CODE_NOTE = "not found in the PRMS snapshot"
 #: Note attached to a hand-written link into the logged-in PRMS application.
 GATED_LINK_NOTE = "PRMS login required; not a public source"
 
+#: Note shown (first mention per message) for a code whose PRMS report PRMS
+#: cannot currently generate (rule 2 of THE LINK RULE). Honest, short, and it
+#: never sends the reader to an error page or to the generic dashboard.
+REPORT_UNAVAILABLE_NOTE = "PRMS report currently unavailable: PRMS-side error"
+
+# Placeholder for a note while a message is rewritten (private-use characters:
+# never in real text, never matched by the code regexes).
+_NOTE_OPEN, _NOTE_CLOSE = "\ue000", "\ue001"
+_NOTE_MARK_RE = re.compile(_NOTE_OPEN + r"(\d{1,9})([nc])" + _NOTE_CLOSE)
+
+# "R16106 (PRMS report currently unavailable…" / "name (R16106, PRMS report…":
+# codes already annotated in a text (keeps the linkifier idempotent).
+_NOTED_CODE_RE = re.compile(
+    r"R-?(\d{1,7})\)?\]?\s*[(,]\s*" + re.escape(REPORT_UNAVAILABLE_NOTE)
+)
+
 
 @dataclass
 class LinkifyReport:
@@ -372,6 +513,10 @@ class LinkifyReport:
     linked: list[str] = field(default_factory=list)   # codes turned into links
     unknown: list[str] = field(default_factory=list)  # codes not in the snapshot
     index_available: bool = True
+    #: codes in the snapshot whose PRMS report PRMS cannot generate right now
+    unavailable: list[str] = field(default_factory=list)
+    #: model-written URLs rewritten (dashboard → report, wrong phase → right one)
+    rewritten_urls: int = 0
 
 
 # Regions that must never be rewritten (checked in this order, leftmost wins).
@@ -445,24 +590,56 @@ def _split_protected(text: str) -> list[tuple[bool, str, Optional[re.Match]]]:
 
 
 class _Linker:
-    def __init__(self, resolve: Callable[[str], Optional[str]], index_available: bool):
-        self._resolve = resolve
+    def __init__(self, status: Callable[[str], tuple[str, Optional[str]]], index_available: bool,
+                 text: str = "", get_link: Callable[[str], Optional[ResultLink]] = lambda c: None):
+        self._status = status
+        self._get_link = get_link
         self.report_linked: list[str] = []
         self.report_unknown: list[str] = []
+        self.report_unavailable: list[str] = []
+        self.rewritten_urls = 0
         self.index_available = index_available
+        # Codes already carrying the "unavailable" note (idempotence).
+        self._noted: set[str] = {str(int(m.group(1))) for m in _NOTED_CODE_RE.finditer(text or "")}
 
     def url(self, code: str) -> Optional[str]:
+        """The PRMS report URL for *code*, or None (unknown/unavailable/no snapshot)."""
         norm = normalize_result_code(code)
         if norm is None:
             return None
-        url = self._resolve(norm)
-        if url is None:
+        status, url = self._status(norm)
+        if status == LINKED and url:
+            if norm not in self.report_linked:
+                self.report_linked.append(norm)
+            return url
+        if status == UNAVAILABLE:
+            if norm not in self.report_unavailable:
+                self.report_unavailable.append(norm)
+        elif status == UNKNOWN and self.index_available:
             if norm not in self.report_unknown:
                 self.report_unknown.append(norm)
-            return None
-        if norm not in self.report_linked:
-            self.report_linked.append(norm)
-        return url
+        return None
+
+    def unavailable(self, code: str) -> bool:
+        return (normalize_result_code(code) or "") in self.report_unavailable
+
+    def note(self, code: str, after_name: bool = False) -> str:
+        """A placeholder for the "unavailable" note; :meth:`place_notes` keeps
+        the note on the FIRST mention of each code in reading order."""
+        norm = normalize_result_code(code) or code
+        return f"{_NOTE_OPEN}{norm}{'n' if after_name else 'c'}{_NOTE_CLOSE}"
+
+    def place_notes(self, text: str) -> str:
+        seen: set[str] = set(self._noted)
+
+        def _rep(m: re.Match) -> str:
+            code, mode = m.group(1), m.group(2)
+            first = code not in seen
+            seen.add(code)
+            if mode == "n":
+                return f" (R{code}, {REPORT_UNAVAILABLE_NOTE})" if first else f" (R{code})"
+            return f" ({REPORT_UNAVAILABLE_NOTE})" if first else ""
+        return _NOTE_MARK_RE.sub(_rep, text)
 
     # -- rewriters for unprotected text ------------------------------------
 
@@ -474,6 +651,8 @@ class _Linker:
                 url = self.url(code)
                 if url:
                     parts.append(f"[R{code}]({url})")
+                elif self.unavailable(code):
+                    parts.append(f"R{code}{self.note(code)}")
                 elif self.index_available:
                     parts.append(f"R{code} ({UNKNOWN_CODE_NOTE})")
                 else:
@@ -483,16 +662,26 @@ class _Linker:
 
     def bare_codes(self, text: str) -> str:
         def _rep(m: re.Match) -> str:
+            if m.string.startswith(_NOTE_OPEN, m.end()):
+                return m.group(0)  # already handled by an earlier stage
             code = str(int(m.group(1)))
             url = self.url(code)
-            return f"[R{code}]({url})" if url else m.group(0)
+            if url:
+                return f"[R{code}]({url})"
+            if self.unavailable(code):
+                return m.group(0) + self.note(code)
+            return m.group(0)
         return _BARE_R_RE.sub(_rep, text)
 
     def phrases(self, text: str) -> str:
         def _rep(m: re.Match) -> str:
             def _num(n: re.Match) -> str:
                 url = self.url(n.group(1))
-                return f"[{n.group(0)}]({url})" if url else n.group(0)
+                if url:
+                    return f"[{n.group(0)}]({url})"
+                if self.unavailable(n.group(1)):
+                    return n.group(0) + self.note(n.group(1))
+                return n.group(0)
             return m.group("lead") + _NUM_RE.sub(_num, m.group("list"))
         return _PHRASE_RE.sub(_rep, text)
 
@@ -505,9 +694,49 @@ class _Linker:
 
     # -- protected segments that still carry a code --------------------------
 
+    def _accepted(self, code: str, url: str) -> bool:
+        """A hand-written report URL that already opens a working report of *code*."""
+        link = self._get_link(code)
+        return link is not None and link.accepts(url)
+
+    def _code_from_link_text(self, ltext: str) -> Optional[str]:
+        """A link whose visible text IS a result code: "R1003", "[R1003]", "1003"."""
+        m = re.fullmatch(r"\s*\\?\[?\s*(?:R-?|#)?(\d{2,7})\s*\\?\]?\s*", ltext or "")
+        return str(int(m.group(1))) if m else None
+
+    def _bare_url(self, raw: str, autolink: bool) -> Optional[str]:
+        """Rewrite a bare/auto-linked URL that is meant to open one result."""
+        code = result_code_in_url(raw)
+        if code is None:
+            return None
+        if self._accepted(code, raw):
+            return None
+        url = self.url(code)
+        if url:
+            if url == raw:
+                return None
+            self.rewritten_urls += 1
+            return f"<{url}>" if autolink else url
+        if self.unavailable(code):
+            self.rewritten_urls += 1
+            return f"R{code}{self.note(code)}"
+        if is_results_dashboard_url(raw):
+            # The dashboard cannot open a result: say what the link was meant to show.
+            self.rewritten_urls += 1
+            return f"R{code} ({UNKNOWN_CODE_NOTE})" if self.index_available else f"R{code}"
+        return None  # a hand-written report URL for a code we cannot check: leave it
+
     def protected(self, chunk: str, m: re.Match) -> str:
         if m.group("url") is not None or m.group("autolink") is not None:
             raw = chunk.strip("<>")
+            tail = ""
+            if m.group("url") is not None:
+                stripped = raw.rstrip(".,;:!?'\"")
+                raw, tail = stripped, raw[len(stripped):]
+            replaced = self._bare_url(raw, autolink=m.group("autolink") is not None)
+            if replaced is not None:
+                return replaced + tail
+            raw = raw + tail
             if is_session_gated_url(raw):
                 # A hand-written PRMS application URL: needs a PRMS login, so it
                 # must not look like a public source. Keep it visible, unlinked.
@@ -519,26 +748,50 @@ class _Linker:
         ltext = m.group("ltext") or ""
         title = m.group("ltitle") or ""
         bang = "!" if chunk.startswith("!") else ""
+        if bang:
+            return chunk
         # [Innovation name](R1003) — a code used as the link target.
         code_m = re.fullmatch(r"R-?(\d{1,7})", href.strip())
-        if code_m and not bang:
+        if code_m:
             code = str(int(code_m.group(1)))
             url = self.url(code)
             if url:
                 return f"[{ltext}]({url}{title})"
+            if self.unavailable(code):
+                return ltext + self.note(code, after_name=True)
             if self.index_available:
                 return f"{ltext} (R{code} {UNKNOWN_CODE_NOTE})"
             return ltext
-        # Legacy dashboard deep link → upgrade to the per-result report.
-        legacy = re.match(
-            r"^https?://(?:www\.)?cgiar\.org/food-security-impact/results-dashboard/?\?result_code=(\d{1,7})$",
-            href.strip(),
-        )
-        if legacy and self.index_available:
-            url = self.url(legacy.group(1))
+        # A link meant to open ONE result: a Results Dashboard link (with
+        # ?result_code=N, or whose text is the code) or a hand-written PRMS
+        # report URL (any phase/route) → the resolved PRMS report.
+        h = href.strip()
+        is_dash = is_results_dashboard_url(h)
+        code = result_code_in_url(h)
+        if code is None and is_dash:
+            code = self._code_from_link_text(ltext)
+        if code is not None and self._accepted(code, h):
+            self.url(code)  # count it as linked
+            return chunk
+        if code is not None:
+            url = self.url(code)
+            text_has_code = re.search(rf"(?<!\d){code}(?!\d)", ltext) is not None
             if url:
-                return f"{bang}[{ltext}]({url}{title})"
-        if not bang and href.startswith(("http://", "https://")) and is_session_gated_url(href):
+                if url != h:
+                    self.rewritten_urls += 1
+                return f"[{ltext}]({url}{title})"
+            if self.unavailable(code):
+                self.rewritten_urls += 1
+                return ltext + self.note(code, after_name=not text_has_code)
+            if is_dash:
+                self.rewritten_urls += 1
+                if not self.index_available:
+                    return ltext if text_has_code else f"{ltext} (R{code})"
+                return (f"{ltext} ({UNKNOWN_CODE_NOTE})" if text_has_code
+                        else f"{ltext} (R{code} {UNKNOWN_CODE_NOTE})")
+            # hand-written report URL for a code not in the snapshot: keep it
+            # unless it is not a public report page (e.g. no phase).
+        if href.startswith(("http://", "https://")) and is_session_gated_url(href):
             return f"{ltext} ({GATED_LINK_NOTE})"
         return chunk
 
@@ -554,9 +807,12 @@ class _Linker:
                 cm = _CELL_CODE_RE.match(cells[idx])
                 if cm:
                     url = self.url(cm.group(2))
+                    code = str(int(cm.group(2)))
                     if url:
-                        code = str(int(cm.group(2)))
                         cells[idx] = f"{cm.group(1)}[R{code}]({url}){cm.group(3)}"
+                        changed = True
+                    elif self.unavailable(code):
+                        cells[idx] = f"{cm.group(1)}R{code}{self.note(code)}{cm.group(3)}"
                         changed = True
         if not changed:
             return line
@@ -635,7 +891,13 @@ def linkify_result_codes_report(text: Optional[str]) -> LinkifyReport:
     * bare numeric cells in a markdown-table column headed "Result code"/"Code";
     * ``[Innovation name](R1003)`` (code as link target) → real URL, so prose can
       link a name without printing the code (funder persona);
-    * legacy dashboard links ``…/results-dashboard/?result_code=N`` → upgraded.
+    * Results Dashboard links for a result (``…/results-dashboard/?result_code=N``
+      or a dashboard link whose text is the code) and hand-written PRMS report
+      URLs with a wrong/missing phase or route → the resolved PRMS report (a
+      hand-written link to another WORKING phase of the same code is kept);
+    * codes whose PRMS report PRMS cannot generate (IPSR 2023/2024 only) →
+      ``R16106 (PRMS report currently unavailable: PRMS-side error)`` on the
+      first mention, never a link to an error page or to the dashboard.
 
     Never touched: fenced/inline code, ``<chart>`` JSON, HTML tags, URLs and the
     text/target of existing links. Unknown codes are left as written and
@@ -647,12 +909,12 @@ def linkify_result_codes_report(text: Optional[str]) -> LinkifyReport:
         return LinkifyReport(text=text or "", index_available=citation_index() is not None)
 
     index_available = citation_index() is not None
-    linker = _Linker(resolve_result_code_url, index_available)
+    linker = _Linker(result_code_status, index_available, text, get_result_link)
     text = _rewrite_tables(text, linker)
     pieces = []
     for is_protected, chunk, m in _split_protected(text):
         pieces.append(linker.protected(chunk, m) if is_protected else linker.unprotected(chunk))
-    out = "".join(pieces)
+    out = linker.place_notes("".join(pieces))
     if linker.report_unknown:
         logger.info("citation: %d result code(s) not in the PRMS snapshot: %s",
                     len(linker.report_unknown), ", ".join(linker.report_unknown[:20]))
@@ -661,6 +923,8 @@ def linkify_result_codes_report(text: Optional[str]) -> LinkifyReport:
         linked=linker.report_linked,
         unknown=linker.report_unknown,
         index_available=index_available,
+        unavailable=linker.report_unavailable,
+        rewritten_urls=linker.rewritten_urls,
     )
 
 

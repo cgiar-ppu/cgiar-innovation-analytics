@@ -317,6 +317,33 @@ async def test_usage_summary_reports_cost_by_cohort(http, initialized_db):
     assert tester["user_id"] not in json.dumps(body) and "worldbank" not in json.dumps(body)
 
 
+async def test_first_ledger_turn_is_not_also_estimated_from_history(http, initialized_db):
+    """Fresh DB: the first answer's result message is saved just before its ledger
+    row, so it used to be counted twice (once estimated, once recorded)."""
+    from synapsis.database.usage import record_turn_usage
+    t0 = time.time() - 300
+    # an older chat from before the ledger: estimated, and must stay counted
+    async with aiosqlite.connect(str(initialized_db)) as db:
+        await db.execute("INSERT INTO sessions (session_id, title, created_at, updated_at, model, user_id) "
+                         "VALUES ('old', 't', ?, ?, 'm', 'sso:bob')", (t0 - 3000, t0 - 3000))
+        await db.execute("INSERT INTO messages (session_id, ts, type, data) VALUES ('old', ?, 'result', ?)",
+                         (t0 - 3000, json.dumps({"estimated_cost": 0.3, "is_error": False})))
+        await db.execute("INSERT INTO sessions (session_id, title, created_at, updated_at, model, user_id) "
+                         "VALUES ('s1', 't', ?, ?, 'm', 'sso:alice')", (t0, t0))
+        for i, cum in enumerate((0.54, 0.80), start=0):
+            await db.execute("INSERT INTO messages (session_id, ts, type, data) VALUES ('s1', ?, 'result', ?)",
+                             (t0 + 60 * i, json.dumps({"estimated_cost": cum, "is_error": False})))
+        await db.commit()
+    # the ledger rows of the same two turns, a second after each result message
+    await record_turn_usage(user_id="sso:alice", role="researcher", session_id="s1", model="m",
+                            turn_cost_usd=0.54, ts=t0 + 1)
+    await record_turn_usage(user_id="sso:alice", role="researcher", session_id="s1", model="m",
+                            turn_cost_usd=0.26, ts=t0 + 61)
+    body = (await http.get("/api/admin/usage?days=2", headers=ADMIN)).json()
+    assert body["totals"]["turns"] == 3
+    assert body["totals"]["cost_usd"] == pytest.approx(0.3 + 0.54 + 0.26)
+
+
 # ---------------------------------------------------------------------------
 # Turn metadata on the saved question
 # ---------------------------------------------------------------------------
