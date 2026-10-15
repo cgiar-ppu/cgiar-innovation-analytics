@@ -36,16 +36,24 @@ MVP_ENV=(('test_budget_usd','IA_TEST_BUDGET_USD'),('test_start','IA_TEST_START')
  ('daily_user_budget_usd','IA_DAILY_USER_BUDGET_USD'),
  ('telemetry_enabled','IA_TELEMETRY_ENABLED'),('feedback_enabled','IA_FEEDBACK_ENABLED'),
  ('external_block_policy_amounts','IA_EXTERNAL_BLOCK_POLICY_AMOUNTS'),('external_w12_only','IA_EXTERNAL_W12_ONLY'))
-for key,name in MVP_ENV:
- value=cfg.get(key)
- value='' if value is None else (str(value).lower() if isinstance(value,bool) else str(value)).strip()
- if value: env[name]=value
+# Loop names must not reuse `name` (the container name below): the 15-Oct staging run failed exactly that way.
+for mvp_key,mvp_var in MVP_ENV:
+ mvp_value=cfg.get(mvp_key)
+ mvp_value='' if mvp_value is None else (str(mvp_value).lower() if isinstance(mvp_value,bool) else str(mvp_value)).strip()
+ if mvp_value: env[mvp_var]=mvp_value
 # <<< mvp-env
 assert env['IA_JWT_SECRET'] and env['ANTHROPIC_API_KEY'], 'Missing required target secrets'
 image=f'{account}.dkr.ecr.eu-central-1.amazonaws.com/cgiar-ia-service:{sha}'
 password=run(['aws','ecr','get-login-password','--region','eu-central-1'])
 sp.run(['docker','login','--username','AWS','--password-stdin',image.split('/')[0]],input=password,text=True,check=True,stdout=sp.DEVNULL);del password
 sp.run(['docker','pull',image],check=True,stdout=sp.DEVNULL)
+# Self-heal for the 15-Oct staging failure: a container created under the wrong name but NEVER started
+# (port 7780 was busy) carries restart=always. Remove it only if it never ran; anything else is left alone.
+try:
+ stray=json.loads(run(['docker','inspect','IA_EXTERNAL_W12_ONLY'],stderr=sp.DEVNULL))[0]
+ if stray['State']['Status']=='created' and str(stray['State'].get('StartedAt','')).startswith('0001-01-01'):
+  sp.run(['docker','rm','IA_EXTERNAL_W12_ONLY'],check=True,stdout=sp.DEVNULL);print(json.dumps({'removed_never_started_container':'IA_EXTERNAL_W12_ONLY'}))
+except sp.CalledProcessError: pass
 try: old=json.loads(run(['docker','inspect',name]))[0]
 except sp.CalledProcessError: old=None
 root=Path('/opt/cgiar-ia'); backup=root/'release-backups'/time.strftime('%Y%m%dT%H%M%SZ',time.gmtime());backup.mkdir(parents=True)
