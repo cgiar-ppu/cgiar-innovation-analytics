@@ -1,22 +1,9 @@
 {
  "stage": "prod",
- "sequence": 28,
+ "sequence": 29,
  "invitations": {
-  "op": "invite",
-  "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAyxTb+HgmpXePE+bfR0RD\nRij+cyn70Mhknyg2DD072rZgbL7ov0lxUsgfLzLEXWFCpwL5QNi/zl47hvmuJl7f\nflXFjYnBtenxNb7q3o7wVL6hHLGX7/v+53Golrfy2CmDmCz3XgRjavVkXRV023PE\n23WJH+fpfdACwymnVTdbeN24+YsygsSS7JdL7Py+uLYAS7JneTtMK1bdEf5RVw7f\nL8Ll3nuuktxlb6nG+9kvI19TuIyyUqDDkirOCAXWT2nhqXKqp9IyPVQuI06C2fYW\nFwV4NwJjYOMSgr0srBFKcJV0eqBeouUuTUyuOtnIiixScaX/zIcs/g2ihUJmBPqd\nIjUPKbGrF/DEmBCkvFbVjAcDg8Bso08U23EXDc/dnXlAdLRKQdMN2DS2F5LV58tV\nnVgvb+rNb/SK/ClJtHaMi/7+Pv9yxE2FKpj99G3oLmiCzVOkczZGvgThcnv9WEhO\nWCi+YqBda05V3F2bkKmCkOM7+rNlUE378RAEQJ8Pc75b8wDP+6F3acF3HJmJCkqm\nA2kvXWV9UJUnp4OOPIITze1DSWZKMeJujTyn028WFttXlt6QEoXZ9oH/pwRUjSBd\nZMva0Q45lM4/hWwgqmVInSyawzu3KXsjQalo47k1QwT1N4xO8YgW//sVyAQ1a6t7\nMgDFtd6AJibnaBn1lXxmKmUCAwEAAQ==\n-----END PUBLIC KEY-----\n",
-  "invite": {
-   "cohort": "FCDO Oct-2026",
-   "expires_in_days": 14,
-   "role": "external",
-   "invitees_sealed": {
-    "alg": "RSA-OAEP-SHA256+AES-256-GCM+zlib",
-    "wrapped_key": "Nkt4nY1JSc/OL/4cnZcT2UGf5SrX8SqO0lQG1xvdloWM8QJb7yHzeHLboA/P+BGiDKtYSDudJvoJJLuXVhk34MpNdoxQRwdoKInbSdk/TKIkGQPqJDw53lonThQ/6P/vLG3UOZS2dFev6tNZyoHCeoNghlEJU91IHrRefpq/vh68Uty3Jhe7XPEWdV3s68mUL7Sc1LnAUhSbopT5MSPo7CpaGIXIKvIYUe8pN/uFvxrX+A2oDTDlcJhfpRid+egC/ZikgG7axFf1EDnx9+BNQj5FYPbQuAlzc3BulCzhB6tS4rZEfMjTTyzPLC1XbxG12yrJayvlgFcFGT4O2FVIrOppdcCWjuMBnFjStSMLyeafxTlvJGSxBxImNyHw0bNgR+IukT8PZxEw8BV15fzt8AoFxvj4ZWfSr+R66CMflM664nx3SRhOUOMvgmWb3524gPQJ75jkiozDtCi1p/zaxWqc24SIc3Yra/fJc5FHSsDmwnq+JVyjq+Xrx3f+TP+C",
-    "nonce": "WnE/7Lk0nechyqUS",
-    "ciphertext": "wsaryIB8H59oAZL+1WpPJRCHIIYeQDMQUHvoiltg17HqLoDwPSMYq2mHMsgceIBqBil4Ko/2V9WwAr4plIj/eNmq2uccn2cR6GegNAssxFc/HKN2GwMyOtTvJEgHFoM+uC+FP9LAuLBR1XnU8WmVperQILSJ+c2pCnZxSdg1EwGjh0fBEBXkcz7vkdQwSEY+Bb8eI2G/R5kp1Q1k"
-   }
-  },
-  "revoke_cohorts": [
-   "QA external 15-Oct"
-  ]
+  "op": "prepare",
+  "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAyCgLv0pgr6+lyzuQDMI6\nIxoiH+WQgcqtVPiexF8ZMKs+wTOJQPdQ1CP7owYMaROzjQPVUQgeousdNwodkYeh\nGXJoc1TeaQ/RSILIfXF/1koB7mYYtJpbQTNghIj+feHEo9B+yFTP9xvGVzlf3/Ch\ne22/8N2j60R+rj7muWblJrw7RjP3F0A4gVId9MXVe67JnnakJflPszvch+Zx3Ja7\nWHdTxzC0ETev8KnICBPZNbfQZhXRuB/w6+xnc/bA/rRWSXUdQLbKGskkwZcTRU9u\n4dCi3n0sdq4S1casbtx8b53kc0Fof8OwDfvGwiCM8tKClhITZmnSmcq+FSD0vurv\nfvi+YizbOnQyUvRJmIuxysY3nCl/jtcg3Yiiwzkjd75Pxg7rsqncAsAl6L+TyDAB\n/usSSeiYEqxoL/bkFutC/B66aCULCBBcW8qePTVL30sREgrmowZHkwRYvaJZN4O/\nVrcflykwK9H6oyVf4eNpFLaQxbRQ1o2GrUSFXtflW3+odngDOckKYVtoEqNLV6Kj\nRlyrdgiTrx9ok8IBLIqLQDfZvPHvRaKl2EtauYmPfppO9ZCNl+J9oNR4w+QQiTI5\n0ww9Fz7cvZPMWeFfUBSoBulnPMIsAjP0RQrgbEWAIq12AKWiXz5+kSh/LjptqCDg\nYYQPxGs4rbnoEwkQXZtqdmMCAwEAAQ==\n-----END PUBLIC KEY-----\n",
+  "list_all": true
  }
 }
