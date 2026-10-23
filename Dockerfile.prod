@@ -1,12 +1,16 @@
 # ===========================================================================
 # CGIAR Innovation Analytics -- Production Dockerfile
 # ===========================================================================
-# Lean multi-stage build: Node 20 frontend build -> Python 3.12-slim runtime.
+# Lean multi-stage build: Node 22 frontend build -> Python 3.12-slim runtime.
 # Does NOT include GUI/VNC/browser tooling (see Dockerfile for that).
 # ===========================================================================
 
 # ---- Stage 1: Frontend build ----
-FROM node:20-alpine AS frontend
+FROM node:22-alpine AS frontend
+# CVE-2026-111497 (Node2Shell, Brotli decoder): fail the build on an unpatched Node
+# (fixed: 22.23.4 / 24.22.1 / 26.12.1; Node 20 is EOL and never gets the fix).
+RUN node -e "const [a,b,c]=process.versions.node.split('.').map(Number); if(!(a===22&&(b>23||b===23&&c>=4)||a===24&&(b>22||b===22&&c>=1)||a>=26)){console.error('unpatched node',process.version);process.exit(1)}" \
+    && node --version
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -20,10 +24,19 @@ FROM python:3.12-slim
 # Build arg for version tracking
 ARG GIT_SHA=unknown
 
-# System dependencies (minimal -- curl for health checks, sqlite3 for ops)
-RUN apt-get update \
+# System dependencies (minimal -- curl for health checks, sqlite3 for ops,
+# chromium for the PDF export render). APT_REFRESH busts the registry build
+# cache so security updates are really pulled; bump it to force a fresh layer.
+# CVE-2026-111497: Chromium >= 148 carries the fixed (bundled) Brotli decoder;
+# the build fails on an older chromium.
+ARG APT_REFRESH=2026-10-23-cve-2026-111497
+RUN echo "apt refresh: $APT_REFRESH" \
+    && apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends curl ca-certificates sqlite3 chromium fonts-liberation \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && chromium --version \
+    && chromium --version | awk '{split($2,v,"."); if (v[1]+0 < 148) {print "chromium too old for CVE-2026-111497: " $2; exit 1}}'
 
 # ---- Litestream (continuous SQLite replication to S3) ----
 # EC2 hosts are x86_64 (al2023 default AMI), so use the linux-amd64 build.
@@ -37,6 +50,13 @@ WORKDIR /app
 # Python dependencies (layer-cached separately from app code)
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+# CVE-2026-111497: the SDK runs its bundled Claude Code CLI (Bun); fail the build
+# unless that binary carries the Brotli fix (CLI >= 2.1.309, SDK >= 0.2.173) and
+# no vulnerable Python Brotli is installed. Prints the SDK/CLI versions.
+COPY infra/docker/build_guards.py /tmp/build_guards.py
+RUN python -c "import claude_agent_sdk,pathlib;p=pathlib.Path(claude_agent_sdk.__file__).parent/'_bundled'/'claude';assert p.exists() and b'_ERROR_FORMAT_BLOCK_SWITCH' in p.read_bytes(),'bundled claude CLI lacks Brotli fix'" \
+    && python /tmp/build_guards.py \
+    && rm -f /tmp/build_guards.py
 
 # Application code
 COPY synapsis/ ./synapsis/
