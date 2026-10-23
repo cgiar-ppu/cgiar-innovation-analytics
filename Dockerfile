@@ -7,7 +7,7 @@
 # ===========================================================================
 
 # ---- Frontend build stage ----
-FROM node:20-alpine AS frontend
+FROM node:22-alpine AS frontend
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -73,7 +73,9 @@ RUN curl -sSL https://github.com/novnc/noVNC/archive/refs/tags/v1.5.0.tar.gz | \
     ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
 
 # ---- Claude Code CLI (needed by the SDK) ----
-RUN npm install -g @anthropic-ai/claude-code@latest
+# Pinned to the first release with the Brotli fix (CVE-2026-111497); the SDK
+# prefers its own bundled CLI, this global copy is only a fallback.
+RUN npm install -g @anthropic-ai/claude-code@2.1.309
 
 # ---- Python packages: core ----
 COPY requirements.txt /tmp/requirements.txt
