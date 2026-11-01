@@ -13,6 +13,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react'
 import { isSsoSession, useAuthStore } from '../../stores/auth'
+import { visibleInterval } from '../../lib/visibleInterval'
 import LoginScreen from './LoginScreen'
 import DisclaimerModal from './DisclaimerModal'
 import InvitationAccept from './InvitationAccept'
@@ -29,9 +30,11 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     const refresh = () => {
       if (isSsoSession()) void useAuthStore.getState().refreshSso()
     }
-    const timer = window.setInterval(refresh, 120_000)
+    // Paused while the tab is hidden (env-power, Nov 2026): a forgotten background
+    // tab must not keep a sleeping dev/test server awake. Catches up on return.
+    const stop = visibleInterval(refresh, 120_000)
     window.addEventListener('focus', refresh)
-    return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh) }
+    return () => { stop(); window.removeEventListener('focus', refresh) }
   }, [])
 
   // While restoring the session, render nothing (avoids a flash of the login

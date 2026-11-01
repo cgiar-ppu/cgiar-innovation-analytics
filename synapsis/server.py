@@ -65,6 +65,11 @@ from synapsis.routes.feedback import FeedbackUploadLimitMiddleware  # noqa: E402
 app.add_middleware(FeedbackUploadLimitMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(SecurityHeadersMiddleware)
+# Env-power (Nov 2026): count user actions for the sleep controller (synapsis/power.py).
+# Added before CORS, so it sits inside it.
+from synapsis.power import ActivityMiddleware  # noqa: E402
+
+app.add_middleware(ActivityMiddleware)
 app.add_middleware(CORSMiddleware, **cors_settings())
 
 # -- Register route routers --
@@ -186,10 +191,16 @@ async def on_startup():
     _sm.start_reaper()
     logger.info("Idle session reaper started")
 
+    # Env-power busy/activity signal (one JSON line per minute; ENV_POWER_SIGNAL=off).
+    from synapsis import power as _power
+    _power.start()
+
 
 @app.on_event("shutdown")
 async def on_shutdown():
     """Cancel running pipelines and close shared database connections on app shutdown."""
+    from synapsis import power as _power
+    await _power.stop()
     from synapsis.workflow_run_manager import run_manager
     await run_manager.shutdown()
     logger.info("Workflow run manager shut down")

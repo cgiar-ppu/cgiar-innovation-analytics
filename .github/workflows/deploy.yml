@@ -107,6 +107,21 @@ jobs:
             exit 1
           fi
 
+      # Env-power wake-and-hold (AWS cost sprint, Nov 2026). DEV may be asleep
+      # (EC2 stopped by the env-power controller); the SSM deploy below needs a
+      # running server. Wakes it via its public URL (fallback: starts the stopped
+      # instance), waits until healthy, then keeps it in use until the job ends.
+      # No-op when awake / not enrolled. .github/scripts/env_power_wake.sh
+      - name: Wake the environment and hold it (env-power)
+        run: |
+          STACK_NAME="${{ env.STACK_NAME_PREFIX }}-${{ env.STAGE }}"
+          OUT=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='AgentURL' || OutputKey=='InstanceId'].[OutputKey,OutputValue]" \
+            --output text 2>/dev/null || true)
+          AGENT_URL=$(echo "$OUT" | awk '$1=="AgentURL"{print $2}')
+          INSTANCE_ID=$(echo "$OUT" | awk '$1=="InstanceId"{print $2}')
+          bash .github/scripts/env_power_wake.sh "$AGENT_URL" /api/health "${INSTANCE_ID:--}" 420
+
       - name: Verify environment-specific SSO configuration
         env:
           SSO_ISSUER: ${{ vars.IA_SSO_ISSUER }}
@@ -335,7 +350,15 @@ jobs:
             sleep 10
           done
 
-          # Phase 2: SSM unresponsive - reboot the EC2 instance
+          # Phase 2: SSM unresponsive - reboot the EC2 instance. Never "reboot" a
+          # stopped one (env-power sleep): the wake step above must have started it.
+          ISTATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+            --query "Reservations[0].Instances[0].State.Name" --output text 2>/dev/null || echo unknown)
+          if [ "$ISTATE" != "running" ]; then
+            echo "::error::Instance $INSTANCE_ID is '$ISTATE', not running -- not rebooting. Check the env-power wake step / controller."
+            echo "ssm_available=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           echo "::warning::SSM agent not online after 60s. Rebooting instance $INSTANCE_ID..."
           aws ec2 reboot-instances --instance-ids "$INSTANCE_ID"
           echo "Reboot command sent. Waiting 60s for instance to restart..."

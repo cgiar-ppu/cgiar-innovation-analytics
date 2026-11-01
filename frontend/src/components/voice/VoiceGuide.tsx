@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { AudioLines, Mic, MicOff, Pause, Play, Square, X, ChevronDown, BookOpen } from 'lucide-react'
 import { useWebSocketContext } from '../../contexts/WebSocketContext'
 import { api } from '../../lib/api'
+import { visibleInterval } from '../../lib/visibleInterval'
 import { makeAdapter } from '../../lib/voice/actions'
 import { LiveClient, type Caption, type FeedbackPhase, type VoiceStatus } from '../../lib/voice/liveClient'
 import { RealtimeClient } from '../../lib/voice/realtimeClient'
@@ -60,7 +61,8 @@ export default function VoiceGuide() {
     const refresh = () => api.get<ServiceStatus>('/api/voice/status').then(s => { if (mounted) { setService(s); client.current?.setFeedbackPrompt?.(s.feedback_prompt !== false) } }).catch(() => {})
     void refresh()
     // While the provider is unavailable, re-check so recovery shows without a reload (the server caches its probe).
-    const timer = setInterval(() => { if (isUnavailable(serviceRef.current)) void refresh() }, RECHECK_MS)
+    // Paused while the tab is hidden (env-power, Nov 2026): no keep-alive from background tabs.
+    const stopRecheck = visibleInterval(() => { if (isUnavailable(serviceRef.current)) void refresh() }, RECHECK_MS)
     const adapter = makeAdapter(message => current.current.send(message), path => current.current.navigate(path), () => current.current.path, () => current.current.connected)
     const callbacks = {
       status: (state, text) => { if (mounted) { setStatus(state); setMessage(text); if (state === 'connected') setStartedAt(Date.now()); if (state === 'idle' || state === 'error') setStartedAt(null) } },
@@ -79,7 +81,7 @@ export default function VoiceGuide() {
     client.current = makeClient.current(null)
     const unload = () => client.current?.dispose()
     window.addEventListener('pagehide', unload)
-    return () => { mounted = false; clearInterval(timer); window.removeEventListener('pagehide', unload); client.current?.dispose(); client.current = null }
+    return () => { mounted = false; stopRecheck(); window.removeEventListener('pagehide', unload); client.current?.dispose(); client.current = null }
   }, [])
   useEffect(() => { client.current?.contextChanged() }, [location.pathname])
   useEffect(() => {
