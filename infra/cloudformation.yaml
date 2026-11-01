@@ -66,6 +66,33 @@ Parameters:
     Default: latest
     Description: Docker image tag to deploy
 
+  # ---------------------------------------------------------------------------
+  # Shared non-prod ingress (AWS cost sprint E5, Nov 2026). dedicated (DEFAULT,
+  # prod + handover): own ALB exactly as before - ignore the Shared* params.
+  # both: own ALB + a second target group / exact-host rule on the shared
+  # listener (zero-downtime cut-over). shared: no own ALB/listener/TG/ALB SG.
+  # DNS lives in the management account's zone and is moved there, not here.
+  # The deploy workflow looks the shared ALB up by name (no ARNs in this repo).
+  # ---------------------------------------------------------------------------
+  IngressMode:
+    Type: String
+    Default: dedicated
+    AllowedValues: [dedicated, both, shared]
+  SharedListenerArn:
+    Type: String
+    Default: ''
+  SharedAlbSecurityGroupId:
+    Type: String
+    Default: ''
+  SharedDefaultCertificateArn:
+    Type: String
+    Default: ''
+    Description: The shared listener's default certificate; AcmCertificateArn is added by SNI only if different
+  SharedRulePriority:
+    Type: Number
+    Default: 1400
+    Description: Shared-ingress registry priority (cgiar-ia band 1400-1499)
+
   BudgetAlertEmail1:
     Type: String
     Default: ''
@@ -83,8 +110,18 @@ Conditions:
   HasAcmCert: !Not [!Equals [!Ref AcmCertificateArn, '']]
   NoAcmCert: !Equals [!Ref AcmCertificateArn, '']
   HasHostedZone: !Not [!Equals [!Ref HostedZoneId, '']]
-  HasAcmCertAndHostedZone: !And
+  # Shared non-prod ingress (E5). With the default IngressMode=dedicated, OwnAlb == HasAcmCert.
+  OwnAlb: !And
     - !Condition HasAcmCert
+    - !Not [!Equals [!Ref IngressMode, shared]]
+  AttachShared: !And
+    - !Condition HasAcmCert
+    - !Not [!Equals [!Ref IngressMode, dedicated]]
+  AttachSharedCert: !And
+    - !Condition AttachShared
+    - !Not [!Equals [!Ref AcmCertificateArn, !Ref SharedDefaultCertificateArn]]
+  HasAcmCertAndHostedZone: !And
+    - !Condition OwnAlb
     - !Condition HasHostedZone
   HasBudgetAlert: !Not [!Equals [!Ref BudgetAlertEmail1, '']]
   HasBudgetAlert2: !And
@@ -129,7 +166,7 @@ Resources:
   # ---------------------------------------------------------------------------
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
-    Condition: HasAcmCert
+    Condition: OwnAlb
     Properties:
       GroupDescription: CGIAR Innovation Analytics ALB - HTTPS from internet
       VpcId: !Ref VpcId
@@ -168,7 +205,7 @@ Resources:
   # When ALB exists: allow inbound on 7780 from ALB security group only
   AgentIngressFromALB:
     Type: AWS::EC2::SecurityGroupIngress
-    Condition: HasAcmCert
+    Condition: OwnAlb
     Properties:
       GroupId: !Ref AgentSecurityGroup
       IpProtocol: tcp
@@ -530,7 +567,7 @@ Resources:
   # ---------------------------------------------------------------------------
   ALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
-    Condition: HasAcmCert
+    Condition: OwnAlb
     Properties:
       Name: !Sub cgiar-ia-${Stage}
       Scheme: internet-facing
@@ -553,7 +590,7 @@ Resources:
 
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Condition: HasAcmCert
+    Condition: OwnAlb
     Properties:
       Name: !Sub cgiar-ia-${Stage}-tg
       Port: 7780
@@ -583,7 +620,7 @@ Resources:
 
   ALBListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
-    Condition: HasAcmCert
+    Condition: OwnAlb
     Properties:
       LoadBalancerArn: !Ref ALB
       Port: 443
@@ -594,6 +631,77 @@ Resources:
       DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
+
+  # ---------------------------------------------------------------------------
+  # Shared non-prod ingress (E5): a SECOND target group (a TG can belong to one
+  # ALB only) with the same instance + an exact host-header rule on the shared
+  # listener (+ this env's own certificate by SNI when not the listener default).
+  # ---------------------------------------------------------------------------
+  SharedTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: AttachShared
+    Properties:
+      Name: !Sub cgiar-ia-${Stage}-shtg
+      Port: 7780
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: instance
+      Targets:
+        - Id: !Ref AgentInstance
+          Port: 7780
+      HealthCheckPath: /api/health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: 'false'  # same as TargetGroup (SYN-2305)
+      Tags:
+        - Key: Project
+          Value: cgiar-ia
+        - Key: Environment
+          Value: !Ref Stage
+
+  SharedRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: AttachShared
+    Properties:
+      ListenerArn: !Ref SharedListenerArn
+      Priority: !Ref SharedRulePriority
+      Conditions:
+        - Field: host-header
+          HostHeaderConfig:
+            Values:
+              - !Sub
+                - "${SubdomainPrefix}${Suffix}.${DomainName}"
+                - Suffix: !FindInMap [StageMap, !Ref Stage, SubdomainSuffix]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref SharedTargetGroup
+
+  SharedListenerCertificate:
+    Type: AWS::ElasticLoadBalancingV2::ListenerCertificate
+    Condition: AttachSharedCert
+    Properties:
+      ListenerArn: !Ref SharedListenerArn
+      Certificates:
+        - CertificateArn: !Ref AcmCertificateArn
+
+  AgentIngressFromSharedALB:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: AttachShared
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks: [W1030]  # the deploy passes the shared ALB's real sg-id whenever AttachShared
+    Properties:
+      GroupId: !Ref AgentSecurityGroup
+      IpProtocol: tcp
+      FromPort: 7780
+      ToPort: 7780
+      SourceSecurityGroupId: !Ref SharedAlbSecurityGroupId
+      Description: App port from the shared non-prod ALB
 
   # ---------------------------------------------------------------------------
   # Route53 DNS Record (conditional)
@@ -633,7 +741,7 @@ Outputs:
     Value: !GetAtt AgentInstance.PublicIp
 
   ALBDnsName:
-    Condition: HasAcmCert
+    Condition: OwnAlb
     Description: ALB DNS name
     Value: !GetAtt ALB.DNSName
 
@@ -648,3 +756,13 @@ Outputs:
   HasALB:
     Description: Whether the stack has an ALB (for CI/CD health check routing)
     Value: !If [HasAcmCert, 'true', 'false']
+
+  SharedTargetGroupArn:
+    Condition: AttachShared
+    Description: Target group on the shared non-prod ALB
+    Value: !Ref SharedTargetGroup
+
+  SharedRuleArn:
+    Condition: AttachShared
+    Description: Host rule on the shared non-prod listener (env-power flips this one)
+    Value: !Ref SharedRule

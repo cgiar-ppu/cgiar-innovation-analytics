@@ -272,6 +272,26 @@ jobs:
             PARAMS="$PARAMS BudgetAlertEmail2=${{ vars.IA_BUDGET_ALERT_EMAIL_2 }}"
           fi
 
+          # Shared non-prod ingress (AWS cost sprint E5): environment variable INGRESS_MODE
+          # = dedicated (default; prod) | both | shared. The shared ALB is looked up by name
+          # (read-only); rule priority from the shared-ingress registry (cgiar-ia band 1400-1499).
+          INGRESS_MODE="${{ vars.INGRESS_MODE || 'dedicated' }}"
+          if [ -n "${{ vars.ACM_CERTIFICATE_ARN }}" ] && [ "$INGRESS_MODE" != dedicated ]; then
+            case "$INGRESS_MODE" in both|shared) ;; *) echo "::error::INGRESS_MODE must be dedicated|both|shared (got '$INGRESS_MODE')"; exit 1 ;; esac
+            read -r SH_LB SH_SG < <(aws elbv2 describe-load-balancers --names syn-ingress-nonprod \
+              --query 'LoadBalancers[0].[LoadBalancerArn,SecurityGroups[0]]' --output text)
+            SH_LISTENER=$(aws elbv2 describe-listeners --load-balancer-arn "$SH_LB" --query 'Listeners[?Port==`443`].ListenerArn' --output text)
+            SH_CERT=$(aws elbv2 describe-listener-certificates --listener-arn "$SH_LISTENER" --query 'Certificates[?IsDefault].CertificateArn' --output text)
+            for v in "$SH_SG" "$SH_LISTENER" "$SH_CERT"; do
+              case "$v" in ""|None) echo "::error::shared ingress syn-ingress-nonprod not found"; exit 1 ;; esac
+            done
+            echo "Shared ingress: mode=$INGRESS_MODE"
+            PARAMS="$PARAMS IngressMode=$INGRESS_MODE SharedListenerArn=$SH_LISTENER SharedAlbSecurityGroupId=$SH_SG"
+            PARAMS="$PARAMS SharedDefaultCertificateArn=$SH_CERT SharedRulePriority=${{ vars.INGRESS_RULE_PRIORITY || '1400' }}"
+          else
+            PARAMS="$PARAMS IngressMode=dedicated"
+          fi
+
           # Only include HostedZoneId if explicitly set (empty = DNS records created manually)
           if [ -n "${{ vars.HOSTED_ZONE_ID }}" ]; then
             PARAMS="$PARAMS HostedZoneId=${{ vars.HOSTED_ZONE_ID }}"
