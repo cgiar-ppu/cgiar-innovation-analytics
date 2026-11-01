@@ -2,6 +2,13 @@ name: Create Route53 Dev Alias (One-Off)
 
 on:
   workflow_dispatch:
+    inputs:
+      alb_dns_name:
+        description: >-
+          ALB the dev host aliases to. Default = the shared non-prod ALB of the dev account
+          (AWS cost sprint E5, Nov 2026). Rollback during a cut-over: the old cgiar-ia-dev ALB DNS name.
+        required: true
+        default: syn-ingress-nonprod-2010089379.eu-central-1.elb.amazonaws.com
 
 permissions:
   id-token: write
@@ -19,7 +26,10 @@ jobs:
           aws-region: eu-central-1
 
       - name: Create A alias record for dev URL
+        env:
+          ALB_DNS: ${{ inputs.alb_dns_name }}
         run: |
+          case "$ALB_DNS" in *.eu-central-1.elb.amazonaws.com) ;; *) echo "::error::not an eu-central-1 ALB DNS name"; exit 1 ;; esac
           aws route53 change-resource-record-sets \
             --hosted-zone-id Z079841559W4HJ5A3Q2Y \
             --change-batch '{
@@ -30,7 +40,7 @@ jobs:
                   "Type": "A",
                   "AliasTarget": {
                     "HostedZoneId": "Z215JYRZR1TBD5",
-                    "DNSName": "cgiar-ia-dev-1903003658.eu-central-1.elb.amazonaws.com",
+                    "DNSName": "'"$ALB_DNS"'",
                     "EvaluateTargetHealth": true
                   }
                 }
