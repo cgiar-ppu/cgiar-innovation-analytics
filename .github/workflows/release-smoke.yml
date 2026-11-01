@@ -33,6 +33,18 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::${{ needs.request.outputs.account }}:role/cicd/github-actions-cgiar-innovation-analytics-${{ needs.request.outputs.environment }}-deploy
           aws-region: eu-central-1
+      # Env-power (AWS cost sprint, Nov 2026): TEST may be asleep (EC2 stopped by the env-power controller);
+      # the SSM steps below need a running server. Wake it via its URL (fallback: start the stopped
+      # instance), wait until healthy, keep it in use until the job ends. STAGING ONLY: never runs for prod.
+      - name: Wake staging and hold it (env-power, staging only)
+        if: needs.request.outputs.stage == 'staging'
+        run: |
+          OUT=$(aws cloudformation describe-stacks --stack-name cgiar-ia-staging \
+            --query "Stacks[0].Outputs[?OutputKey=='AgentURL' || OutputKey=='InstanceId'].[OutputKey,OutputValue]" \
+            --output text 2>/dev/null || true)
+          AGENT_URL=$(echo "$OUT" | awk '$1=="AgentURL"{print $2}')
+          INSTANCE_ID=$(echo "$OUT" | awk '$1=="InstanceId"{print $2}')
+          bash .github/scripts/env_power_wake.sh "$AGENT_URL" /api/health "${INSTANCE_ID:--}" 420
       - run: pip install 'boto3>=1.35,<2'
       - run: python3 .github/scripts/run-release-smoke.py
         env:
