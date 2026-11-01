@@ -9,8 +9,9 @@
 #
 #   env_power_wake.sh <base_url> <health_path> <instance_id|-> [timeout_s]
 #
-# 1. GET <base_url><health_path> until 200. While the env sleeps, the load
-#    balancer routes to the controller's wake responder, and any request wakes it.
+# 1. GET <base_url><health_path> until 200, with `X-Env-Power-Wake: ci`. While the env
+#    sleeps, the load balancer routes to the controller's wake responder, which treats
+#    that header as a real wake (never bot-filtered) and answers 503 until the app is up.
 # 2. Fallback (no controller, or a manual stop): if the instance is still
 #    'stopped' after 90 s, start it with the deploy role (the workflow already
 #    holds ec2 rights). The controller treats "healthy while asleep" as awake.
@@ -28,7 +29,8 @@ URL="${BASE%/}${HEALTH}"
 UA="env-power-deploy/1 (github-actions ${GITHUB_REPOSITORY:-local} run ${GITHUB_RUN_ID:-0})"
 probe() {
   local c
-  c=$(curl -s -o /dev/null -w "%{http_code}" -m 10 -A "$UA" -H "X-Env-Power-Hold: 1" "$URL" 2>/dev/null)
+  # X-Env-Power-Wake: ci = the controller's "real wake, never bot-filtered" marker (E3 contract).
+  c=$(curl -s -o /dev/null -w "%{http_code}" -m 10 -A "$UA" -H "X-Env-Power-Wake: ci" -H "X-Env-Power-Hold: 1" "$URL" 2>/dev/null)
   echo "${c:-000}"
 }
 state() {
