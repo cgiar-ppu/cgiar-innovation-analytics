@@ -17,6 +17,10 @@ Metadata:
 # Parameters
 # =============================================================================
 Parameters:
+  AmiId:
+    Type: String
+    Default: ''
+    Description: "Pinned AMI ('' = latest AL2023 via SSM; a new AMI replaces the instance)"
   Stage:
     Type: String
     AllowedValues: [dev, staging, prod, feature]
@@ -107,6 +111,7 @@ Parameters:
 # Conditions
 # =============================================================================
 Conditions:
+  PinAmi: !Not [!Equals [!Ref AmiId, '']]
   HasAcmCert: !Not [!Equals [!Ref AcmCertificateArn, '']]
   NoAcmCert: !Equals [!Ref AcmCertificateArn, '']
   HasHostedZone: !Not [!Equals [!Ref HostedZoneId, '']]
@@ -309,7 +314,7 @@ Resources:
     Properties:
       InstanceType: !Ref InstanceType
       IamInstanceProfile: !Ref AgentInstanceProfile
-      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      ImageId: !If [PinAmi, !Ref AmiId, '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}']
       NetworkInterfaces:
         - DeviceIndex: '0'
           SubnetId: !Ref SubnetId1
