@@ -255,6 +255,25 @@ jobs:
           PARAMS="Stage=${{ env.STAGE }}"
           PARAMS="$PARAMS EcrImageTag=$ECR_TAG"
           PARAMS="$PARAMS InstanceType=${{ vars.INSTANCE_TYPE || 't3.large' }}"
+          # AMI pin (cost T1 X2, 2 Nov 2026). ImageId used to re-resolve the 'latest AL2023' SSM
+          # parameter on ANY instance update, which REPLACES the host (new root disk with /workspace +
+          # chat.db, new instance id) once a newer AMI exists. Default now = keep the running instance's
+          # AMI. Environment variable AMI_ID: an ami-id pins that AMI; 'latest' opts in to the newest
+          # AL2023 (= instance replacement); a new stack (no instance yet) uses the latest.
+          AMI_ID="${{ vars.AMI_ID }}"
+          if [ -z "$AMI_ID" ]; then
+            IID=$(aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" \
+              --logical-resource-id AgentInstance --query 'StackResources[0].PhysicalResourceId' \
+              --output text 2>/dev/null || true)
+            if [ -n "$IID" ] && [ "$IID" != "None" ]; then
+              AMI_ID=$(aws ec2 describe-instances --instance-ids "$IID" \
+                --query 'Reservations[0].Instances[0].ImageId' --output text)
+              case "$AMI_ID" in ami-*) ;; *) echo "::error::cannot read the AMI of $IID - refusing to deploy"; exit 1 ;; esac
+            fi
+          fi
+          [ "$AMI_ID" = "latest" ] && AMI_ID=""
+          echo "AmiId=${AMI_ID:-<latest AL2023>}"
+          PARAMS="$PARAMS AmiId=$AMI_ID"
           PARAMS="$PARAMS VpcId=${{ vars.VPC_ID }}"
           PARAMS="$PARAMS SubnetId1=${{ vars.SUBNET_ID_1 }}"
 
